@@ -35,7 +35,7 @@ cp nano.yml ~/.soothe/config/nano.yml
 #   fj -c ./nano.yml who are you
 ```
 
-The repo-root [`nano.yml`](nano.yml) is a validated minimal profile: local OpenAI-compatible provider (Ollama), SQLite, search/research/browser subagents off.
+The repo-root [`nano.yml`](nano.yml) is a validated minimal profile: local OpenAI-compatible provider (Ollama). Persistence/tools/subagents use soothe-nano defaults (sqlite, builtin tools, etc.).
 
 Start Ollama (or your local server), pull a model, then:
 
