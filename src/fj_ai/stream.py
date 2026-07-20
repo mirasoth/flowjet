@@ -16,6 +16,7 @@ from fj_ai.progress import (
     friendly_tool_call,
     friendly_tool_result,
 )
+from fj_ai.tool_stream import ToolCallArgAccumulator
 
 
 def _truncate(text: str, limit: int = 200) -> str:
@@ -80,18 +81,6 @@ def accumulate_ai_text(current: str, message: AIMessage) -> str:
     return text
 
 
-def _tool_call_name(tc: Any) -> str:
-    if isinstance(tc, dict):
-        return str(tc.get("name") or "unknown")
-    return str(getattr(tc, "name", None) or "unknown")
-
-
-def _tool_call_args(tc: Any) -> Any:
-    if isinstance(tc, dict):
-        return tc.get("args")
-    return getattr(tc, "args", None)
-
-
 async def stream_query(
     agent: CodingCoreAgent,
     query: str,
@@ -109,10 +98,10 @@ async def stream_query(
     messages = [HumanMessage(content=query)]
     config = {"configurable": {"thread_id": thread_id}}
     answer_buf = ""
-    pending_tool_names: dict[str, str] = {}
-    pending_tool_args: dict[str, Any] = {}
+    tool_args = ToolCallArgAccumulator()
     last_tool_name: str | None = None
-    last_tool_args: Any | None = None
+    last_tool_args: dict[str, Any] = {}
+    last_progress_key = ""
 
     # Deepagents emits a deprecation warning mid-run that would smash the
     # ephemeral progress line when mixed onto the terminal.
@@ -165,43 +154,40 @@ async def stream_query(
                     message_obj, _metadata = data
 
                     if isinstance(message_obj, AIMessage):
-                        tool_calls = getattr(message_obj, "tool_calls", None) or []
-                        if tool_calls:
-                            # New tool-calling turn — final prose comes after tools.
+                        # Tool args stream as tool_call_chunks (partial JSON). Accumulate
+                        # and refresh the progress line as args become available.
+                        updates = tool_args.ingest_message(message_obj)
+                        if updates:
                             answer_buf = ""
-                            for tc in tool_calls:
-                                name = _tool_call_name(tc)
-                                tc_args = _tool_call_args(tc)
-                                tc_id = (
-                                    tc.get("id")
-                                    if isinstance(tc, dict)
-                                    else getattr(tc, "id", None)
-                                )
-                                if tc_id:
-                                    pending_tool_names[str(tc_id)] = name
-                                    pending_tool_args[str(tc_id)] = tc_args
+                            for tc_id, name, args in updates:
                                 last_tool_name = name
-                                last_tool_args = tc_args
-                                label, color = friendly_tool_call(name, tc_args)
-                                status.update(label, color=color)
-                                if show_tool_calls:
-                                    stderr.write(f"  [tool] {name}\n")
+                                last_tool_args = args
+                                label, color = friendly_tool_call(name, args)
+                                progress_key = f"{tc_id}:{label}"
+                                if progress_key != last_progress_key:
+                                    status.update(label, color=color)
+                                    last_progress_key = progress_key
+                                if show_tool_calls and args:
+                                    stderr.write(f"  [tool] {name} {args}\n")
                                     stderr.flush()
-                        else:
+                        elif not (
+                            getattr(message_obj, "tool_calls", None)
+                            or getattr(message_obj, "tool_call_chunks", None)
+                        ):
                             answer_buf = accumulate_ai_text(answer_buf, message_obj)
                             if answer_buf:
                                 status.update("Writing answer…", color="green")
 
                     elif isinstance(message_obj, ToolMessage):
                         tc_id = getattr(message_obj, "tool_call_id", None)
-                        name = None
-                        tc_args = None
-                        if tc_id:
-                            key = str(tc_id)
-                            name = pending_tool_names.pop(key, None)
-                            tc_args = pending_tool_args.pop(key, None)
+                        name, tc_args = tool_args.pop(tc_id)
                         name = name or getattr(message_obj, "name", None) or last_tool_name
-                        tc_args = tc_args if tc_args is not None else last_tool_args
+                        if not tc_args:
+                            tc_args = last_tool_args
+                        else:
+                            last_tool_args = tc_args
+                        if name:
+                            last_tool_name = str(name)
                         status_code = getattr(message_obj, "status", None)
                         is_error = status_code == "error"
                         label, color = friendly_tool_result(
@@ -210,6 +196,7 @@ async def stream_query(
                             is_error=is_error,
                         )
                         status.update(label, color=color)
+                        last_progress_key = ""
                         if show_tool_calls:
                             preview = _truncate(_format_content(message_obj.content))
                             stderr.write(f"  [result] {preview}\n")

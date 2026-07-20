@@ -319,7 +319,7 @@ def format_tool_activity(tool_name: str, args: Any | None = None) -> tuple[str, 
         else:
             label = f"{verb} {display} · {preview}"
     else:
-        label = f"{verb} {display}"
+        label = f"{verb}…"
     return _truncate(label), color
 
 
