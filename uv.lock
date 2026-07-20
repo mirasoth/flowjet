@@ -1210,7 +1210,7 @@ wheels = [
 
 [[package]]
 name = "fj-ai"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "soothe-nano" },
@@ -1238,7 +1238,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3.0" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.0" },
-    { name = "soothe-nano", specifier = ">=0.9.4,<1.0.0" },
+    { name = "soothe-nano", specifier = ">=0.9.5,<1.0.0" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=5.0.0" },
 ]
 provides-extras = ["dev"]
@@ -7343,7 +7343,7 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz", hash = "sha256:95d8e012d8cb8816c226aef832200b1d45109ed4464303e997c5b13122b297c0", size = 30573822, upload-time = "2026-02-23T00:26:24.851Z" }
 wheels = [
@@ -7425,7 +7425,7 @@ resolution-markers = [
     "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a7/25/c2700dfaf6442b4effaa91af24ebce5dc9d31bb4a69706313aae70d72cd0/scipy-1.18.0.tar.gz", hash = "sha256:67b2ad2ad54c72ca6d04975a9b2df8c3638c34ddd5b28738e94fc2b57929d378", size = 30774447, upload-time = "2026-06-19T15:01:43.456Z" }
 wheels = [
@@ -7489,8 +7489,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
-    { name = "jeepney", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "cryptography" },
+    { name = "jeepney" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
@@ -7621,7 +7621,7 @@ wheels = [
 
 [[package]]
 name = "soothe-nano"
-version = "0.9.4"
+version = "0.9.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -7670,9 +7670,9 @@ dependencies = [
     { name = "watchdog" },
     { name = "wizsearch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9d/02/6123b56087f68f9880ea1b26bf59aa6490fd374029317e7d7a6fc70b75fe/soothe_nano-0.9.4.tar.gz", hash = "sha256:cd82032253937466f2fd24732afba6473f9ca52b6d64811df4ca2244e3397ed9", size = 465849, upload-time = "2026-07-20T16:39:07.406Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ac/79/be394e0cbbac5896fba7fc1a340bb049a7e44d9932e89057b144c8a8b4e5/soothe_nano-0.9.5.tar.gz", hash = "sha256:c5380fb5af1df67f675adc1a0ecbdaff8cce229dedbc8fd21bab9894b9c3c8d0", size = 466820, upload-time = "2026-07-20T17:12:42.64Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/df/6e/43aee60228d722970d3458420f30de2a3b1e77d2cc4c950ad0190f16cb82/soothe_nano-0.9.4-py3-none-any.whl", hash = "sha256:0191b17ce77d1b66d814bf87eb4332f35c496e0a0f3d5fbcfd45553033909988", size = 624687, upload-time = "2026-07-20T16:39:05.854Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/fc/404807621825d22be01f26eafee089a15744ed87bd1e2c025dafd84f28d7/soothe_nano-0.9.5-py3-none-any.whl", hash = "sha256:01900a19417055daec140ab71ef3b08fb487284d8161d3a26f93589b3477995e", size = 625640, upload-time = "2026-07-20T17:12:41.024Z" },
 ]
 
 [[package]]
@@ -8197,8 +8197,8 @@ name = "uvicorn"
 version = "0.51.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click", marker = "sys_platform != 'emscripten'" },
-    { name = "h11", marker = "sys_platform != 'emscripten'" },
+    { name = "click" },
+    { name = "h11" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a2/65/b7c6c443ccc58678c91e1e973bbe2a878591538655d6e1d47f24ba1c51f3/uvicorn-0.51.0.tar.gz", hash = "sha256:f6f4b69b657c312f516dd2d268ab9ae6f254b11e4bac504f37b2ab58b24dd0b0", size = 94412, upload-time = "2026-07-08T10:59:05.962Z" }
 wheels = [

@@ -142,20 +142,20 @@ Also included: builtin tool groups, ready subagents (planner, explorer, research
 
 ## Compared to other agents
 
-| | **fj / soothe-nano** | **deepagents** | **OpenCode** | **Pi-style** |
-|--|----------------------|----------------|--------------|--------------|
-| Shape | Library + thin CLI | Python harness | Full TUI (JS/TS) | Minimal loops |
-| Install | `pip install fj-ai` | `pip install deepagents` | Native/npm | Varies |
-| Config | `~/.soothe/config/nano.yml` | Code-first | App/project | Code / light config |
-| Tools | Progressive | BYO / harness | Product surface | Often fixed |
-| Skills | Progressive SKILL.md | Base / custom | Product plugins | Optional |
-| MCP | First-class, deferred | Via adapters | Product MCP | Depends |
-| Persistence | SQLite under `~/.soothe` | Pluggable | Product store | Often ephemeral |
-| Subagents | Planner / research / browser | You define | Product UX | Usually single loop |
-| Best when | Scriptable coding in a repo | Full harness control | Interactive TUI | Experiments |
+For a full TUI coding agent from the same stack, see [mirasoth/soothe](https://github.com/mirasoth/soothe).
 
-- **vs deepagents:** harness + control vs coding defaults + one-line CLI.
-- **vs OpenCode:** rich TUI vs argv in → answer out.
+| | **fj / soothe-nano** | **soothe** | **OpenCode** | **Pi-style** |
+|--|----------------------|------------|--------------|--------------|
+| Shape | Thin one-shot CLI | Full TUI + optional daemon | Full TUI product (JS/TS) | Minimal loops |
+| Agent loop | CoreAgent (ReAct) | Strange Loop: plan → assess → execute | Product agent loop | Single / lean loop |
+| Goals | One query → answer | Goal-oriented; autopilot multi-goal DAG | Session / product UX | Usually single turn |
+| Autopilot | — | Daemon schedule, dreaming, cron, veritas | — | — |
+| Tools / skills / MCP | Progressive | Same core + TUI / loop durability | Product surface | Often fixed |
+| Config | `nano.yml` | `nano.yml` + `soothe.yml` | App / project config | Code / light config |
+| Best when | Scriptable coding in a repo | Interactive + 24/7 goal orchestration | Daily interactive coding | Experiments |
+
+- **vs soothe:** shared CoreAgent; fj is argv → answer; soothe adds Strange Loop, TUI, and autopilot.
+- **vs OpenCode:** rich TUI product vs argv → answer (fj) or goal-orchestration stack (soothe).
 - **vs Pi-style:** lean loops vs progressive loading, workspace security, sqlite threads.
 
 ## Development
