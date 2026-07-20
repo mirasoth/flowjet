@@ -1,4 +1,4 @@
-"""Create and wire a soothe-nano agent with default SQLite persistence."""
+"""Create and wire a soothe-nano agent with fj runtime defaults."""
 
 from __future__ import annotations
 
@@ -30,19 +30,30 @@ def ensure_workspace(workspace: Path | None = None) -> Path:
     return root
 
 
-def _sqlite_config(config: SootheConfig) -> SootheConfig:
-    """Return a config copy forced to sqlite checkpointer (fj CLI default)."""
-    updates: dict[str, Any] = {
-        "persistence": config.persistence.model_copy(update={"default_backend": "sqlite"}),
-    }
-    # Keep agent durability aligned when it inherits from persistence.
+def apply_fj_defaults(config: SootheConfig) -> SootheConfig:
+    """Apply fj CLI defaults without requiring them in ``nano.yml``.
+
+    - SQLite checkpointer / durability
+    - Disable soothe virtual mode (allow paths outside workspace)
+    """
     durability = config.agent.protocols.durability.model_copy(
         update={"backend": "sqlite", "checkpointer": "sqlite"}
     )
     protocols = config.agent.protocols.model_copy(update={"durability": durability})
     agent = config.agent.model_copy(update={"protocols": protocols})
-    updates["agent"] = agent
-    return config.model_copy(update=updates)
+    security = config.security.model_copy(update={"allow_paths_outside_workspace": True})
+    persistence = config.persistence.model_copy(update={"default_backend": "sqlite"})
+    return config.model_copy(
+        update={
+            "agent": agent,
+            "security": security,
+            "persistence": persistence,
+        }
+    )
+
+
+# Backward-compatible alias used by older tests / imports.
+_sqlite_config = apply_fj_defaults
 
 
 @asynccontextmanager
@@ -54,7 +65,7 @@ async def open_sqlite_checkpointer(
     Path: ``$SOOTHE_DATA_DIR/soothe_checkpoints.db`` (default ``~/.soothe/data/``).
     fj always uses sqlite for CLI threads, even if ``nano.yml`` prefers postgres.
     """
-    sqlite_cfg = _sqlite_config(config)
+    sqlite_cfg = apply_fj_defaults(config)
     result = resolve_checkpointer(sqlite_cfg)
     db_path: str | None = None
     if isinstance(result, tuple):
@@ -90,7 +101,7 @@ async def build_agent(
 ) -> CodingCoreAgent:
     """Build a full nano coding agent for the current workspace."""
     ensure_workspace(workspace)
-    agent = create_nano_agent(config)
+    agent = create_nano_agent(apply_fj_defaults(config))
     if checkpointer is not None:
         agent.graph.checkpointer = checkpointer
     return agent
