@@ -1,0 +1,96 @@
+"""Create and wire a soothe-nano agent with default SQLite persistence."""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
+
+from soothe_nano import CodingCoreAgent, create_nano_agent
+from soothe_nano.config import SootheConfig
+from soothe_nano.resolve import resolve_checkpointer
+
+logger = logging.getLogger(__name__)
+
+
+def ensure_workspace(workspace: Path | None = None) -> Path:
+    """Use ``workspace`` or cwd as ``SOOTHE_WORKSPACE`` for file/shell tools."""
+    import os
+
+    root = (workspace or Path.cwd()).resolve()
+    os.environ.setdefault("SOOTHE_WORKSPACE", str(root))
+    try:
+        from soothe_nano.workspace import FrameworkFilesystem
+
+        FrameworkFilesystem.set_current_workspace(root)
+    except Exception:  # pragma: no cover - optional API surface
+        logger.debug("Could not set FrameworkFilesystem workspace", exc_info=True)
+    return root
+
+
+def _sqlite_config(config: SootheConfig) -> SootheConfig:
+    """Return a config copy forced to sqlite checkpointer (fj CLI default)."""
+    updates: dict[str, Any] = {
+        "persistence": config.persistence.model_copy(update={"default_backend": "sqlite"}),
+    }
+    # Keep agent durability aligned when it inherits from persistence.
+    durability = config.agent.protocols.durability.model_copy(
+        update={"backend": "sqlite", "checkpointer": "sqlite"}
+    )
+    protocols = config.agent.protocols.model_copy(update={"durability": durability})
+    agent = config.agent.model_copy(update={"protocols": protocols})
+    updates["agent"] = agent
+    return config.model_copy(update=updates)
+
+
+@asynccontextmanager
+async def open_sqlite_checkpointer(
+    config: SootheConfig,
+) -> AsyncIterator[Any | None]:
+    """Yield an ``AsyncSqliteSaver`` using nano's default sqlite data path.
+
+    Path: ``$SOOTHE_DATA_DIR/soothe_checkpoints.db`` (default ``~/.soothe/data/``).
+    fj always uses sqlite for CLI threads, even if ``nano.yml`` prefers postgres.
+    """
+    sqlite_cfg = _sqlite_config(config)
+    result = resolve_checkpointer(sqlite_cfg)
+    db_path: str | None = None
+    if isinstance(result, tuple):
+        _placeholder, pool_or_path = result
+        if isinstance(pool_or_path, str):
+            db_path = pool_or_path
+
+    if not db_path:
+        logger.warning("SQLite checkpointer path unresolved; running without persistence")
+        yield None
+        return
+
+    import aiosqlite
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    from soothe_sdk.utils.serde import create_soothe_serde
+
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    conn = await aiosqlite.connect(db_path)
+    checkpointer = AsyncSqliteSaver(conn, serde=create_soothe_serde())
+    await checkpointer.setup()
+    logger.debug("SQLite checkpointer ready at %s", db_path)
+    try:
+        yield checkpointer
+    finally:
+        await conn.close()
+
+
+async def build_agent(
+    config: SootheConfig,
+    *,
+    workspace: Path | None = None,
+    checkpointer: Any | None = None,
+) -> CodingCoreAgent:
+    """Build a full nano coding agent for the current workspace."""
+    ensure_workspace(workspace)
+    agent = create_nano_agent(config)
+    if checkpointer is not None:
+        agent.graph.checkpointer = checkpointer
+    return agent

@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write  # PyPI trusted publishing (OIDC) when configured
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/fj-ai
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        run: make sync-dev
+
+      - name: Guard — soothe-nano must be on PyPI
+        run: |
+          if ! curl -sf "https://pypi.org/pypi/soothe-nano/0.9.2/json" >/dev/null; then
+            echo "soothe-nano 0.9.2 must be available on PyPI before releasing fj-ai"
+            exit 1
+          fi
+          echo "soothe-nano 0.9.2 is available on PyPI"
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(grep '^version = "' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Package version: $VERSION"
+
+      - name: Check if version exists on PyPI
+        id: check
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          PKG="fj-ai"
+          echo "Checking if ${PKG}==${VERSION} exists on PyPI..."
+          if curl -sf "https://pypi.org/pypi/${PKG}/${VERSION}/json" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Version ${VERSION} already exists on PyPI, skipping publish"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Version ${VERSION} not found on PyPI, will publish"
+          fi
+
+      - name: Format check
+        if: steps.check.outputs.exists == 'false'
+        run: make format-check
+
+      - name: Lint
+        if: steps.check.outputs.exists == 'false'
+        run: make lint
+
+      - name: Unit tests
+        if: steps.check.outputs.exists == 'false'
+        run: make test-unit
+
+      - name: Build package
+        if: steps.check.outputs.exists == 'false'
+        run: uv build
+
+      - name: Verify dist
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          test -d dist
+          ls dist | grep -E 'fj_ai|fj-ai'
+          uv run twine check dist/*
+
+      - name: Publish to PyPI
+        if: steps.check.outputs.exists == 'false'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          password: ${{ secrets.UV_PUBLISH_TOKEN }}
+          verbose: true
+          print-hash: true

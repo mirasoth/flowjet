@@ -1,0 +1,43 @@
+# Minimal fj / soothe-nano config — local only, no cloud SaaS.
+#
+# Usage:
+#   mkdir -p ~/.soothe/config
+#   cp nano.yml ~/.soothe/config/nano.yml
+#   # or: fj -c ./nano.yml who are you
+#
+# Requires a local OpenAI-compatible server (Ollama default below).
+#   ollama serve && ollama pull llama3.2
+
+providers:
+  - name: local
+    provider_type: openai
+    api_base_url: "http://127.0.0.1:11434/v1"
+    api_key: "ollama"
+    models:
+      - llama3.2
+
+router_profiles:
+  - name: default
+    router:
+      default: "local:llama3.2"
+
+active_router_profile: default
+
+persistence:
+  default_backend: sqlite
+
+tools:
+  wizsearch:
+    enabled: false
+  deepxiv:
+    enabled: false
+
+subagents:
+  explorer:
+    enabled: false
+  deep_research:
+    enabled: false
+  academic_research:
+    enabled: false
+  browser_use:
+    enabled: false
