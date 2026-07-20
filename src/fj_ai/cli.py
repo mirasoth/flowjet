@@ -11,6 +11,7 @@ from pathlib import Path
 from fj_ai import __version__
 from fj_ai.agent import build_agent, open_sqlite_checkpointer
 from fj_ai.config import default_config_path, load_config
+from fj_ai.logging_setup import configure_cli_logging
 from fj_ai.stream import invoke_query, stream_query
 
 USAGE = """\
@@ -166,6 +167,7 @@ async def run_async(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_cli_logging()
     args = parse_args(argv)
     return asyncio.run(run_async(args))
 

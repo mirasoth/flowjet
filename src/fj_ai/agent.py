@@ -12,6 +12,8 @@ from soothe_nano import CodingCoreAgent, create_nano_agent
 from soothe_nano.config import SootheConfig
 from soothe_nano.resolve import resolve_checkpointer
 
+from fj_ai.logging_setup import configure_cli_logging, silence_after_plugins
+
 logger = logging.getLogger(__name__)
 
 
@@ -100,8 +102,11 @@ async def build_agent(
     checkpointer: Any | None = None,
 ) -> CodingCoreAgent:
     """Build a full nano coding agent for the current workspace."""
+    configure_cli_logging()
     ensure_workspace(workspace)
     agent = create_nano_agent(apply_fj_defaults(config))
+    # Plugin imports (e.g. browser_use) may still attach root console handlers.
+    silence_after_plugins()
     if checkpointer is not None:
         agent.graph.checkpointer = checkpointer
     return agent
