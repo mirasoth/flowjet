@@ -2,7 +2,7 @@
 UV_RUN ?= uv run
 
 .PHONY: sync sync-dev format format-check lint lint-fix \
-	test test-unit test-coverage build clean help
+	test test-unit test-coverage build publish clean help
 
 help:
 	@echo "fj-ai"
@@ -17,6 +17,7 @@ help:
 	@echo "  make test-unit       - Run unit tests"
 	@echo "  make test-coverage   - Tests with coverage"
 	@echo "  make build           - Build dist/"
+	@echo "  make publish         - Build and publish to PyPI"
 	@echo "  make clean           - Remove build artifacts"
 
 sync:
@@ -46,6 +47,9 @@ test-coverage:
 build:
 	rm -rf dist/
 	uv build
+
+publish: build
+	uv publish
 
 clean:
 	rm -rf dist/ build/ .pytest_cache/ .ruff_cache/ .mypy_cache/ htmlcov/ coverage.xml
