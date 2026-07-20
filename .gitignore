@@ -154,6 +154,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Local editor / tool backups
+.backups/
+
 # Spyder project settings
 .spyderproject
 .spyproject

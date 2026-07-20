@@ -76,6 +76,23 @@ def test_format_args_preview_primary() -> None:
     assert "nano.yml" in preview
 
 
+def test_progress_respects_width_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "40")
+    long_path = "/Users/chenxm/Workspace/fj-ai/src/fj_ai/" + ("very_long_dir/" * 8) + "cli.py"
+    label, _color = format_tool_activity("read_file", {"file_path": long_path})
+    assert len(label) <= 40
+    assert label.startswith("Reading ")
+    assert "cli.py" in label  # basename preserved
+
+
+def test_truncate_path_keeps_basename() -> None:
+    from fj_ai.progress import _truncate_path
+
+    out = _truncate_path("/a/b/c/d/e/f/g/important.py", 18)
+    assert out.endswith("important.py") or "important.py" in out
+    assert len(out) <= 18
+
+
 def test_friendly_tool_result_keeps_context() -> None:
     label, color = friendly_tool_result(
         "read_file", {"file_path": "src/fj_ai/progress.py"}, is_error=False
