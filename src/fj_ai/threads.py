@@ -15,7 +15,7 @@ _PREVIEW_LIMIT = 72
 
 
 class ConcurrentSessionError(RuntimeError):
-    """Raised when another ``fj`` process holds the active-thread session lock."""
+    """Raised when another ``fj`` process holds the lock for the same thread."""
 
 
 def _soothe_home() -> Path:
@@ -31,9 +31,10 @@ def active_thread_path() -> Path:
     return _soothe_home() / "data" / "fj_active_thread"
 
 
-def active_thread_lock_path() -> Path:
-    """Return ``~/.soothe/data/fj_active_thread.lock`` (fcntl lock + owner pid)."""
-    return _soothe_home() / "data" / "fj_active_thread.lock"
+def thread_lock_path(thread_id: str) -> Path:
+    """Return per-thread lock file under ``~/.soothe/data/locks/``."""
+    safe = thread_id.strip().replace("/", "_")
+    return _soothe_home() / "data" / "locks" / f"{safe}.lock"
 
 
 def read_active_thread_id(path: Path | None = None) -> str | None:
@@ -85,19 +86,22 @@ def _pid_is_alive(pid: int) -> bool:
 
 
 @contextlib.contextmanager
-def hold_session_lock(*, blocking: bool = False) -> Iterator[None]:
-    """Exclusive lock for the duration of an ``fj`` query (or reset).
+def hold_thread_lock(thread_id: str, *, blocking: bool = False) -> Iterator[None]:
+    """Exclusive lock for one thread for the duration of an ``fj`` query.
 
-    Prevents concurrent CLIs from racing ``fj_active_thread`` and minting
-    divergent thread ids. Non-blocking by default: if another live ``fj`` holds
-    the lock, raises :class:`ConcurrentSessionError`.
+    Different threads may run concurrently; two CLIs on the same thread are
+    refused. Non-blocking by default: if another live ``fj`` holds the lock,
+    raises :class:`ConcurrentSessionError`.
 
     Uses ``fcntl.flock`` (POSIX). The kernel releases the lock if the holder
     exits, so stale locks after crashes are not sticky.
     """
     import fcntl
 
-    lock_path = active_thread_lock_path()
+    tid = thread_id.strip()
+    if not tid:
+        raise ValueError("thread_id must be non-empty")
+    lock_path = thread_lock_path(tid)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
     flags = fcntl.LOCK_EX
@@ -110,13 +114,12 @@ def hold_session_lock(*, blocking: bool = False) -> Iterator[None]:
             holder = _lock_holder_pid(lock_path)
             if holder is not None and _pid_is_alive(holder):
                 msg = (
-                    f"another fj process is already running (pid {holder}); "
-                    "wait for it to finish, or use -t <thread-id> / --reset"
+                    f"another fj process is already running on thread {tid} "
+                    f"(pid {holder}); wait for it to finish"
                 )
             else:
                 msg = (
-                    "another fj process is already running; "
-                    "wait for it to finish, or use -t <thread-id> / --reset"
+                    f"another fj process is already running on thread {tid}; wait for it to finish"
                 )
             raise ConcurrentSessionError(msg) from exc
         os.lseek(fd, 0, os.SEEK_SET)
@@ -251,23 +254,23 @@ async def resolve_thread_id(
     checkpointer: Any,
     *,
     explicit: str | None = None,
-    reset: bool = False,
+    follow: bool = False,
 ) -> str:
     """Choose the thread for a query and pin it as active.
 
-    Priority: ``-t`` explicit id, else ``--reset`` (new id), else pinned active
-    id, else latest activity, else a new id.
+    Priority: ``-t`` explicit id, else ``-f``/``--follow`` (pinned active id,
+    else latest activity, else new id), else a new id.
     """
     if explicit:
         tid = explicit.strip()
-    elif reset:
-        tid = new_thread_id()
-    else:
+    elif follow:
         tid = read_active_thread_id()
         if not tid:
             tid = await latest_thread_id(checkpointer)
         if not tid:
             tid = new_thread_id()
+    else:
+        tid = new_thread_id()
     write_active_thread_id(tid)
     return tid
 

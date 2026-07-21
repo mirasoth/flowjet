@@ -53,13 +53,18 @@ def stub_agent_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     async def fake_cp(_config: object) -> Any:
         yield object()
 
-    async def fake_resolve(_cp: object, *, explicit: str | None = None, reset: bool = False) -> str:
-        seen["resolve"] = {"explicit": explicit, "reset": reset}
+    async def fake_resolve(
+        _cp: object,
+        *,
+        explicit: str | None = None,
+        follow: bool = False,
+    ) -> str:
+        seen["resolve"] = {"explicit": explicit, "follow": follow}
         if explicit:
             return explicit.strip()
-        if reset:
-            return "fj-reset-stub"
-        return "fj-active-stub"
+        if follow:
+            return "fj-active-stub"
+        return "fj-new-stub"
 
     async def fake_list(_cp: object, *, limit: int = 20) -> list[object]:
         from fj_ai.threads import ThreadInfo

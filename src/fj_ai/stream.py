@@ -1,4 +1,4 @@
-"""Stream agent events: ephemeral progress + final answer only."""
+"""Stream agent events: ephemeral progress + complete final answer."""
 
 from __future__ import annotations
 
@@ -79,8 +79,11 @@ def accumulate_ai_text(current: str, message: AIMessage) -> str:
             return current
         return current + text
 
-    # Full AIMessage: take as the current turn's complete text.
-    return text
+    # Full AIMessage snapshot: streaming chunks may already be longer than the
+    # assembled message object — never discard the longer buffer.
+    if len(text) >= len(current):
+        return text
+    return current
 
 
 def _status_preview(text: str) -> str:
@@ -100,8 +103,8 @@ class AnswerWriter:
     """Buffer answer text; show narration on the progress line; print only at end.
 
     Multi-step agent turns emit intermediate AI text ("Let me try…") before tool
-    calls. Those must not become permanent stdout — only the final buffer after
-    the stream ends is the user-visible result.
+    calls. That stays on the ephemeral progress line. ``finish()`` always writes
+    the full buffer so the finalized response is never truncated.
     """
 
     def __init__(
@@ -131,7 +134,7 @@ class AnswerWriter:
         self.buf = ""
 
     def finish(self) -> str:
-        """Print the final answer buffer once (progress is cleared by ``ProgressLine.stop``)."""
+        """Print the complete answer buffer once (progress is cleared by ``stop``)."""
         if self.buf:
             self._stdout.write(self.buf)
             if not self.buf.endswith("\n"):
@@ -151,7 +154,7 @@ async def stream_query(
     err: TextIO | None = None,
     progress: ProgressLine | None = None,
 ) -> str:
-    """Run a query with ephemeral progress; print only the final answer."""
+    """Run a query with ephemeral progress; print the complete final answer."""
     stdout = out or sys.stdout
     stderr = err or sys.stderr
     status = progress if progress is not None else ProgressLine(stdout)
