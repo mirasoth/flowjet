@@ -7,7 +7,7 @@ _fj() {
   local -a replies opt_words query_words
   local i=2 word fj_bin
   local -a value_flags
-  value_flags=(-c --config -t --thread -w --workspace)
+  value_flags=(-c --config -t --thread -w --workspace -n)
 
   # Prefer the same binary the user is completing (venv path, alias target, etc.).
   fj_bin="${words[1]}"
@@ -23,7 +23,9 @@ _fj() {
       break
     fi
     if [[ "$word" == -h || "$word" == --help || "$word" == -V || "$word" == --version \
-       || "$word" == --no-stream || "$word" == -v || "$word" == --verbose ]]; then
+       || "$word" == --no-stream || "$word" == -v || "$word" == --verbose \
+       || "$word" == -l || "$word" == --list \
+       || "$word" == -f || "$word" == --follow ]]; then
       opt_words+=("$word")
       (( i++ ))
       continue

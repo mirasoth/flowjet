@@ -19,6 +19,9 @@ fj — coding agent CLI (soothe-nano)
 Usage:
   fj setup
   fj completion zsh|bash
+  fj -l
+  fj -l -n 50
+  fj -f <query...>
   fj <query...>
   fj [options] [--] <query...>
 
@@ -26,6 +29,10 @@ Examples:
   fj who is your name
   fj 修改这个文件。
   fj explain how asyncio works in this repo
+  fj -l
+  fj -l -n 5
+  fj -f continue from the last reply
+  fj -t <thread-id> continue this conversation
   eval "$(fj completion zsh)"
 
 Everything after options is joined as the query (any Unicode).
@@ -33,12 +40,27 @@ Use ``--`` to force the rest of the line into the query (including leading dashe
 """
 
 
+class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """Keep short flags on one line; long option strings wrap help cleanly."""
+
+    def __init__(self, prog: str) -> None:
+        # Low enough that ``-c PATH, --config PATH`` / ``-w DIR, --workspace DIR``
+        # put help on the following line; wide enough for the expanded config path.
+        super().__init__(prog, max_help_position=22, width=100)
+
+
+def _default_config_help() -> str:
+    from fj_ai.config import default_config_path
+
+    return f"nano.yml path (default: {default_config_path()})"
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fj",
         description="One-shot coding agent powered by soothe-nano",
         epilog="Any characters after options are the query.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=_HelpFormatter,
         add_help=True,
     )
     parser.add_argument(
@@ -51,13 +73,32 @@ def _build_parser() -> argparse.ArgumentParser:
         "-c",
         "--config",
         metavar="PATH",
-        help="nano.yml path (default: ~/.soothe/config/nano.yml)",
+        help=_default_config_help(),
     )
     parser.add_argument(
         "-t",
         "--thread",
         metavar="ID",
         help="LangGraph thread id (default: new fj-<uuid>)",
+    )
+    parser.add_argument(
+        "-l",
+        "--list",
+        action="store_true",
+        help="List latest threads (newest first; default 20) and exit",
+    )
+    parser.add_argument(
+        "-n",
+        metavar="NUM",
+        type=int,
+        dest="list_limit",
+        help="Number of threads to list with -l (default: 20)",
+    )
+    parser.add_argument(
+        "-f",
+        "--follow",
+        action="store_true",
+        help="Continue the query in the latest thread",
     )
     parser.add_argument(
         "-w",
@@ -68,7 +109,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-stream",
         action="store_true",
-        help="Generic progress only (hide live AI narration preview on the status line)",
+        help="Disable token streaming; print final answer only",
     )
     parser.add_argument(
         "-v",
@@ -82,13 +123,14 @@ def _build_parser() -> argparse.ArgumentParser:
 def _build_setup_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fj setup",
-        description="Interactive setup for ~/.soothe/config/nano.yml",
+        description="Interactive setup for nano.yml",
+        formatter_class=_HelpFormatter,
     )
     parser.add_argument(
         "-c",
         "--config",
         metavar="PATH",
-        help="nano.yml path (default: ~/.soothe/config/nano.yml)",
+        help=_default_config_help(),
     )
     return parser
 
@@ -119,18 +161,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return _namespace_with_command(args, "query")
 
 
-async def run_async(args: argparse.Namespace) -> int:
-    if not args.query_text:
-        sys.stderr.write(USAGE)
-        return 2
-
-    # Lazy: keep ``fj __complete`` / setup free of agent import cost.
-    from fj_ai.agent import build_agent, open_sqlite_checkpointer
+def _load_config_or_exit(args: argparse.Namespace) -> Any | int:
     from fj_ai.config import load_config
-    from fj_ai.stream import invoke_query, stream_query
 
     try:
-        config = load_config(args.config)
+        return load_config(args.config)
     except FileNotFoundError as exc:
         sys.stderr.write(f"error: {exc}\n")
         return 1
@@ -138,11 +173,70 @@ async def run_async(args: argparse.Namespace) -> int:
         sys.stderr.write(f"error: failed to load config: {exc}\n")
         return 1
 
-    workspace = Path(args.workspace).expanduser().resolve() if args.workspace else None
-    thread_id = args.thread or f"fj-{uuid.uuid4()}"
+
+async def run_list_async(args: argparse.Namespace) -> int:
+    """Print persisted threads, newest first."""
+    from fj_ai.agent import open_sqlite_checkpointer
+    from fj_ai.threads import DEFAULT_LIST_LIMIT, list_threads, write_thread_list
+
+    config = _load_config_or_exit(args)
+    if isinstance(config, int):
+        return config
+
+    limit = getattr(args, "list_limit", None)
+    if limit is None:
+        limit = DEFAULT_LIST_LIMIT
+    elif limit < 1:
+        sys.stderr.write("error: -n must be a positive integer\n")
+        return 2
 
     try:
         async with open_sqlite_checkpointer(config) as checkpointer:
+            threads = await list_threads(checkpointer, limit=limit)
+            write_thread_list(threads, sys.stdout)
+    except KeyboardInterrupt:
+        sys.stderr.write("\ninterrupted\n")
+        return 130
+    except Exception as exc:
+        from fj_ai.errors import write_cli_error
+
+        write_cli_error(exc, verbose=getattr(args, "verbose", False))
+        return 1
+    return 0
+
+
+async def run_async(args: argparse.Namespace) -> int:
+    if getattr(args, "list", False):
+        return await run_list_async(args)
+
+    if not args.query_text:
+        sys.stderr.write(USAGE)
+        return 2
+
+    # Lazy: keep ``fj __complete`` / setup free of agent import cost.
+    from fj_ai.agent import build_agent, open_sqlite_checkpointer
+    from fj_ai.stream import invoke_query, stream_query
+
+    config = _load_config_or_exit(args)
+    if isinstance(config, int):
+        return config
+
+    workspace = Path(args.workspace).expanduser().resolve() if args.workspace else None
+    thread_id = args.thread
+    follow = getattr(args, "follow", False) and not thread_id
+
+    try:
+        async with open_sqlite_checkpointer(config) as checkpointer:
+            if follow:
+                from fj_ai.threads import latest_thread_id
+
+                thread_id = await latest_thread_id(checkpointer)
+                if not thread_id:
+                    sys.stderr.write("error: no threads to follow; run a query first\n")
+                    return 1
+            if not thread_id:
+                thread_id = f"fj-{uuid.uuid4()}"
+
             agent = await build_agent(
                 config,
                 workspace=workspace,

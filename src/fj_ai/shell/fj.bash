@@ -20,12 +20,14 @@ _fj() {
       break
     fi
     if [[ "$w" == -h || "$w" == --help || "$w" == -V || "$w" == --version \
-       || "$w" == --no-stream || "$w" == -v || "$w" == --verbose ]]; then
+       || "$w" == --no-stream || "$w" == -v || "$w" == --verbose \
+       || "$w" == -l || "$w" == --list \
+       || "$w" == -f || "$w" == --follow ]]; then
       (( ++i ))
       continue
     fi
     if [[ "$w" == -c || "$w" == --config || "$w" == -t || "$w" == --thread \
-       || "$w" == -w || "$w" == --workspace ]]; then
+       || "$w" == -w || "$w" == --workspace || "$w" == -n ]]; then
       (( ++i ))
       (( i < ${#words[@]} )) && (( ++i ))
       continue

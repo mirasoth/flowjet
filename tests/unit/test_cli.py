@@ -19,6 +19,11 @@ from fj_ai.cli import parse_args
         (["-c", "/tmp/nano.yml", "hi"], ["-c", "/tmp/nano.yml"], ["hi"]),
         (["--config=/tmp/x.yml", "q"], ["--config=/tmp/x.yml"], ["q"]),
         (["--no-stream", "ask"], ["--no-stream"], ["ask"]),
+        (["-l"], ["-l"], []),
+        (["--list"], ["--list"], []),
+        (["-l", "-n", "5"], ["-l", "-n", "5"], []),
+        (["-f", "follow", "up"], ["-f"], ["follow", "up"]),
+        (["--follow", "follow"], ["--follow"], ["follow"]),
         ([], [], []),
     ],
 )
@@ -40,6 +45,140 @@ def test_parse_args_options() -> None:
     assert args.thread == "t1"
     assert args.workspace == "/tmp"
     assert args.query_text == "do stuff"
+
+
+def test_parse_args_list_flag() -> None:
+    args = parse_args(["-l"])
+    assert args.list is True
+    assert args.list_limit is None
+    assert args.query_text == ""
+    assert args.command == "query"
+
+
+def test_parse_args_list_limit() -> None:
+    args = parse_args(["-l", "-n", "5"])
+    assert args.list is True
+    assert args.list_limit == 5
+
+
+def test_parse_args_follow_flag() -> None:
+    args = parse_args(["-f", "follow", "up"])
+    assert args.follow is True
+    assert args.query_text == "follow up"
+
+
+@pytest.mark.asyncio
+async def test_run_async_list_threads(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import fj_ai.agent as agent_mod
+    import fj_ai.config as config_mod
+    import fj_ai.threads as threads_mod
+    from fj_ai.cli import parse_args, run_async
+    from fj_ai.threads import ThreadInfo
+
+    seen: dict[str, int] = {}
+
+    @asynccontextmanager
+    async def fake_cp(_config: object):
+        yield object()
+
+    async def fake_list(_cp: object, *, limit: int = 20):
+        seen["limit"] = limit
+        return [
+            ThreadInfo("fj-new", "2026-07-21 12:00:00", "latest question"),
+            ThreadInfo("fj-old", "2026-07-20 12:00:00", "older question"),
+        ]
+
+    monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
+    monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
+    monkeypatch.setattr(threads_mod, "list_threads", fake_list)
+
+    assert await run_async(parse_args(["-l"])) == 0
+    out = capsys.readouterr().out
+    assert out.index("fj-new") < out.index("fj-old")
+    assert "2026-07-21 12:00:00" in out
+    assert "latest question" in out
+    assert seen["limit"] == 20
+
+    assert await run_async(parse_args(["-l", "-n", "3"])) == 0
+    assert seen["limit"] == 3
+
+
+@pytest.mark.asyncio
+async def test_run_async_list_invalid_limit(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    from types import SimpleNamespace
+
+    import fj_ai.config as config_mod
+    from fj_ai.cli import parse_args, run_async
+
+    monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
+    assert await run_async(parse_args(["-l", "-n", "0"])) == 2
+    assert "-n must be a positive integer" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_run_async_follow_uses_latest_thread(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import fj_ai.agent as agent_mod
+    import fj_ai.config as config_mod
+    import fj_ai.stream as stream_mod
+    import fj_ai.threads as threads_mod
+    from fj_ai.cli import parse_args, run_async
+
+    seen: dict[str, str] = {}
+
+    @asynccontextmanager
+    async def fake_cp(_config: object):
+        yield object()
+
+    async def fake_latest(_cp: object) -> str:
+        return "fj-latest"
+
+    async def fake_stream(_agent: object, query: str, *, thread_id: str, **_k: object) -> str:
+        seen["query"] = query
+        seen["thread_id"] = thread_id
+        return "ok"
+
+    async def fake_build(*_a: object, **_k: object) -> object:
+        return object()
+
+    monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
+    monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
+    monkeypatch.setattr(agent_mod, "build_agent", fake_build)
+    monkeypatch.setattr(threads_mod, "latest_thread_id", fake_latest)
+    monkeypatch.setattr(stream_mod, "stream_query", fake_stream)
+
+    assert await run_async(parse_args(["-f", "follow", "up"])) == 0
+    assert seen == {"query": "follow up", "thread_id": "fj-latest"}
+
+
+@pytest.mark.asyncio
+async def test_run_async_follow_no_threads(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import fj_ai.agent as agent_mod
+    import fj_ai.config as config_mod
+    import fj_ai.threads as threads_mod
+    from fj_ai.cli import parse_args, run_async
+
+    @asynccontextmanager
+    async def fake_cp(_config: object):
+        yield object()
+
+    async def fake_latest(_cp: object) -> None:
+        return None
+
+    monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
+    monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
+    monkeypatch.setattr(threads_mod, "latest_thread_id", fake_latest)
+
+    assert await run_async(parse_args(["-f", "hello"])) == 1
+    assert "no threads to follow" in capsys.readouterr().err
 
 
 def test_parse_args_empty_query() -> None:

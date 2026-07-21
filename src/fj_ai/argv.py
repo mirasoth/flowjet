@@ -11,12 +11,24 @@ def split_argv(argv: list[str]) -> tuple[list[str], list[str]]:
     """
     options: list[str] = []
     i = 0
-    value_flags = {"-c", "--config", "-t", "--thread", "-w", "--workspace"}
+    value_flags = {"-c", "--config", "-t", "--thread", "-w", "--workspace", "-n"}
     while i < len(argv):
         tok = argv[i]
         if tok == "--":
             return options, argv[i + 1 :]
-        if tok in {"-h", "--help", "-V", "--version", "--no-stream", "-v", "--verbose"}:
+        if tok in {
+            "-h",
+            "--help",
+            "-V",
+            "--version",
+            "--no-stream",
+            "-v",
+            "--verbose",
+            "-l",
+            "--list",
+            "-f",
+            "--follow",
+        }:
             options.append(tok)
             i += 1
             continue
