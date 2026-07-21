@@ -45,6 +45,11 @@ dev = [
 
 [tool.uv]
 default-groups = ["dev"]
+# cryptography 46+ ships macOS wheels for arm64 only; Intel Macs must build from
+# source (Rust), which is slow and looks like a hang during `uv sync`.
+constraint-dependencies = [
+    "cryptography>=45,<46; platform_machine == 'x86_64' and sys_platform == 'darwin'",
+]
 
 [project.scripts]
 fj = "fj_ai.cli:main"
