@@ -98,6 +98,10 @@ skills:
   SKILL.md
 ```
 
+## Powered by
+
+**fj** is built on [soothe-nano](https://github.com/mirasoth/soothe-nano) — tools, skills, MCP, subagents, and progressive loading, with SQLite persistence.
+
 ```markdown
 ---
 name: my-reviewer
