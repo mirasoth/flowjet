@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -21,20 +20,24 @@ Usage:
   fj completion zsh|bash
   fj -l
   fj -l -n 50
-  fj -f <query...>
+  fj --reset
+  fj --reset <query...>
   fj <query...>
   fj [options] [--] <query...>
 
 Examples:
   fj who is your name
-  fj 修改这个文件。
+  fj explain this file
   fj explain how asyncio works in this repo
   fj -l
   fj -l -n 5
-  fj -f continue from the last reply
+  fj --reset
+  fj --reset start a fresh conversation
   fj -t <thread-id> continue this conversation
   eval "$(fj completion zsh)"
 
+Queries continue the latest active thread by default.
+Use ``--reset`` to start a new active thread.
 Everything after options is joined as the query (any Unicode).
 Use ``--`` to force the rest of the line into the query (including leading dashes).
 """
@@ -59,7 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fj",
         description="One-shot coding agent powered by soothe-nano",
-        epilog="Any characters after options are the query.",
+        epilog="Queries continue the latest active thread by default.",
         formatter_class=_HelpFormatter,
         add_help=True,
     )
@@ -79,7 +82,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "-t",
         "--thread",
         metavar="ID",
-        help="LangGraph thread id (default: new fj-<uuid>)",
+        help="Use this LangGraph thread id (pins it as active)",
     )
     parser.add_argument(
         "-l",
@@ -95,10 +98,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Number of threads to list with -l (default: 20)",
     )
     parser.add_argument(
-        "-f",
-        "--follow",
+        "--reset",
         action="store_true",
-        help="Continue the query in the latest thread",
+        help="Start a new active thread (alone, or with a query)",
     )
     parser.add_argument(
         "-w",
@@ -205,9 +207,22 @@ async def run_list_async(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_reset_only() -> int:
+    """Pin a new active thread id and print it (no agent run)."""
+    from fj_ai.threads import new_thread_id, write_active_thread_id
+
+    tid = new_thread_id()
+    write_active_thread_id(tid)
+    sys.stdout.write(f"{tid}\n")
+    return 0
+
+
 async def run_async(args: argparse.Namespace) -> int:
     if getattr(args, "list", False):
         return await run_list_async(args)
+
+    if getattr(args, "reset", False) and not args.query_text and not args.thread:
+        return run_reset_only()
 
     if not args.query_text:
         sys.stderr.write(USAGE)
@@ -216,26 +231,21 @@ async def run_async(args: argparse.Namespace) -> int:
     # Lazy: keep ``fj __complete`` / setup free of agent import cost.
     from fj_ai.agent import build_agent, open_sqlite_checkpointer
     from fj_ai.stream import invoke_query, stream_query
+    from fj_ai.threads import resolve_thread_id
 
     config = _load_config_or_exit(args)
     if isinstance(config, int):
         return config
 
     workspace = Path(args.workspace).expanduser().resolve() if args.workspace else None
-    thread_id = args.thread
-    follow = getattr(args, "follow", False) and not thread_id
 
     try:
         async with open_sqlite_checkpointer(config) as checkpointer:
-            if follow:
-                from fj_ai.threads import latest_thread_id
-
-                thread_id = await latest_thread_id(checkpointer)
-                if not thread_id:
-                    sys.stderr.write("error: no threads to follow; run a query first\n")
-                    return 1
-            if not thread_id:
-                thread_id = f"fj-{uuid.uuid4()}"
+            thread_id = await resolve_thread_id(
+                checkpointer,
+                explicit=args.thread,
+                reset=getattr(args, "reset", False),
+            )
 
             agent = await build_agent(
                 config,

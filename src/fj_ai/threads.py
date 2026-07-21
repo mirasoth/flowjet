@@ -2,11 +2,49 @@
 
 from __future__ import annotations
 
+import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, TextIO
 
 _PREVIEW_LIMIT = 72
+
+
+def _soothe_home() -> Path:
+    """Resolve soothe home without importing soothe-nano."""
+    env = os.environ.get("SOOTHE_HOME")
+    if env:
+        return Path(env).expanduser()
+    return Path.home() / ".soothe"
+
+
+def active_thread_path() -> Path:
+    """Return ``~/.soothe/data/fj_active_thread`` (respects ``SOOTHE_HOME``)."""
+    return _soothe_home() / "data" / "fj_active_thread"
+
+
+def read_active_thread_id(path: Path | None = None) -> str | None:
+    """Return the pinned active thread id, if any."""
+    file = path or active_thread_path()
+    try:
+        text = file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return text or None
+
+
+def write_active_thread_id(thread_id: str, path: Path | None = None) -> None:
+    """Pin ``thread_id`` as the active conversation for subsequent queries."""
+    file = path or active_thread_path()
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text(thread_id.strip() + "\n", encoding="utf-8")
+
+
+def new_thread_id() -> str:
+    """Allocate a fresh ``fj-<uuid>`` thread id."""
+    return f"fj-{uuid.uuid4()}"
 
 
 @dataclass(frozen=True)
@@ -73,80 +111,96 @@ def preview_user_request(payload: Any, *, limit: int = _PREVIEW_LIMIT) -> str | 
     return None
 
 
-async def latest_thread_id(checkpointer: Any) -> str | None:
-    """Return the most recently updated thread id, or ``None`` if none exist."""
-    if checkpointer is None:
-        return None
+def _activity_sort_key(item: tuple[str, str | None, str]) -> tuple[bool, str, str]:
+    """Sort key for ``reverse=True``: newest ``updated_at``, then latest checkpoint id."""
+    _tid, updated_at, latest_cid = item
+    return (updated_at is not None, updated_at or "", latest_cid)
 
-    query = """
-        SELECT thread_id
-        FROM checkpoints
-        WHERE checkpoint_ns = ''
-        GROUP BY thread_id
-        ORDER BY MAX(checkpoint_id) DESC
-        LIMIT 1
+
+async def _load_thread_activity(
+    checkpointer: Any,
+) -> list[tuple[str, str | None, str]]:
+    """Return ``(thread_id, updated_at, latest_checkpoint_id)`` for every thread.
+
+    ``updated_at`` comes from the latest checkpoint's ``ts`` (last activity), not
+    the thread's first checkpoint (creation).
     """
-    async with checkpointer.conn.execute(query) as cur:
-        row = await cur.fetchone()
-    if row is None:
-        return None
-    return str(row[0])
-
-
-async def _load_updated_at(checkpointer: Any, thread_ids: list[str]) -> dict[str, str | None]:
-    """Map thread_id → simplified timestamp from each thread's latest checkpoint."""
-    if not thread_ids:
-        return {}
-    placeholders = ",".join("?" for _ in thread_ids)
-    query = f"""
+    query = """
         SELECT c.thread_id, t.latest, c.type, c.checkpoint
         FROM checkpoints c
         INNER JOIN (
             SELECT thread_id, MAX(checkpoint_id) AS latest
             FROM checkpoints
-            WHERE checkpoint_ns = '' AND thread_id IN ({placeholders})
+            WHERE checkpoint_ns = ''
             GROUP BY thread_id
         ) t
           ON c.thread_id = t.thread_id
          AND c.checkpoint_id = t.latest
          AND c.checkpoint_ns = ''
     """
-    out: dict[str, str | None] = {}
-    async with checkpointer.conn.execute(query, thread_ids) as cur:
-        rows = await cur.fetchall()
-    for thread_id, _latest, type_, blob in rows:
-        updated_at: str | None = None
-        try:
-            checkpoint = checkpointer.serde.loads_typed((type_, blob))
-            if isinstance(checkpoint, dict):
-                updated_at = simplify_timestamp(checkpoint.get("ts"))
-        except Exception:
-            updated_at = None
-        out[str(thread_id)] = updated_at
-    return out
+    rows: list[tuple[str, str | None, str]] = []
+    async with checkpointer.conn.execute(query) as cur:
+        for thread_id, latest, type_, blob in await cur.fetchall():
+            updated_at: str | None = None
+            try:
+                checkpoint = checkpointer.serde.loads_typed((type_, blob))
+                if isinstance(checkpoint, dict):
+                    updated_at = simplify_timestamp(checkpoint.get("ts"))
+            except Exception:
+                updated_at = None
+            rows.append((str(thread_id), updated_at, str(latest)))
+    rows.sort(key=_activity_sort_key, reverse=True)
+    return rows
+
+
+async def latest_thread_id(checkpointer: Any) -> str | None:
+    """Return the latest-active thread id (same ordering as ``list_threads``).
+
+    Activity is the newest checkpoint ``ts``, not thread creation.
+    """
+    if checkpointer is None:
+        return None
+    rows = await _load_thread_activity(checkpointer)
+    return rows[0][0] if rows else None
+
+
+async def resolve_thread_id(
+    checkpointer: Any,
+    *,
+    explicit: str | None = None,
+    reset: bool = False,
+) -> str:
+    """Choose the thread for a query and pin it as active.
+
+    Priority: ``-t`` explicit id, else ``--reset`` (new id), else pinned active
+    id, else latest activity, else a new id.
+    """
+    if explicit:
+        tid = explicit.strip()
+    elif reset:
+        tid = new_thread_id()
+    else:
+        tid = read_active_thread_id()
+        if not tid:
+            tid = await latest_thread_id(checkpointer)
+        if not tid:
+            tid = new_thread_id()
+    write_active_thread_id(tid)
+    return tid
 
 
 async def _load_previews(checkpointer: Any, thread_ids: list[str]) -> dict[str, str | None]:
-    """Map thread_id → first human-message preview from earliest messages write."""
+    """Map thread_id → latest human-message preview (most recent activity)."""
     if not thread_ids:
         return {}
     placeholders = ",".join("?" for _ in thread_ids)
     query = f"""
         SELECT w.thread_id, w.checkpoint_id, w.idx, w.type, w.value
         FROM writes w
-        INNER JOIN (
-            SELECT thread_id, MIN(checkpoint_id) AS first_cid
-            FROM writes
-            WHERE channel = 'messages'
-              AND checkpoint_ns = ''
-              AND thread_id IN ({placeholders})
-            GROUP BY thread_id
-        ) f
-          ON w.thread_id = f.thread_id
-         AND w.checkpoint_id = f.first_cid
-         AND w.channel = 'messages'
-         AND w.checkpoint_ns = ''
-        ORDER BY w.thread_id, w.idx
+        WHERE w.channel = 'messages'
+          AND w.checkpoint_ns = ''
+          AND w.thread_id IN ({placeholders})
+        ORDER BY w.checkpoint_id DESC, w.idx DESC
     """
     out: dict[str, str | None] = {}
     async with checkpointer.conn.execute(query, thread_ids) as cur:
@@ -157,9 +211,13 @@ async def _load_previews(checkpointer: Any, thread_ids: list[str]) -> dict[str, 
             continue
         try:
             payload = checkpointer.serde.loads_typed((type_, value))
-            out[tid] = preview_user_request(payload)
+            preview = preview_user_request(payload)
         except Exception:
-            out[tid] = None
+            continue
+        if preview:
+            out[tid] = preview
+    for tid in thread_ids:
+        out.setdefault(tid, None)
     return out
 
 
@@ -167,30 +225,21 @@ DEFAULT_LIST_LIMIT = 20
 
 
 async def list_threads(checkpointer: Any, *, limit: int = DEFAULT_LIST_LIMIT) -> list[ThreadInfo]:
-    """Return threads ordered by latest activity (newest first).
+    """Return threads ordered by latest activity time (newest first).
 
-    ``limit`` caps how many rows are returned (default ``20``). Use a non-positive
-    value to return all threads.
+    Activity is the latest checkpoint ``ts``, not thread creation. ``limit`` caps
+    how many rows are returned (default ``20``). Use a non-positive value to
+    return all threads.
     """
     if checkpointer is None:
         return []
 
-    order_query = """
-        SELECT thread_id
-        FROM checkpoints
-        WHERE checkpoint_ns = ''
-        GROUP BY thread_id
-        ORDER BY MAX(checkpoint_id) DESC
-    """
-    params: tuple[Any, ...] = ()
+    activity = await _load_thread_activity(checkpointer)
     if limit > 0:
-        order_query += "\n        LIMIT ?"
-        params = (limit,)
+        activity = activity[:limit]
 
-    async with checkpointer.conn.execute(order_query, params) as cur:
-        ordered = [str(row[0]) for row in await cur.fetchall()]
-
-    updated = await _load_updated_at(checkpointer, ordered)
+    ordered = [tid for tid, _ts, _cid in activity]
+    updated = {tid: ts for tid, ts, _cid in activity}
     previews = await _load_previews(checkpointer, ordered)
     return [
         ThreadInfo(

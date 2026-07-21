@@ -26,8 +26,7 @@ def split_argv(argv: list[str]) -> tuple[list[str], list[str]]:
             "--verbose",
             "-l",
             "--list",
-            "-f",
-            "--follow",
+            "--reset",
         }:
             options.append(tok)
             i += 1

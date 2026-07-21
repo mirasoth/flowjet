@@ -4,7 +4,7 @@
 
 ```bash
 fj who is your name
-fj 修改这个文件。
+fj explain this file
 fj explain the auth flow in this repo
 ```
 
@@ -74,23 +74,25 @@ Missing `nano.yml` falls back to `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 fj setup
 fj completion zsh|bash
 fj -l
-fj -f <query...>
+fj --reset
+fj --reset <query...>
 fj [options] [--] <query...>
 ```
 
 | Flag | Meaning |
 |------|---------|
 | `-c PATH` / `--config` | Alternate `nano.yml` |
-| `-t ID` / `--thread` | Reuse LangGraph thread id |
+| `-t ID` / `--thread` | Use this thread id (pins it as active) |
 | `-l` / `--list` | List latest threads (newest first; default 20) |
 | `-n NUM` | Number of threads to list with `-l` |
-| `-f` / `--follow` | Continue the query in the latest thread |
+| `--reset` | Start a new active thread (alone, or with a query) |
 | `-w DIR` / `--workspace` | Workspace root |
 | `--no-stream` | Disable token streaming; print final answer only |
 | `-v` / `--verbose` | Mirror tool/custom events on stderr |
 | `-V` / `--version` | Version |
 | `--` | Force remaining argv into the query |
 
+Queries continue the **latest active thread** by default. Use `--reset` to start fresh.
 ```bash
 # put fj on PATH (pick one)
 uv tool install fj-ai

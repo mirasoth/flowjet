@@ -116,7 +116,7 @@ def test_parse_args_complete_and_completion() -> None:
 
 
 def test_main_complete_no_agent(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     monkeypatch.setattr(cli, "configure_cli_logging", lambda: None)
 
@@ -125,9 +125,11 @@ def test_main_complete_no_agent(
 
     # Agent is imported lazily inside run_async; patch the module if loaded.
     import fj_ai.agent as agent_mod
+    import fj_ai.completion.history as history_mod
 
     monkeypatch.setattr(agent_mod, "build_agent", boom_agent)
     monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", boom_agent)
+    monkeypatch.setattr(history_mod, "history_path", lambda: tmp_path / "history.jsonl")
     code = cli.main(["__complete", "--no-llm", "--"])
     assert code == 0
     out = capsys.readouterr().out

@@ -12,7 +12,7 @@ from fj_ai.cli import parse_args
     ("argv", "options", "query"),
     [
         (["who", "is", "your", "name"], [], ["who", "is", "your", "name"]),
-        (["修改这个文件。"], [], ["修改这个文件。"]),
+        (["café résumé"], [], ["café résumé"]),
         (["-v", "hello"], ["-v"], ["hello"]),
         (["--verbose", "hello", "world"], ["--verbose"], ["hello", "world"]),
         (["--", "-weird", "flag"], [], ["-weird", "flag"]),
@@ -22,8 +22,8 @@ from fj_ai.cli import parse_args
         (["-l"], ["-l"], []),
         (["--list"], ["--list"], []),
         (["-l", "-n", "5"], ["-l", "-n", "5"], []),
-        (["-f", "follow", "up"], ["-f"], ["follow", "up"]),
-        (["--follow", "follow"], ["--follow"], ["follow"]),
+        (["--reset", "start", "fresh"], ["--reset"], ["start", "fresh"]),
+        (["--reset"], ["--reset"], []),
         ([], [], []),
     ],
 )
@@ -34,8 +34,8 @@ def test_split_argv(argv: list[str], options: list[str], query: list[str]) -> No
 
 
 def test_parse_args_joins_unicode_query() -> None:
-    args = parse_args(["修改这个文件。", "并解释原因"])
-    assert args.query_text == "修改这个文件。 并解释原因"
+    args = parse_args(["café", "résumé"])
+    assert args.query_text == "café résumé"
     assert args.verbose is False
 
 
@@ -61,10 +61,16 @@ def test_parse_args_list_limit() -> None:
     assert args.list_limit == 5
 
 
-def test_parse_args_follow_flag() -> None:
-    args = parse_args(["-f", "follow", "up"])
-    assert args.follow is True
-    assert args.query_text == "follow up"
+def test_parse_args_reset_flag() -> None:
+    args = parse_args(["--reset", "start", "fresh"])
+    assert args.reset is True
+    assert args.query_text == "start fresh"
+
+
+def test_parse_args_reset_only() -> None:
+    args = parse_args(["--reset"])
+    assert args.reset is True
+    assert args.query_text == ""
 
 
 @pytest.mark.asyncio
@@ -119,7 +125,7 @@ async def test_run_async_list_invalid_limit(monkeypatch, capsys) -> None:  # typ
 
 
 @pytest.mark.asyncio
-async def test_run_async_follow_uses_latest_thread(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+async def test_run_async_default_uses_resolved_thread(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
 
@@ -129,14 +135,16 @@ async def test_run_async_follow_uses_latest_thread(monkeypatch) -> None:  # type
     import fj_ai.threads as threads_mod
     from fj_ai.cli import parse_args, run_async
 
-    seen: dict[str, str] = {}
+    seen: dict[str, object] = {}
 
     @asynccontextmanager
     async def fake_cp(_config: object):
         yield object()
 
-    async def fake_latest(_cp: object) -> str:
-        return "fj-latest"
+    async def fake_resolve(_cp: object, *, explicit: str | None = None, reset: bool = False) -> str:
+        seen["explicit"] = explicit
+        seen["reset"] = reset
+        return "fj-active"
 
     async def fake_stream(_agent: object, query: str, *, thread_id: str, **_k: object) -> str:
         seen["query"] = query
@@ -149,36 +157,78 @@ async def test_run_async_follow_uses_latest_thread(monkeypatch) -> None:  # type
     monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
     monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
     monkeypatch.setattr(agent_mod, "build_agent", fake_build)
-    monkeypatch.setattr(threads_mod, "latest_thread_id", fake_latest)
+    monkeypatch.setattr(threads_mod, "resolve_thread_id", fake_resolve)
     monkeypatch.setattr(stream_mod, "stream_query", fake_stream)
 
-    assert await run_async(parse_args(["-f", "follow", "up"])) == 0
-    assert seen == {"query": "follow up", "thread_id": "fj-latest"}
+    assert await run_async(parse_args(["continue", "please"])) == 0
+    assert seen == {
+        "explicit": None,
+        "reset": False,
+        "query": "continue please",
+        "thread_id": "fj-active",
+    }
 
 
 @pytest.mark.asyncio
-async def test_run_async_follow_no_threads(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+async def test_run_async_reset_with_query_starts_new_thread(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
 
     import fj_ai.agent as agent_mod
     import fj_ai.config as config_mod
+    import fj_ai.stream as stream_mod
     import fj_ai.threads as threads_mod
     from fj_ai.cli import parse_args, run_async
+
+    seen: dict[str, object] = {}
 
     @asynccontextmanager
     async def fake_cp(_config: object):
         yield object()
 
-    async def fake_latest(_cp: object) -> None:
-        return None
+    async def fake_resolve(_cp: object, *, explicit: str | None = None, reset: bool = False) -> str:
+        seen["explicit"] = explicit
+        seen["reset"] = reset
+        return "fj-new"
+
+    async def fake_stream(_agent: object, query: str, *, thread_id: str, **_k: object) -> str:
+        seen["thread_id"] = thread_id
+        seen["query"] = query
+        return "ok"
+
+    async def fake_build(*_a: object, **_k: object) -> object:
+        return object()
 
     monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
     monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
-    monkeypatch.setattr(threads_mod, "latest_thread_id", fake_latest)
+    monkeypatch.setattr(agent_mod, "build_agent", fake_build)
+    monkeypatch.setattr(threads_mod, "resolve_thread_id", fake_resolve)
+    monkeypatch.setattr(stream_mod, "stream_query", fake_stream)
 
-    assert await run_async(parse_args(["-f", "hello"])) == 1
-    assert "no threads to follow" in capsys.readouterr().err
+    assert await run_async(parse_args(["--reset", "hello"])) == 0
+    assert seen["reset"] is True
+    assert seen["thread_id"] == "fj-new"
+    assert seen["query"] == "hello"
+
+
+def test_run_reset_only_pins_new_thread(monkeypatch, capsys, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import asyncio
+
+    import fj_ai.threads as threads_mod
+    from fj_ai.cli import parse_args, run_async, run_reset_only
+
+    path = tmp_path / "fj_active_thread"
+    monkeypatch.setattr(threads_mod, "active_thread_path", lambda: path)
+
+    assert run_reset_only() == 0
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("fj-")
+    assert path.read_text(encoding="utf-8").strip() == out
+
+    assert asyncio.run(run_async(parse_args(["--reset"]))) == 0
+    out2 = capsys.readouterr().out.strip()
+    assert out2.startswith("fj-")
+    assert out2 != out
 
 
 def test_parse_args_empty_query() -> None:
@@ -285,6 +335,13 @@ async def test_run_async_query_success_and_history(monkeypatch) -> None:  # type
     monkeypatch.setattr(stream_mod, "stream_query", fake_stream)
     monkeypatch.setattr(history_mod, "append_history", lambda q: calls.append(f"hist:{q}"))
 
+    async def fake_resolve(*_a: object, **_k: object) -> str:
+        return "fj-test"
+
+    import fj_ai.threads as threads_mod
+
+    monkeypatch.setattr(threads_mod, "resolve_thread_id", fake_resolve)
+
     assert await run_async(parse_args(["do", "stuff"])) == 0
     assert calls == ["stream", "hist:do stuff"]
 
@@ -312,7 +369,13 @@ async def test_run_async_no_stream_and_error(monkeypatch, capsys) -> None:  # ty
     async def fake_build(*_a: object, **_k: object) -> object:
         return object()
 
+    async def fake_resolve(*_a: object, **_k: object) -> str:
+        return "fj-test"
+
+    import fj_ai.threads as threads_mod
+
     monkeypatch.setattr(agent_mod, "build_agent", fake_build)
+    monkeypatch.setattr(threads_mod, "resolve_thread_id", fake_resolve)
     monkeypatch.setattr(stream_mod, "invoke_query", boom)
 
     args = parse_args(["--no-stream", "ask"])
@@ -343,7 +406,13 @@ async def test_run_async_keyboard_interrupt(monkeypatch, capsys) -> None:  # typ
     async def fake_build(*_a: object, **_k: object) -> object:
         return object()
 
+    async def fake_resolve(*_a: object, **_k: object) -> str:
+        return "fj-test"
+
+    import fj_ai.threads as threads_mod
+
     monkeypatch.setattr(agent_mod, "build_agent", fake_build)
+    monkeypatch.setattr(threads_mod, "resolve_thread_id", fake_resolve)
     monkeypatch.setattr(stream_mod, "stream_query", raise_ki)
 
     assert await run_async(parse_args(["q"])) == 130
