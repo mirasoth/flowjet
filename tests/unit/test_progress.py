@@ -160,3 +160,117 @@ async def test_progress_line_spins_between_updates() -> None:
         await asyncio.sleep(0.07)
     frames = sum(1 for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" if ch in buf.getvalue())
     assert frames >= 2
+
+
+def test_friendly_skill_and_error_events() -> None:
+    label, color = friendly_progress({"type": "soothe.skill.invoke.started", "skill": "docs"})
+    assert "skill" in label.lower()
+    assert "docs" in label
+    assert color == "blue"
+
+    label, color = friendly_progress({"type": "soothe.error.failed", "error": "boom"})
+    assert "Error" in label
+    assert "boom" in label
+    assert color == "red"
+
+
+def test_friendly_cognition_variants() -> None:
+    assert friendly_progress({"type": "soothe.cognition.plan.started"})[0] == "Planning…"
+    label, color = friendly_progress({"type": "soothe.cognition.goal.completed"})
+    assert label == "Goal complete"
+    assert color == "green"
+    label, _ = friendly_progress(
+        {"type": "soothe.cognition.intent.classified", "intent": "refactor auth"}
+    )
+    assert "Understanding" in label
+    assert "refactor" in label
+
+
+def test_friendly_tool_failed_event() -> None:
+    label, color = friendly_progress(
+        {
+            "type": "soothe.tool.invocation.failed",
+            "tool": "run_command",
+            "command": "false",
+        }
+    )
+    assert color == "red"
+    assert "Failed" in label
+
+
+def test_friendly_skips_output_and_empty() -> None:
+    assert friendly_progress({"type": "soothe.output.token"}) is None
+    assert friendly_progress({"type": ""}) is None
+    assert friendly_progress("not-a-dict") is None  # type: ignore[arg-type]
+
+
+def test_normalize_args_variants() -> None:
+    from fj_ai.progress import _normalize_args
+
+    assert _normalize_args(None) == {}
+    assert _normalize_args("") == {}
+    assert _normalize_args('{"file_path": "a.py"}') == {"file_path": "a.py"}
+    assert _normalize_args("not-json") == {"_text": "not-json"}
+    assert _normalize_args(["x"]) == {"_text": "x"}
+    nested = _normalize_args({"value": '{"path": "b.py"}', "extra": 1})
+    assert nested["path"] == "b.py"
+    assert nested["extra"] == 1
+
+
+def test_compact_types() -> None:
+    from fj_ai.progress import _compact
+
+    assert _compact(None) == ""
+    assert _compact(True) == "true"
+    assert _compact(False) == "false"
+    assert _compact(3) == "3"
+    assert _compact(["a", "b", "c", "d", "e", "f"]) == "a, b, c, d, e, …"
+    assert _compact([]) == "[]"
+    assert '{"k"' in _compact({"k": 1})
+
+
+def test_color_enabled_respects_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fj_ai.progress import _color_enabled
+
+    stream = StringIO()
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert _color_enabled(stream) is False
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("FJ_FORCE_COLOR", "1")
+    assert _color_enabled(stream) is True
+
+
+def test_line_budget_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fj_ai.progress import _line_budget
+
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "50")
+    assert _line_budget() == 50
+
+
+def test_format_edit_file_preview() -> None:
+    preview = format_args_preview(
+        "edit_file",
+        {"file_path": "a.py", "old_string": "foo", "new_string": "bar"},
+        max_parts=3,
+    )
+    assert "a.py" in preview or "replace" in preview or "→" in preview
+
+
+def test_format_tool_activity_unknown_tool() -> None:
+    label, color = format_tool_activity("custom_tool", {"query": "x"})
+    assert "Running" in label or "custom" in label.lower()
+    assert color == "yellow"
+    label, _ = format_tool_activity("read_file", None)
+    assert label.startswith("Reading")
+
+
+def test_progress_line_release_is_idempotent() -> None:
+    buf = StringIO()
+    line = ProgressLine(buf, enabled=True)
+    line.update("Thinking…", color="cyan")
+    line.release()
+    before = buf.getvalue()
+    line.release()
+    assert buf.getvalue() == before
+    line.clear()
+    assert buf.getvalue() == before

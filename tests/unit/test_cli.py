@@ -80,3 +80,152 @@ def test_main_keyboard_interrupt_is_clean(monkeypatch, capsys) -> None:  # type:
     monkeypatch.setattr(cli, "parse_args", raise_ki)
     assert cli.main([]) == 130
     assert "interrupted" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_run_async_empty_query_prints_usage(capsys) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai.cli import parse_args, run_async
+
+    assert await run_async(parse_args(["-v"])) == 2
+    assert "fj — coding agent CLI" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_run_async_missing_config(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    import fj_ai.config as config_mod
+    from fj_ai.cli import parse_args, run_async
+
+    def missing(_path: object = None) -> object:
+        raise FileNotFoundError("no config")
+
+    monkeypatch.setattr(config_mod, "load_config", missing)
+    code = await run_async(parse_args(["hello"]))
+    assert code == 1
+    assert "error: no config" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_run_async_config_load_failure(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    import fj_ai.config as config_mod
+    from fj_ai.cli import parse_args, run_async
+
+    monkeypatch.setattr(
+        config_mod, "load_config", lambda _p=None: (_ for _ in ()).throw(ValueError("bad yaml"))
+    )
+    assert await run_async(parse_args(["hello"])) == 1
+    assert "failed to load config" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_run_async_query_success_and_history(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import fj_ai.agent as agent_mod
+    import fj_ai.completion.history as history_mod
+    import fj_ai.config as config_mod
+    import fj_ai.stream as stream_mod
+    from fj_ai.cli import parse_args, run_async
+
+    calls: list[str] = []
+
+    @asynccontextmanager
+    async def fake_cp(_config: object):
+        yield object()
+
+    async def fake_build(*_a: object, **_k: object) -> object:
+        return object()
+
+    async def fake_stream(*_a: object, **_k: object) -> str:
+        calls.append("stream")
+        return "ok"
+
+    monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
+    monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
+    monkeypatch.setattr(agent_mod, "build_agent", fake_build)
+    monkeypatch.setattr(stream_mod, "stream_query", fake_stream)
+    monkeypatch.setattr(history_mod, "append_history", lambda q: calls.append(f"hist:{q}"))
+
+    assert await run_async(parse_args(["do", "stuff"])) == 0
+    assert calls == ["stream", "hist:do stuff"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_no_stream_and_error(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import fj_ai.agent as agent_mod
+    import fj_ai.config as config_mod
+    import fj_ai.stream as stream_mod
+    from fj_ai.cli import parse_args, run_async
+
+    @asynccontextmanager
+    async def fake_cp(_config: object):
+        yield object()
+
+    async def boom(*_a: object, **_k: object) -> str:
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
+    monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
+
+    async def fake_build(*_a: object, **_k: object) -> object:
+        return object()
+
+    monkeypatch.setattr(agent_mod, "build_agent", fake_build)
+    monkeypatch.setattr(stream_mod, "invoke_query", boom)
+
+    args = parse_args(["--no-stream", "ask"])
+    assert await run_async(args) == 1
+    assert "provider down" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_run_async_keyboard_interrupt(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import fj_ai.agent as agent_mod
+    import fj_ai.config as config_mod
+    import fj_ai.stream as stream_mod
+    from fj_ai.cli import parse_args, run_async
+
+    @asynccontextmanager
+    async def fake_cp(_config: object):
+        yield object()
+
+    async def raise_ki(*_a: object, **_k: object) -> str:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
+    monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
+
+    async def fake_build(*_a: object, **_k: object) -> object:
+        return object()
+
+    monkeypatch.setattr(agent_mod, "build_agent", fake_build)
+    monkeypatch.setattr(stream_mod, "stream_query", raise_ki)
+
+    assert await run_async(parse_args(["q"])) == 130
+    assert "interrupted" in capsys.readouterr().err
+
+
+def test_main_verbose_reconfigures_logging(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import cli
+
+    seen: list[bool] = []
+
+    def fake_logging(*, verbose: bool = False) -> None:
+        seen.append(verbose)
+
+    def fake_run(coro: object) -> int:
+        # Close the coroutine to avoid "never awaited" warnings.
+        if hasattr(coro, "close"):
+            coro.close()  # type: ignore[union-attr]
+        return 0
+
+    monkeypatch.setattr(cli, "configure_cli_logging", fake_logging)
+    monkeypatch.setattr(cli.asyncio, "run", fake_run)
+    assert cli.main(["-v", "hi"]) == 0
+    assert False in seen and True in seen

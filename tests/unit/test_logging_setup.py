@@ -74,3 +74,62 @@ def test_configure_cli_logging_verbose_one_line(
     captured = capsys.readouterr()
     assert "wizsearch_search failed" in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_silence_after_plugins_reapplies(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fj_ai.logging_setup import silence_after_plugins
+
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        "fj_ai.logging_setup.configure_cli_logging",
+        lambda *, verbose=False: calls.append(verbose),
+    )
+    silence_after_plugins(verbose=True)
+    assert calls == [True]
+
+
+def test_compact_formatter_drops_traceback() -> None:
+    from fj_ai.logging_setup import _CompactConsoleFormatter
+
+    formatter = _CompactConsoleFormatter("%(message)s")
+    record = logging.LogRecord(
+        name="t",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="failed",
+        args=(),
+        exc_info=None,
+    )
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError:
+        import sys
+
+        record.exc_info = sys.exc_info()
+    assert formatter.format(record) == "failed"
+    assert formatter.formatException(record.exc_info) == ""
+
+
+def test_remove_root_console_preserves_file_handler(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from logging.handlers import RotatingFileHandler
+
+    from fj_ai.logging_setup import configure_cli_logging
+
+    root = logging.getLogger()
+    path = tmp_path / "app.log"
+    file_handler = RotatingFileHandler(path)
+    file_handler.set_name("keep-me")
+    root.addHandler(file_handler)
+    stream = logging.StreamHandler()
+    root.addHandler(stream)
+    try:
+        configure_cli_logging()
+        assert file_handler in root.handlers
+        assert stream not in root.handlers
+    finally:
+        root.removeHandler(file_handler)
+        file_handler.close()
+        if stream in root.handlers:
+            root.removeHandler(stream)
+            stream.close()
