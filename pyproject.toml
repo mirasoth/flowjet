@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fj-ai"
-version = "1.0.5"
+version = "1.0.6"
 description = "fj — one-shot CLI coding agent powered by soothe-nano"
 readme = "README.md"
 license = { text = "MIT" }
@@ -51,10 +51,7 @@ constraint-dependencies = [
     "cryptography>=45,<46; platform_machine == 'x86_64' and sys_platform == 'darwin'",
 ]
 
-# Local monorepo: sibling soothe checkout. Remove before publishing fj when
-# soothe-nano 0.9.9+ is on PyPI.
-[tool.uv.sources]
-soothe-nano = { path = "../soothe/packages/soothe-nano", editable = true }
+# soothe-nano is published on PyPI (>=0.9.9); resolve it from the default index.
 
 [project.scripts]
 fj = "fj_ai.cli:main"
