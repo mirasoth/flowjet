@@ -7,17 +7,20 @@ import asyncio
 import sys
 import uuid
 from pathlib import Path
+from typing import Any
 
 from fj_ai import __version__
 from fj_ai.agent import build_agent, open_sqlite_checkpointer
 from fj_ai.config import default_config_path, load_config
 from fj_ai.logging_setup import configure_cli_logging
+from fj_ai.setup_cmd import run_setup
 from fj_ai.stream import invoke_query, stream_query
 
 USAGE = """\
 fj — coding agent CLI (soothe-nano)
 
 Usage:
+  fj setup
   fj <query...>
   fj [options] [--] <query...>
 
@@ -115,16 +118,44 @@ def split_argv(argv: list[str]) -> tuple[list[str], list[str]]:
     return options, []
 
 
+def _build_setup_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="fj setup",
+        description="Interactive setup for ~/.soothe/config/nano.yml",
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        metavar="PATH",
+        help=f"nano.yml path (default: {default_config_path()})",
+    )
+    return parser
+
+
+def _namespace_with_command(ns: argparse.Namespace, command: str) -> argparse.Namespace:
+    data: dict[str, Any] = vars(ns)
+    data["command"] = command
+    return argparse.Namespace(**data)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI args; remaining tokens become the query string."""
     raw = list(sys.argv[1:] if argv is None else argv)
+    if raw and raw[0] == "setup":
+        setup_args = _build_setup_parser().parse_args(raw[1:])
+        setup_args.query_text = ""
+        return _namespace_with_command(setup_args, "setup")
+
     option_tokens, query_tokens = split_argv(raw)
     args = _build_parser().parse_args(option_tokens)
     args.query_text = " ".join(query_tokens).strip()
-    return args
+    return _namespace_with_command(args, "query")
 
 
 async def run_async(args: argparse.Namespace) -> int:
+    if args.command == "setup":
+        return run_setup(getattr(args, "config", None))
+
     if not args.query_text:
         sys.stderr.write(USAGE)
         return 2

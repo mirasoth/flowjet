@@ -44,3 +44,9 @@ def test_parse_args_options() -> None:
 def test_parse_args_empty_query() -> None:
     args = parse_args(["-v"])
     assert args.query_text == ""
+
+
+def test_parse_args_setup_command() -> None:
+    args = parse_args(["setup"])
+    assert args.command == "setup"
+    assert args.query_text == ""

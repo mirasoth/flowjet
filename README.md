@@ -26,15 +26,23 @@ Requires Python 3.11+.
 
 ### 2. Config
 
-Copy the example for a local OpenAI-compatible server (Ollama, LM Studio, vLLM, …):
+Run guided setup for a local OpenAI-compatible server (Ollama, LM Studio, vLLM, ...):
+
+```bash
+fj setup
+```
+
+`fj setup` updates only endpoint/key/model basics in `~/.soothe/config/nano.yml` and keeps
+other existing config keys as-is.
+
+You can still copy the bundled example manually:
 
 ```bash
 mkdir -p ~/.soothe/config
 cp nano.yml ~/.soothe/config/nano.yml
-# or: fj -c ./nano.yml who are you
 ```
 
-[`nano.yml`](nano.yml) is a minimal local profile; everything else uses soothe-nano defaults.
+[`nano.yml`](nano.yml) is the minimal local profile; everything else uses soothe-nano defaults.
 
 ```bash
 # start your local server / pull a model, then:
@@ -63,6 +71,7 @@ Missing `nano.yml` falls back to `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 ## Usage
 
 ```text
+fj setup
 fj [options] [--] <query...>
 ```
 
@@ -77,6 +86,7 @@ fj [options] [--] <query...>
 | `--` | Force remaining argv into the query |
 
 ```bash
+fj setup
 fj who is your name
 fj -v refactor the CLI parser
 fj --thread demo-1 continue: what files did you touch?
