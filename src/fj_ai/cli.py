@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fj_ai import __version__
-from fj_ai.argv import split_argv
+from fj_ai.argv import split_argv, validate_arg_composition
 from fj_ai.logging_setup import configure_cli_logging
 
 USAGE = """\
@@ -22,6 +22,8 @@ Usage:
   fj -l -n 50
   fj --reset
   fj --reset <query...>
+  fj -t <thread-id>
+  fj -t <thread-id> <query...>
   fj <query...>
   fj [options] [--] <query...>
 
@@ -33,11 +35,14 @@ Examples:
   fj -l -n 5
   fj --reset
   fj --reset start a fresh conversation
+  fj -t <thread-id>
   fj -t <thread-id> continue this conversation
   eval "$(fj completion zsh)"
 
 Queries continue the latest active thread by default.
-Use ``--reset`` to start a new active thread.
+Use ``--reset`` to start a new active thread, or ``-t`` alone to pin one.
+``-l`` lists threads and cannot be combined with a query / ``--reset`` / ``-t``.
+``--reset`` and ``-t`` are mutually exclusive; ``-n`` requires ``-l``.
 Only one ``fj`` query runs at a time (session lock); concurrent runs are refused.
 With ``-v``, prints ``thread <id>`` on stderr.
 Everything after options is joined as the query (any Unicode).
@@ -64,7 +69,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fj",
         description="One-shot coding agent powered by soothe-nano",
-        epilog="Queries continue the latest active thread by default.",
+        epilog=USAGE,
         formatter_class=_HelpFormatter,
         add_help=True,
     )
@@ -84,7 +89,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "-t",
         "--thread",
         metavar="ID",
-        help="Use this LangGraph thread id (pins it as active)",
+        help="Use this thread id (alone: pin active; with query: continue it)",
     )
     parser.add_argument(
         "-l",
@@ -97,7 +102,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="NUM",
         type=int,
         dest="list_limit",
-        help="Number of threads to list with -l (default: 20)",
+        help="Threads to list with -l (default: 20; 0 = all)",
     )
     parser.add_argument(
         "--reset",
@@ -190,8 +195,8 @@ async def run_list_async(args: argparse.Namespace) -> int:
     limit = getattr(args, "list_limit", None)
     if limit is None:
         limit = DEFAULT_LIST_LIMIT
-    elif limit < 1:
-        sys.stderr.write("error: -n must be a positive integer\n")
+    elif limit < 0:
+        sys.stderr.write("error: -n must be >= 0 (0 = list all)\n")
         return 2
 
     try:
@@ -229,12 +234,38 @@ def run_reset_only() -> int:
     return 0
 
 
+def run_pin_thread(thread_id: str) -> int:
+    """Pin ``thread_id`` as active and print it (no agent run)."""
+    from fj_ai.threads import ConcurrentSessionError, hold_session_lock, write_active_thread_id
+
+    tid = thread_id.strip()
+    if not tid:
+        sys.stderr.write("error: -t/--thread requires a non-empty id\n")
+        return 2
+    try:
+        with hold_session_lock():
+            write_active_thread_id(tid)
+            sys.stdout.write(f"{tid}\n")
+    except ConcurrentSessionError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 1
+    return 0
+
+
 async def run_async(args: argparse.Namespace) -> int:
+    conflict = validate_arg_composition(args)
+    if conflict:
+        sys.stderr.write(f"error: {conflict}\n")
+        return 2
+
     if getattr(args, "list", False):
         return await run_list_async(args)
 
-    if getattr(args, "reset", False) and not args.query_text and not args.thread:
+    if getattr(args, "reset", False) and not args.query_text:
         return run_reset_only()
+
+    if args.thread and not args.query_text:
+        return run_pin_thread(args.thread)
 
     if not args.query_text:
         sys.stderr.write(USAGE)
