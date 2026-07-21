@@ -75,8 +75,8 @@ fj setup
 fj completion zsh|bash
 fj -l
 fj -l -n 50
-fj --reset
-fj --reset <query...>
+fj -f
+fj -f <query...>
 fj -t <thread-id>
 fj -t <thread-id> <query...>
 fj [options] [--] <query...>
@@ -86,16 +86,16 @@ fj [options] [--] <query...>
 |------|---------|
 | `-c PATH` / `--config` | Alternate `nano.yml` |
 | `-t ID` / `--thread` | Alone: pin active thread; with query: continue it |
+| `-f` / `--follow` | Continue the latest active thread |
 | `-l` / `--list` | List latest threads (newest first; default 20) |
 | `-n NUM` | Threads to list with `-l` (`0` = all); requires `-l` |
-| `--reset` | Start a new active thread (alone, or with a query) |
 | `-w DIR` / `--workspace` | Workspace root |
 | `--no-stream` | Disable token streaming; print final answer only |
 | `-v` / `--verbose` | Mirror tool/custom events on stderr |
 | `-V` / `--version` | Version |
 | `--` | Force remaining argv into the query |
 
-Queries continue the **latest active thread** by default. Use `--reset` to start fresh, or `-t` alone to pin a thread. `-l` cannot be combined with a query / `--reset` / `-t`; `--reset` and `-t` are mutually exclusive.
+Queries start a **new thread** by default. Use `-f`/`--follow` to continue the latest active thread, or `-t` alone to pin a thread. `-l` cannot be combined with a query / `-f` / `-t`; `-f` and `-t` are mutually exclusive.
 ```bash
 # put fj on PATH (pick one)
 uv tool install fj-ai

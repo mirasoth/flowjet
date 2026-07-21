@@ -12,64 +12,56 @@ from fj_ai import __version__
 from fj_ai.argv import split_argv, validate_arg_composition
 from fj_ai.logging_setup import configure_cli_logging
 
-USAGE = """\
+_CLI_DESCRIPTION = """\
 fj — coding agent CLI (soothe-nano)
 
-Usage:
-  fj setup
-  fj completion zsh|bash
-  fj -l
-  fj -l -n 50
-  fj --reset
-  fj --reset <query...>
-  fj -t <thread-id>
-  fj -t <thread-id> <query...>
-  fj <query...>
-  fj [options] [--] <query...>
+Pass a natural-language query after options. Remaining words are joined into
+one query string (any Unicode). Use -- to force the rest of the line into the
+query when it looks like flags."""
 
-Examples:
-  fj who is your name
-  fj explain this file
-  fj explain how asyncio works in this repo
-  fj -l
-  fj -l -n 5
-  fj --reset
-  fj --reset start a fresh conversation
-  fj -t <thread-id>
-  fj -t <thread-id> continue this conversation
+_CLI_EPILOG = """\
+commands:
+  fj setup                 Interactive nano.yml setup
+  fj completion zsh|bash   Print shell completion script
+
+query modes:
+  fj QUERY...              Start a new thread (default)
+  fj -f QUERY...           Continue the latest active thread
+  fj -t ID QUERY...        Continue a specific thread
+  fj -t ID                 Pin thread as active (no query)
+
+examples:
+  fj explain this repo
+  fj -f what did we decide last time?
+  fj -t fj-abc-123 continue here
+  fj -l -n 10
   eval "$(fj completion zsh)"
 
-Queries continue the latest active thread by default.
-Use ``--reset`` to start a new active thread, or ``-t`` alone to pin one.
-``-l`` lists threads and cannot be combined with a query / ``--reset`` / ``-t``.
-``--reset`` and ``-t`` are mutually exclusive; ``-n`` requires ``-l``.
-Only one ``fj`` query runs at a time (session lock); concurrent runs are refused.
-With ``-v``, prints ``thread <id>`` on stderr.
-Everything after options is joined as the query (any Unicode).
-Use ``--`` to force the rest of the line into the query (including leading dashes).
+notes:
+  • -f and -t are mutually exclusive; -n requires -l; -l takes no query
+  • One query per thread at a time; different threads may run concurrently
+  • With -v, prints thread <id> on stderr before the run
 """
 
 
 class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
-    """Keep short flags on one line; long option strings wrap help cleanly."""
+    """Preserve paragraph breaks; align option help cleanly."""
 
     def __init__(self, prog: str) -> None:
-        # Low enough that ``-c PATH, --config PATH`` / ``-w DIR, --workspace DIR``
-        # put help on the following line; wide enough for the expanded config path.
-        super().__init__(prog, max_help_position=22, width=100)
+        super().__init__(prog, max_help_position=26, width=92)
 
 
 def _default_config_help() -> str:
     from fj_ai.config import default_config_path
 
-    return f"nano.yml path (default: {default_config_path()})"
+    return f"Alternate nano.yml (default: {default_config_path()})"
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fj",
-        description="One-shot coding agent powered by soothe-nano",
-        epilog=USAGE,
+        description=_CLI_DESCRIPTION,
+        epilog=_CLI_EPILOG,
         formatter_class=_HelpFormatter,
         add_help=True,
     )
@@ -79,54 +71,66 @@ def _build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"fj {__version__}",
     )
-    parser.add_argument(
+
+    thread = parser.add_argument_group("thread")
+    thread.add_argument(
+        "-t",
+        "--thread",
+        metavar="ID",
+        help="Thread id (-t alone: pin active; with query: continue it)",
+    )
+    thread.add_argument(
+        "-f",
+        "--follow",
+        action="store_true",
+        help="Continue the latest active thread",
+    )
+    thread.add_argument(
+        "-l",
+        "--list",
+        action="store_true",
+        help="List threads, newest first (default: 20), then exit",
+    )
+    thread.add_argument(
+        "-n",
+        metavar="NUM",
+        type=int,
+        dest="list_limit",
+        help="With -l: max threads to show (0 = all)",
+    )
+
+    output = parser.add_argument_group("output")
+    output.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Mirror tool calls and custom events on stderr",
+    )
+    output.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Wait for the full answer instead of streaming tokens",
+    )
+
+    paths = parser.add_argument_group("paths")
+    paths.add_argument(
         "-c",
         "--config",
         metavar="PATH",
         help=_default_config_help(),
     )
-    parser.add_argument(
-        "-t",
-        "--thread",
-        metavar="ID",
-        help="Use this thread id (alone: pin active; with query: continue it)",
-    )
-    parser.add_argument(
-        "-l",
-        "--list",
-        action="store_true",
-        help="List latest threads (newest first; default 20) and exit",
-    )
-    parser.add_argument(
-        "-n",
-        metavar="NUM",
-        type=int,
-        dest="list_limit",
-        help="Threads to list with -l (default: 20; 0 = all)",
-    )
-    parser.add_argument(
-        "--reset",
-        action="store_true",
-        help="Start a new active thread (alone, or with a query)",
-    )
-    parser.add_argument(
+    paths.add_argument(
         "-w",
         "--workspace",
         metavar="DIR",
-        help="Workspace root for file/shell tools (default: cwd)",
-    )
-    parser.add_argument(
-        "--no-stream",
-        action="store_true",
-        help="Disable token streaming; print final answer only",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Show tool calls and custom events on stderr",
+        help="Workspace root for tools (default: cwd)",
     )
     return parser
+
+
+def cli_help_text() -> str:
+    """Full ``fj`` help text (same as ``fj -h``)."""
+    return _build_parser().format_help()
 
 
 def _build_setup_parser() -> argparse.ArgumentParser:
@@ -214,41 +218,16 @@ async def run_list_async(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_reset_only() -> int:
-    """Pin a new active thread id and print it (no agent run)."""
-    from fj_ai.threads import (
-        ConcurrentSessionError,
-        hold_session_lock,
-        new_thread_id,
-        write_active_thread_id,
-    )
-
-    try:
-        with hold_session_lock():
-            tid = new_thread_id()
-            write_active_thread_id(tid)
-            sys.stdout.write(f"{tid}\n")
-    except ConcurrentSessionError as exc:
-        sys.stderr.write(f"error: {exc}\n")
-        return 1
-    return 0
-
-
 def run_pin_thread(thread_id: str) -> int:
     """Pin ``thread_id`` as active and print it (no agent run)."""
-    from fj_ai.threads import ConcurrentSessionError, hold_session_lock, write_active_thread_id
+    from fj_ai.threads import write_active_thread_id
 
     tid = thread_id.strip()
     if not tid:
         sys.stderr.write("error: -t/--thread requires a non-empty id\n")
         return 2
-    try:
-        with hold_session_lock():
-            write_active_thread_id(tid)
-            sys.stdout.write(f"{tid}\n")
-    except ConcurrentSessionError as exc:
-        sys.stderr.write(f"error: {exc}\n")
-        return 1
+    write_active_thread_id(tid)
+    sys.stdout.write(f"{tid}\n")
     return 0
 
 
@@ -261,20 +240,17 @@ async def run_async(args: argparse.Namespace) -> int:
     if getattr(args, "list", False):
         return await run_list_async(args)
 
-    if getattr(args, "reset", False) and not args.query_text:
-        return run_reset_only()
-
     if args.thread and not args.query_text:
         return run_pin_thread(args.thread)
 
     if not args.query_text:
-        sys.stderr.write(USAGE)
+        sys.stderr.write(cli_help_text())
         return 2
 
     # Lazy: keep ``fj __complete`` / setup free of agent import cost.
     from fj_ai.agent import build_agent, open_sqlite_checkpointer
     from fj_ai.stream import invoke_query, stream_query
-    from fj_ai.threads import ConcurrentSessionError, hold_session_lock, resolve_thread_id
+    from fj_ai.threads import ConcurrentSessionError, hold_thread_lock, resolve_thread_id
 
     config = _load_config_or_exit(args)
     if isinstance(config, int):
@@ -283,13 +259,13 @@ async def run_async(args: argparse.Namespace) -> int:
     workspace = Path(args.workspace).expanduser().resolve() if args.workspace else None
 
     try:
-        with hold_session_lock():
-            async with open_sqlite_checkpointer(config) as checkpointer:
-                thread_id = await resolve_thread_id(
-                    checkpointer,
-                    explicit=args.thread,
-                    reset=getattr(args, "reset", False),
-                )
+        async with open_sqlite_checkpointer(config) as checkpointer:
+            thread_id = await resolve_thread_id(
+                checkpointer,
+                explicit=args.thread,
+                follow=getattr(args, "follow", False),
+            )
+            with hold_thread_lock(thread_id):
                 if args.verbose:
                     sys.stderr.write(f"thread {thread_id}\n")
                     sys.stderr.flush()

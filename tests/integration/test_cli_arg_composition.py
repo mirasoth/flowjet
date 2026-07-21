@@ -27,17 +27,11 @@ pytestmark = pytest.mark.integration
         (["-n", "5", "hello"], "-n requires -l/--list"),
         (["--list", "-n", "3", "leftover"], "-l/--list does not take a query"),
         (["-l", "hello"], "-l/--list does not take a query"),
-        (["-l", "--reset"], "-l/--list cannot be combined with --reset"),
-        (["--list", "--reset"], "-l/--list cannot be combined with --reset"),
         (["-l", "-t", "fj-x"], "-l/--list cannot be combined with -t/--thread"),
-        (["-l", "--thread", "fj-x"], "-l/--list cannot be combined with -t/--thread"),
+        (["-l", "-f"], "-l/--list cannot be combined with -f/--follow"),
         (["-l", "-w", "/tmp"], "-l/--list cannot be combined with -w/--workspace"),
-        (["-l", "--workspace", "/tmp"], "-l/--list cannot be combined with -w/--workspace"),
         (["-l", "--no-stream"], "-l/--list cannot be combined with --no-stream"),
-        (["--reset", "-t", "fj-x"], "--reset and -t/--thread are mutually exclusive"),
-        (["--reset", "--thread", "fj-x"], "--reset and -t/--thread are mutually exclusive"),
-        (["--reset", "-t", "fj-x", "hi"], "--reset and -t/--thread are mutually exclusive"),
-        (["-t", "fj-x", "--reset", "hi"], "--reset and -t/--thread are mutually exclusive"),
+        (["-f", "-t", "fj-x"], "-f/--follow and -t/--thread are mutually exclusive"),
         (["-lv", "hello"], "-l/--list does not take a query"),
         (["-vl", "hello"], "-l/--list does not take a query"),
     ],
@@ -77,7 +71,6 @@ def test_main_help_and_version_exit_cleanly(run_fj: Any) -> None:
     assert code == 0
     assert "usage: fj" in out.lower() or "One-shot coding agent" in out
     # Full composition docs live in the epilog.
-    assert "--reset" in out
     assert "-l/--list" in out or "-l" in out
 
     code, out, err = run_fj(["--version"])
@@ -98,26 +91,8 @@ def test_main_empty_and_option_only_prints_usage(
 
 
 # ---------------------------------------------------------------------------
-# Thread pin / reset (real filesystem under isolated SOOTHE_HOME)
+# Thread pin (real filesystem under isolated SOOTHE_HOME)
 # ---------------------------------------------------------------------------
-
-
-def test_main_reset_alone_pins_new_active_thread(
-    run_fj: Any,
-    active_thread_file: Path,
-    stub_agent_runtime: dict[str, Any],
-) -> None:
-    code, out, err = run_fj(["--reset"])
-    assert code == 0
-    tid = out.strip()
-    assert tid.startswith("fj-")
-    assert active_thread_file.read_text(encoding="utf-8").strip() == tid
-    assert stub_agent_runtime["build_calls"] == 0
-
-    code2, out2, _err2 = run_fj(["--reset"])
-    assert code2 == 0
-    assert out2.strip() != tid
-    assert active_thread_file.read_text(encoding="utf-8").strip() == out2.strip()
 
 
 def test_main_thread_alone_pins_explicit_id(
@@ -177,53 +152,53 @@ def test_main_list_compositions(
 @pytest.mark.parametrize(
     ("argv", "expected_query", "expected_resolve", "expect_invoke"),
     [
-        (["hello"], "hello", {"explicit": None, "reset": False}, False),
-        (["hello", "world"], "hello world", {"explicit": None, "reset": False}, False),
-        (["café", "résumé"], "café résumé", {"explicit": None, "reset": False}, False),
-        (["-v", "ask"], "ask", {"explicit": None, "reset": False}, False),
-        (["--verbose", "ask", "now"], "ask now", {"explicit": None, "reset": False}, False),
-        (["--no-stream", "ask"], "ask", {"explicit": None, "reset": False}, True),
-        (["-v", "--no-stream", "ask"], "ask", {"explicit": None, "reset": False}, True),
-        (["--reset", "fresh"], "fresh", {"explicit": None, "reset": True}, False),
-        (["-t", "fj-x", "continue"], "continue", {"explicit": "fj-x", "reset": False}, False),
+        (["hello"], "hello", {"explicit": None, "follow": False}, False),
+        (["hello", "world"], "hello world", {"explicit": None, "follow": False}, False),
+        (["café", "résumé"], "café résumé", {"explicit": None, "follow": False}, False),
+        (["-v", "ask"], "ask", {"explicit": None, "follow": False}, False),
+        (["--verbose", "ask", "now"], "ask now", {"explicit": None, "follow": False}, False),
+        (["--no-stream", "ask"], "ask", {"explicit": None, "follow": False}, True),
+        (["-v", "--no-stream", "ask"], "ask", {"explicit": None, "follow": False}, True),
+        (["-f", "continue"], "continue", {"explicit": None, "follow": True}, False),
+        (["-t", "fj-x", "continue"], "continue", {"explicit": "fj-x", "follow": False}, False),
         (
             ["--thread", "fj-x", "continue"],
             "continue",
-            {"explicit": "fj-x", "reset": False},
+            {"explicit": "fj-x", "follow": False},
             False,
         ),
         (
             ["--thread=fj-x", "continue"],
             "continue",
-            {"explicit": "fj-x", "reset": False},
+            {"explicit": "fj-x", "follow": False},
             False,
         ),
-        (["--", "-v", "as", "query"], "-v as query", {"explicit": None, "reset": False}, False),
-        (["--", "--reset"], "--reset", {"explicit": None, "reset": False}, False),
-        (["--", "-lv"], "-lv", {"explicit": None, "reset": False}, False),
-        (["-weird"], "-weird", {"explicit": None, "reset": False}, False),
+        (["--", "-v", "as", "query"], "-v as query", {"explicit": None, "follow": False}, False),
+        (["--", "--reset"], "--reset", {"explicit": None, "follow": False}, False),
+        (["--", "-lv"], "-lv", {"explicit": None, "follow": False}, False),
+        (["-weird"], "-weird", {"explicit": None, "follow": False}, False),
         (
             ["-w", "/tmp", "in", "workspace"],
             "in workspace",
-            {"explicit": None, "reset": False},
+            {"explicit": None, "follow": False},
             False,
         ),
         (
             ["--workspace=/tmp", "q"],
             "q",
-            {"explicit": None, "reset": False},
+            {"explicit": None, "follow": False},
             False,
         ),
         (
             ["-c", "/tmp/nano.yml", "q"],
             "q",
-            {"explicit": None, "reset": False},
+            {"explicit": None, "follow": False},
             False,
         ),
         (
             ["--config=/tmp/nano.yml", "q"],
             "q",
-            {"explicit": None, "reset": False},
+            {"explicit": None, "follow": False},
             False,
         ),
     ],
@@ -268,7 +243,7 @@ def test_main_verbose_prints_thread_on_stderr(
 ) -> None:
     code, _out, err = run_fj(["-v", "hello"])
     assert code == 0
-    assert "thread fj-active-stub" in err
+    assert "thread fj-new-stub" in err
 
 
 # ---------------------------------------------------------------------------
@@ -302,14 +277,12 @@ def test_main_completion_scripts(
     code, out, err = run_fj(["completion", "zsh"])
     assert code == 0, err
     assert "#compdef fj" in out
-    assert "--reset" in out
-    assert "--follow" not in out
+    assert "--follow" in out
 
     code, out, err = run_fj(["completion", "bash"])
     assert code == 0, err
     assert "_fj()" in out
-    assert "--reset" in out
-    assert "--follow" not in out
+    assert "--follow" in out
 
     assert stub_agent_runtime["build_calls"] == 0
 
@@ -333,35 +306,33 @@ def test_main_complete_static_flags(
 
 
 # ---------------------------------------------------------------------------
-# Session lock composition (real lock under isolated home)
+# Thread lock composition (real lock under isolated home)
 # ---------------------------------------------------------------------------
 
 
-def test_main_concurrent_reset_refused(
-    run_fj: Any,
-    soothe_home: Path,
-    stub_agent_runtime: dict[str, Any],
-) -> None:
-    from fj_ai.threads import hold_session_lock
-
-    with hold_session_lock():
-        code, _out, err = run_fj(["--reset"])
-        assert code == 1
-        assert "already running" in err
-    assert stub_agent_runtime["build_calls"] == 0
-
-
-def test_main_concurrent_query_refused(
+def test_main_concurrent_query_same_thread_refused(
     run_fj: Any,
     stub_agent_runtime: dict[str, Any],
 ) -> None:
-    from fj_ai.threads import hold_session_lock
+    from fj_ai.threads import hold_thread_lock
 
-    with hold_session_lock():
+    with hold_thread_lock("fj-new-stub"):
         code, _out, err = run_fj(["hello"])
         assert code == 1
-        assert "already running" in err
+        assert "thread fj-new-stub" in err
     assert stub_agent_runtime["stream"] is None
+
+
+def test_main_concurrent_query_different_threads_allowed(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+) -> None:
+    from fj_ai.threads import hold_thread_lock
+
+    with hold_thread_lock("fj-other"):
+        code, _out, err = run_fj(["hello"])
+        assert code == 0, err
+    assert stub_agent_runtime["stream"] is not None
 
 
 # ---------------------------------------------------------------------------

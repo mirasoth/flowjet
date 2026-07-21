@@ -22,7 +22,7 @@ _fj() {
     if [[ "$w" == -h || "$w" == --help || "$w" == -V || "$w" == --version \
        || "$w" == --no-stream || "$w" == -v || "$w" == --verbose \
        || "$w" == -l || "$w" == --list \
-       || "$w" == --reset ]]; then
+       || "$w" == -f || "$w" == --follow ]]; then
       (( ++i ))
       continue
     fi

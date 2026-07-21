@@ -22,8 +22,7 @@ from fj_ai.cli import parse_args
         (["-l"], ["-l"], []),
         (["--list"], ["--list"], []),
         (["-l", "-n", "5"], ["-l", "-n", "5"], []),
-        (["--reset", "start", "fresh"], ["--reset"], ["start", "fresh"]),
-        (["--reset"], ["--reset"], []),
+        (["-f", "continue", "please"], ["-f"], ["continue", "please"]),
         (["-lv"], ["-l", "-v"], []),
         (["-vl", "hello"], ["-v", "-l"], ["hello"]),
         (["-weird"], [], ["-weird"]),
@@ -64,16 +63,10 @@ def test_parse_args_list_limit() -> None:
     assert args.list_limit == 5
 
 
-def test_parse_args_reset_flag() -> None:
-    args = parse_args(["--reset", "start", "fresh"])
-    assert args.reset is True
-    assert args.query_text == "start fresh"
-
-
-def test_parse_args_reset_only() -> None:
-    args = parse_args(["--reset"])
-    assert args.reset is True
-    assert args.query_text == ""
+def test_parse_args_follow_flag() -> None:
+    args = parse_args(["-f", "continue", "please"])
+    assert args.follow is True
+    assert args.query_text == "continue please"
 
 
 @pytest.mark.asyncio
@@ -164,12 +157,10 @@ async def test_arg_composition_conflicts(capsys) -> None:  # type: ignore[no-unt
         (["-n", "5"], "-n requires -l/--list"),
         (["-n", "5", "hello"], "-n requires -l/--list"),
         (["-l", "hello"], "-l/--list does not take a query"),
-        (["-l", "--reset"], "-l/--list cannot be combined with --reset"),
         (["-l", "-t", "fj-x"], "-l/--list cannot be combined with -t/--thread"),
         (["-l", "-w", "/tmp"], "-l/--list cannot be combined with -w/--workspace"),
         (["-l", "--no-stream"], "-l/--list cannot be combined with --no-stream"),
-        (["--reset", "-t", "fj-x"], "--reset and -t/--thread are mutually exclusive"),
-        (["--reset", "-t", "fj-x", "hi"], "--reset and -t/--thread are mutually exclusive"),
+        (["-f", "-t", "fj-x"], "-f/--follow and -t/--thread are mutually exclusive"),
     ]
     for argv, needle in cases:
         assert await run_async(parse_args(argv)) == 2
@@ -203,7 +194,7 @@ def test_parse_args_clustered_shorts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_async_default_uses_resolved_thread(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+async def test_run_async_default_starts_new_thread(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
 
@@ -219,10 +210,15 @@ async def test_run_async_default_uses_resolved_thread(monkeypatch) -> None:  # t
     async def fake_cp(_config: object):
         yield object()
 
-    async def fake_resolve(_cp: object, *, explicit: str | None = None, reset: bool = False) -> str:
+    async def fake_resolve(
+        _cp: object,
+        *,
+        explicit: str | None = None,
+        follow: bool = False,
+    ) -> str:
         seen["explicit"] = explicit
-        seen["reset"] = reset
-        return "fj-active"
+        seen["follow"] = follow
+        return "fj-new"
 
     async def fake_stream(_agent: object, query: str, *, thread_id: str, **_k: object) -> str:
         seen["query"] = query
@@ -241,14 +237,14 @@ async def test_run_async_default_uses_resolved_thread(monkeypatch) -> None:  # t
     assert await run_async(parse_args(["continue", "please"])) == 0
     assert seen == {
         "explicit": None,
-        "reset": False,
+        "follow": False,
         "query": "continue please",
-        "thread_id": "fj-active",
+        "thread_id": "fj-new",
     }
 
 
 @pytest.mark.asyncio
-async def test_run_async_reset_with_query_starts_new_thread(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+async def test_run_async_follow_uses_latest_thread(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
 
@@ -264,14 +260,17 @@ async def test_run_async_reset_with_query_starts_new_thread(monkeypatch) -> None
     async def fake_cp(_config: object):
         yield object()
 
-    async def fake_resolve(_cp: object, *, explicit: str | None = None, reset: bool = False) -> str:
-        seen["explicit"] = explicit
-        seen["reset"] = reset
-        return "fj-new"
+    async def fake_resolve(
+        _cp: object,
+        *,
+        explicit: str | None = None,
+        follow: bool = False,
+    ) -> str:
+        seen["follow"] = follow
+        return "fj-active"
 
     async def fake_stream(_agent: object, query: str, *, thread_id: str, **_k: object) -> str:
         seen["thread_id"] = thread_id
-        seen["query"] = query
         return "ok"
 
     async def fake_build(*_a: object, **_k: object) -> object:
@@ -283,30 +282,9 @@ async def test_run_async_reset_with_query_starts_new_thread(monkeypatch) -> None
     monkeypatch.setattr(threads_mod, "resolve_thread_id", fake_resolve)
     monkeypatch.setattr(stream_mod, "stream_query", fake_stream)
 
-    assert await run_async(parse_args(["--reset", "hello"])) == 0
-    assert seen["reset"] is True
-    assert seen["thread_id"] == "fj-new"
-    assert seen["query"] == "hello"
-
-
-def test_run_reset_only_pins_new_thread(monkeypatch, capsys, tmp_path) -> None:  # type: ignore[no-untyped-def]
-    import asyncio
-
-    import fj_ai.threads as threads_mod
-    from fj_ai.cli import parse_args, run_async, run_reset_only
-
-    path = tmp_path / "fj_active_thread"
-    monkeypatch.setattr(threads_mod, "active_thread_path", lambda: path)
-
-    assert run_reset_only() == 0
-    out = capsys.readouterr().out.strip()
-    assert out.startswith("fj-")
-    assert path.read_text(encoding="utf-8").strip() == out
-
-    assert asyncio.run(run_async(parse_args(["--reset"]))) == 0
-    out2 = capsys.readouterr().out.strip()
-    assert out2.startswith("fj-")
-    assert out2 != out
+    assert await run_async(parse_args(["-f", "continue"])) == 0
+    assert seen["follow"] is True
+    assert seen["thread_id"] == "fj-active"
 
 
 def test_parse_args_empty_query() -> None:

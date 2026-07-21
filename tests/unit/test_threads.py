@@ -112,21 +112,23 @@ async def test_resolve_thread_id_priority(tmp_path, monkeypatch) -> None:  # typ
 
     monkeypatch.setattr(threads_mod, "latest_thread_id", fake_latest)
 
-    # Pinned active wins over DB latest.
+    # Pinned active is ignored unless --follow.
     threads_mod.write_active_thread_id("fj-pinned")
-    assert await threads_mod.resolve_thread_id(object()) == "fj-pinned"
+    default_id = await threads_mod.resolve_thread_id(object())
+    assert default_id.startswith("fj-")
+    assert default_id != "fj-pinned"
 
-    # --reset always allocates a new id.
-    reset_id = await threads_mod.resolve_thread_id(object(), reset=True)
-    assert reset_id.startswith("fj-")
-    assert reset_id != "fj-pinned"
-    assert threads_mod.read_active_thread_id() == reset_id
+    # --follow uses pinned active.
+    threads_mod.write_active_thread_id("fj-pinned")
+    assert await threads_mod.resolve_thread_id(object(), follow=True) == "fj-pinned"
 
-    # Explicit -t wins over reset.
-    assert await threads_mod.resolve_thread_id(object(), explicit="fj-explicit", reset=True) == (
-        "fj-explicit"
-    )
+    # Explicit -t wins.
+    assert await threads_mod.resolve_thread_id(object(), explicit="fj-explicit") == "fj-explicit"
     assert threads_mod.read_active_thread_id() == "fj-explicit"
+
+    # follow falls back to DB latest when no pin.
+    path.unlink()
+    assert await threads_mod.resolve_thread_id(object(), follow=True) == "fj-from-db"
 
 
 def test_active_thread_roundtrip(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -139,20 +141,24 @@ def test_active_thread_roundtrip(tmp_path, monkeypatch) -> None:  # type: ignore
     assert threads_mod.read_active_thread_id() == "fj-abc"
 
 
-def test_hold_session_lock_blocks_second_holder(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_hold_thread_lock_blocks_same_thread(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from fj_ai import threads as threads_mod
 
-    lock = tmp_path / "fj_active_thread.lock"
-    monkeypatch.setattr(threads_mod, "active_thread_lock_path", lambda: lock)
     monkeypatch.setattr(threads_mod, "_soothe_home", lambda: tmp_path)
 
-    with threads_mod.hold_session_lock():
-        with pytest.raises(threads_mod.ConcurrentSessionError, match="already running"):
-            with threads_mod.hold_session_lock():
+    with threads_mod.hold_thread_lock("fj-a"):
+        with pytest.raises(threads_mod.ConcurrentSessionError, match="thread fj-a"):
+            with threads_mod.hold_thread_lock("fj-a"):
                 pass
 
-    # Released — second acquire succeeds.
-    with threads_mod.hold_session_lock():
+    # Different threads may run concurrently.
+    with threads_mod.hold_thread_lock("fj-a"):
+        with threads_mod.hold_thread_lock("fj-b"):
+            pass
+
+    # Released — second acquire on same thread succeeds.
+    lock = threads_mod.thread_lock_path("fj-a")
+    with threads_mod.hold_thread_lock("fj-a"):
         assert lock.read_text(encoding="utf-8").strip().isdigit()
 
 

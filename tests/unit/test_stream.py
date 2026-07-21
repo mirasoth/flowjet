@@ -88,6 +88,15 @@ def test_accumulate_full_message_replaces() -> None:
     assert buf == "Full final answer."
 
 
+def test_accumulate_full_message_keeps_longer_chunk_buffer() -> None:
+    buf = ""
+    for part in ["I've analyzed the full project. ", "The diagrams above show everything."]:
+        buf = accumulate_ai_text(buf, AIMessageChunk(content=part))
+    assert len(buf) > 40
+    shorter = accumulate_ai_text(buf, AIMessage(content="I've analyzed the full project."))
+    assert shorter == buf
+
+
 def test_status_preview_prefers_latest_sentence() -> None:
     assert _status_preview("First. Second step now") == "Second step now"
     assert _status_preview("   ") == "Writing answer…"
@@ -147,8 +156,20 @@ def test_answer_writer_live_updates_progress_preview() -> None:
     writer.set("I'll fetch the latest stock news")
     assert "fetch the latest" in out.getvalue()
     assert writer.buf == "I'll fetch the latest stock news"
-    # Progress only — not yet the committed result line.
     assert not out.getvalue().endswith("I'll fetch the latest stock news\n")
+
+
+def test_answer_writer_finish_prints_complete_buffer() -> None:
+    out = StringIO()
+    status = ProgressLine(out, enabled=False)
+    writer = AnswerWriter(out, status, live=True)
+    writer.buf = (
+        "The external boundary to `soothe_nano`/`langchain`/`aiosqlite`, "
+        "and a per-module responsibility table."
+    )
+    writer.finish()
+    assert "soothe_nano" in out.getvalue()
+    assert out.getvalue().endswith("table.\n")
 
 
 class _FakeAgent:
@@ -300,6 +321,33 @@ async def test_stream_query_drops_intermediate_ai_narration() -> None:
     assert printed == "## Latest Stock Market News\n1. Futures rise\n"
     assert "I'll fetch" not in printed
     assert "rate-limiting" not in printed
+
+
+@pytest.mark.asyncio
+async def test_stream_query_keeps_longer_chunk_buffer_at_end() -> None:
+    """Final AIMessage must not truncate text already accumulated from chunks."""
+    out = StringIO()
+    long_answer = (
+        "The external boundary to `soothe_nano`/`langchain`/`aiosqlite`, "
+        "and a per-module responsibility table with LOC counts."
+    )
+    agent = _FakeAgent(
+        [
+            _msg_chunk(AIMessageChunk(content=long_answer[:60])),
+            _msg_chunk(AIMessageChunk(content=long_answer)),
+            _msg_chunk(AIMessage(content=long_answer[:40])),
+        ]
+    )
+    result = await stream_query(
+        agent,  # type: ignore[arg-type]
+        "analyze deps",
+        thread_id="t1",
+        live_answer=True,
+        out=out,
+        progress=ProgressLine(out, enabled=False),
+    )
+    assert result == long_answer
+    assert out.getvalue() == long_answer + "\n"
 
 
 @pytest.mark.asyncio

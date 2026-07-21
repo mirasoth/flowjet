@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 # Boolean short flags that may appear clustered (``-lv`` → ``-l -v``).
-_BOOL_SHORTS = frozenset({"h", "V", "l", "v"})
+_BOOL_SHORTS = frozenset({"h", "V", "l", "v", "f"})
 # Short flags that consume the next argv token as a value.
 _VALUE_FLAGS = frozenset({"-c", "--config", "-t", "--thread", "-w", "--workspace", "-n"})
 _FLAG_ONLY = frozenset(
@@ -19,7 +19,8 @@ _FLAG_ONLY = frozenset(
         "--verbose",
         "-l",
         "--list",
-        "--reset",
+        "-f",
+        "--follow",
     }
 )
 _EQUALS_PREFIXES = ("--config=", "--thread=", "--workspace=")
@@ -85,12 +86,12 @@ def validate_arg_composition(args: Any) -> str | None:
 
     Rules:
     - ``-n`` requires ``-l``/``--list``
-    - ``-l`` is exclusive with a query, ``--reset``, ``-t``, ``-w``, ``--no-stream``
-    - ``--reset`` and ``-t``/``--thread`` are mutually exclusive
+    - ``-l`` is exclusive with a query, ``-f``, ``-t``, ``-w``, ``--no-stream``
+    - ``-f``/``--follow`` and ``-t``/``--thread`` are mutually exclusive
     """
     listing = bool(getattr(args, "list", False))
     list_limit = getattr(args, "list_limit", None)
-    reset = bool(getattr(args, "reset", False))
+    follow = bool(getattr(args, "follow", False))
     thread = getattr(args, "thread", None)
     workspace = getattr(args, "workspace", None)
     no_stream = bool(getattr(args, "no_stream", False))
@@ -102,8 +103,8 @@ def validate_arg_composition(args: Any) -> str | None:
     if listing:
         if query:
             return "-l/--list does not take a query (got leftover text after options)"
-        if reset:
-            return "-l/--list cannot be combined with --reset"
+        if follow:
+            return "-l/--list cannot be combined with -f/--follow"
         if thread:
             return "-l/--list cannot be combined with -t/--thread"
         if workspace:
@@ -111,7 +112,7 @@ def validate_arg_composition(args: Any) -> str | None:
         if no_stream:
             return "-l/--list cannot be combined with --no-stream"
 
-    if reset and thread:
-        return "--reset and -t/--thread are mutually exclusive"
+    if follow and thread:
+        return "-f/--follow and -t/--thread are mutually exclusive"
 
     return None
