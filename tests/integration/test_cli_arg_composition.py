@@ -1,0 +1,385 @@
+"""Integration tests for ``fj`` CLI argument composition.
+
+These drive ``cli.main()`` end-to-end with an isolated ``SOOTHE_HOME``. Agent /
+stream calls are stubbed so compositions never require a live model, while pin /
+reset / lock / validation use the real CLI paths.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
+# ---------------------------------------------------------------------------
+# Conflict matrix — must fail fast with a clear error (exit 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("argv", "needle"),
+    [
+        (["-n", "5"], "-n requires -l/--list"),
+        (["-n", "5", "hello"], "-n requires -l/--list"),
+        (["--list", "-n", "3", "leftover"], "-l/--list does not take a query"),
+        (["-l", "hello"], "-l/--list does not take a query"),
+        (["-l", "--reset"], "-l/--list cannot be combined with --reset"),
+        (["--list", "--reset"], "-l/--list cannot be combined with --reset"),
+        (["-l", "-t", "fj-x"], "-l/--list cannot be combined with -t/--thread"),
+        (["-l", "--thread", "fj-x"], "-l/--list cannot be combined with -t/--thread"),
+        (["-l", "-w", "/tmp"], "-l/--list cannot be combined with -w/--workspace"),
+        (["-l", "--workspace", "/tmp"], "-l/--list cannot be combined with -w/--workspace"),
+        (["-l", "--no-stream"], "-l/--list cannot be combined with --no-stream"),
+        (["--reset", "-t", "fj-x"], "--reset and -t/--thread are mutually exclusive"),
+        (["--reset", "--thread", "fj-x"], "--reset and -t/--thread are mutually exclusive"),
+        (["--reset", "-t", "fj-x", "hi"], "--reset and -t/--thread are mutually exclusive"),
+        (["-t", "fj-x", "--reset", "hi"], "--reset and -t/--thread are mutually exclusive"),
+        (["-lv", "hello"], "-l/--list does not take a query"),
+        (["-vl", "hello"], "-l/--list does not take a query"),
+    ],
+)
+def test_main_rejects_invalid_compositions(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+    argv: list[str],
+    needle: str,
+) -> None:
+    code, out, err = run_fj(argv)
+    assert code == 2, (argv, code, err)
+    assert needle in err, (argv, err)
+    assert out == ""
+    assert stub_agent_runtime["build_calls"] == 0
+    assert stub_agent_runtime["stream"] is None
+    assert stub_agent_runtime["invoke"] is None
+
+
+def test_main_rejects_negative_list_limit(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+) -> None:
+    code, _out, err = run_fj(["-l", "-n", "-1"])
+    assert code == 2
+    assert "-n must be >= 0" in err
+    assert stub_agent_runtime["list_limit"] is None
+
+
+# ---------------------------------------------------------------------------
+# Meta / no-query flags
+# ---------------------------------------------------------------------------
+
+
+def test_main_help_and_version_exit_cleanly(run_fj: Any) -> None:
+    code, out, err = run_fj(["-h"])
+    assert code == 0
+    assert "usage: fj" in out.lower() or "One-shot coding agent" in out
+    # Full composition docs live in the epilog.
+    assert "--reset" in out
+    assert "-l/--list" in out or "-l" in out
+
+    code, out, err = run_fj(["--version"])
+    assert code == 0
+    assert "fj " in out
+    assert err == ""
+
+
+def test_main_empty_and_option_only_prints_usage(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+) -> None:
+    for argv in ([], ["-v"], ["--verbose"], ["--no-stream"], ["-w", "/tmp"], ["-c", "/tmp/x.yml"]):
+        code, _out, err = run_fj(argv)
+        assert code == 2, argv
+        assert "fj — coding agent CLI" in err
+    assert stub_agent_runtime["build_calls"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Thread pin / reset (real filesystem under isolated SOOTHE_HOME)
+# ---------------------------------------------------------------------------
+
+
+def test_main_reset_alone_pins_new_active_thread(
+    run_fj: Any,
+    active_thread_file: Path,
+    stub_agent_runtime: dict[str, Any],
+) -> None:
+    code, out, err = run_fj(["--reset"])
+    assert code == 0
+    tid = out.strip()
+    assert tid.startswith("fj-")
+    assert active_thread_file.read_text(encoding="utf-8").strip() == tid
+    assert stub_agent_runtime["build_calls"] == 0
+
+    code2, out2, _err2 = run_fj(["--reset"])
+    assert code2 == 0
+    assert out2.strip() != tid
+    assert active_thread_file.read_text(encoding="utf-8").strip() == out2.strip()
+
+
+def test_main_thread_alone_pins_explicit_id(
+    run_fj: Any,
+    active_thread_file: Path,
+    stub_agent_runtime: dict[str, Any],
+) -> None:
+    code, out, err = run_fj(["-t", "fj-pinned-from-cli"])
+    assert code == 0
+    assert out.strip() == "fj-pinned-from-cli"
+    assert active_thread_file.read_text(encoding="utf-8").strip() == "fj-pinned-from-cli"
+    assert stub_agent_runtime["build_calls"] == 0
+
+    code, out, err = run_fj(["--thread", "fj-other"])
+    assert code == 0
+    assert out.strip() == "fj-other"
+
+
+# ---------------------------------------------------------------------------
+# List compositions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_limit"),
+    [
+        (["-l"], 20),
+        (["--list"], 20),
+        (["-l", "-n", "5"], 5),
+        (["-l", "-n", "0"], 0),
+        (["-lv"], 20),
+        (["-vl"], 20),
+        (["-l", "-v"], 20),
+        (["-l", "-c", "/tmp/nano.yml"], 20),
+    ],
+)
+def test_main_list_compositions(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+    argv: list[str],
+    expected_limit: int,
+) -> None:
+    code, out, err = run_fj(argv)
+    assert code == 0, (argv, err)
+    assert "fj-newer" in out
+    assert "fj-older" in out
+    assert out.index("fj-newer") < out.index("fj-older")
+    assert stub_agent_runtime["list_limit"] == expected_limit
+    assert stub_agent_runtime["build_calls"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Valid query compositions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_query", "expected_resolve", "expect_invoke"),
+    [
+        (["hello"], "hello", {"explicit": None, "reset": False}, False),
+        (["hello", "world"], "hello world", {"explicit": None, "reset": False}, False),
+        (["café", "résumé"], "café résumé", {"explicit": None, "reset": False}, False),
+        (["-v", "ask"], "ask", {"explicit": None, "reset": False}, False),
+        (["--verbose", "ask", "now"], "ask now", {"explicit": None, "reset": False}, False),
+        (["--no-stream", "ask"], "ask", {"explicit": None, "reset": False}, True),
+        (["-v", "--no-stream", "ask"], "ask", {"explicit": None, "reset": False}, True),
+        (["--reset", "fresh"], "fresh", {"explicit": None, "reset": True}, False),
+        (["-t", "fj-x", "continue"], "continue", {"explicit": "fj-x", "reset": False}, False),
+        (
+            ["--thread", "fj-x", "continue"],
+            "continue",
+            {"explicit": "fj-x", "reset": False},
+            False,
+        ),
+        (
+            ["--thread=fj-x", "continue"],
+            "continue",
+            {"explicit": "fj-x", "reset": False},
+            False,
+        ),
+        (["--", "-v", "as", "query"], "-v as query", {"explicit": None, "reset": False}, False),
+        (["--", "--reset"], "--reset", {"explicit": None, "reset": False}, False),
+        (["--", "-lv"], "-lv", {"explicit": None, "reset": False}, False),
+        (["-weird"], "-weird", {"explicit": None, "reset": False}, False),
+        (
+            ["-w", "/tmp", "in", "workspace"],
+            "in workspace",
+            {"explicit": None, "reset": False},
+            False,
+        ),
+        (
+            ["--workspace=/tmp", "q"],
+            "q",
+            {"explicit": None, "reset": False},
+            False,
+        ),
+        (
+            ["-c", "/tmp/nano.yml", "q"],
+            "q",
+            {"explicit": None, "reset": False},
+            False,
+        ),
+        (
+            ["--config=/tmp/nano.yml", "q"],
+            "q",
+            {"explicit": None, "reset": False},
+            False,
+        ),
+    ],
+)
+def test_main_valid_query_compositions(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+    argv: list[str],
+    expected_query: str,
+    expected_resolve: dict[str, object],
+    expect_invoke: bool,
+) -> None:
+    code, _out, err = run_fj(argv)
+    assert code == 0, (argv, err)
+    assert stub_agent_runtime["resolve"] == expected_resolve
+    assert stub_agent_runtime["build_calls"] == 1
+    if expect_invoke:
+        assert stub_agent_runtime["invoke"] is not None
+        assert stub_agent_runtime["invoke"]["query"] == expected_query
+        assert stub_agent_runtime["stream"] is None
+    else:
+        assert stub_agent_runtime["stream"] is not None
+        assert stub_agent_runtime["stream"]["query"] == expected_query
+        assert stub_agent_runtime["invoke"] is None
+
+
+def test_main_workspace_flag_reaches_build(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    code, _out, err = run_fj(["-w", str(ws), "do", "stuff"])
+    assert code == 0, err
+    assert stub_agent_runtime["workspace"] == ws.resolve()
+
+
+def test_main_verbose_prints_thread_on_stderr(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+) -> None:
+    code, _out, err = run_fj(["-v", "hello"])
+    assert code == 0
+    assert "thread fj-active-stub" in err
+
+
+# ---------------------------------------------------------------------------
+# Subcommands: setup / completion / __complete
+# ---------------------------------------------------------------------------
+
+
+def test_main_setup_does_not_enter_query_path(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fj_ai.setup_cmd as setup_cmd
+
+    called: list[str | None] = []
+    monkeypatch.setattr(setup_cmd, "run_setup", lambda path=None: called.append(path) or 0)
+    code, _out, err = run_fj(["setup"])
+    assert code == 0
+    assert called == [None]
+    assert stub_agent_runtime["build_calls"] == 0
+
+    code, _out, err = run_fj(["setup", "-c", "/tmp/custom.yml"])
+    assert code == 0
+    assert called[-1] == "/tmp/custom.yml"
+
+
+def test_main_completion_scripts(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+) -> None:
+    code, out, err = run_fj(["completion", "zsh"])
+    assert code == 0, err
+    assert "#compdef fj" in out
+    assert "--reset" in out
+    assert "--follow" not in out
+
+    code, out, err = run_fj(["completion", "bash"])
+    assert code == 0, err
+    assert "_fj()" in out
+    assert "--reset" in out
+    assert "--follow" not in out
+
+    assert stub_agent_runtime["build_calls"] == 0
+
+
+def test_main_completion_rejects_unknown_shell(run_fj: Any) -> None:
+    code, _out, err = run_fj(["completion", "fish"])
+    assert code == 2
+    assert "invalid choice" in err.lower() or "fish" in err
+
+
+def test_main_complete_static_flags(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+) -> None:
+    code, out, err = run_fj(["__complete", "--no-llm", "--", "--ver"])
+    assert code == 0, err
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    assert "--verbose" in lines
+    assert "--version" in lines
+    assert stub_agent_runtime["build_calls"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Session lock composition (real lock under isolated home)
+# ---------------------------------------------------------------------------
+
+
+def test_main_concurrent_reset_refused(
+    run_fj: Any,
+    soothe_home: Path,
+    stub_agent_runtime: dict[str, Any],
+) -> None:
+    from fj_ai.threads import hold_session_lock
+
+    with hold_session_lock():
+        code, _out, err = run_fj(["--reset"])
+        assert code == 1
+        assert "already running" in err
+    assert stub_agent_runtime["build_calls"] == 0
+
+
+def test_main_concurrent_query_refused(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+) -> None:
+    from fj_ai.threads import hold_session_lock
+
+    with hold_session_lock():
+        code, _out, err = run_fj(["hello"])
+        assert code == 1
+        assert "already running" in err
+    assert stub_agent_runtime["stream"] is None
+
+
+# ---------------------------------------------------------------------------
+# Missing-value argparse failures (process-level)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["-c"],
+        ["-t"],
+        ["-w"],
+        ["-n"],
+        ["-l", "-n"],
+    ],
+)
+def test_main_missing_option_values_exit_2(run_fj: Any, argv: list[str]) -> None:
+    code, _out, err = run_fj(argv)
+    assert code == 2
+    assert "expected one argument" in err or "the following arguments are required" in err

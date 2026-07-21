@@ -2,7 +2,7 @@
 UV_RUN ?= uv run
 
 .PHONY: sync sync-dev format format-check lint lint-fix \
-	test test-unit test-coverage build publish clean help
+	test test-unit test-integration test-coverage build publish clean help
 
 help:
 	@echo "fj-ai"
@@ -13,8 +13,9 @@ help:
 	@echo "  make format-check    - Check formatting (CI)"
 	@echo "  make lint            - Lint with ruff"
 	@echo "  make lint-fix        - Auto-fix lint issues"
-	@echo "  make test            - Run unit tests"
+	@echo "  make test            - Run unit + integration tests"
 	@echo "  make test-unit       - Run unit tests"
+	@echo "  make test-integration - Run integration tests"
 	@echo "  make test-coverage   - Tests with coverage"
 	@echo "  make build           - Build dist/"
 	@echo "  make publish         - Build and publish to PyPI"
@@ -38,11 +39,17 @@ lint:
 lint-fix:
 	$(UV_RUN) ruff check --fix src/ tests/
 
-test test-unit:
+test-unit:
 	$(UV_RUN) python -m pytest tests/unit/ -q
 
+test-integration:
+	$(UV_RUN) python -m pytest tests/integration/ -q -m integration
+
+test: test-unit test-integration
+
 test-coverage:
-	$(UV_RUN) python -m pytest tests/unit/ --cov=fj_ai --cov-report=term-missing --cov-report=xml
+	$(UV_RUN) python -m pytest tests/unit/ tests/integration/ \
+		--cov=fj_ai --cov-report=term-missing --cov-report=xml
 
 build:
 	rm -rf dist/
