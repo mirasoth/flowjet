@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from soothe_nano.config import DEFAULT_NANO_CONFIG_PATH, SootheConfig
+from soothe_nano.config import SOOTHE_HOME, SootheConfig
 
 
 def default_config_path() -> Path:
     """Return ``~/.soothe/config/nano.yml`` (respects ``SOOTHE_HOME``)."""
-    return Path(DEFAULT_NANO_CONFIG_PATH).expanduser()
+    return SOOTHE_HOME / "config" / "nano.yml"
 
 
 def load_config(config_path: str | Path | None = None) -> SootheConfig:
@@ -17,7 +17,7 @@ def load_config(config_path: str | Path | None = None) -> SootheConfig:
 
     Resolution order:
     1. Explicit ``config_path``
-    2. ``DEFAULT_NANO_CONFIG_PATH`` (``~/.soothe/config/nano.yml``)
+    2. ``SOOTHE_HOME / config / nano.yml`` (default ``~/.soothe/config/nano.yml``)
     3. ``SootheConfig()`` zero-config from ``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY``
     """
     path = Path(config_path).expanduser() if config_path else default_config_path()

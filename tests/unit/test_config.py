@@ -16,6 +16,13 @@ def test_default_config_path_ends_with_nano_yml() -> None:
     assert path.parts[-2] == "config"
 
 
+def test_default_config_path_uses_soothe_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    import fj_ai.config as config_mod
+
+    monkeypatch.setattr(config_mod, "SOOTHE_HOME", Path("/tmp/custom-soothe"))
+    assert config_mod.default_config_path() == Path("/tmp/custom-soothe/config/nano.yml")
+
+
 def test_load_config_missing_explicit_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         load_config(tmp_path / "missing.yml")

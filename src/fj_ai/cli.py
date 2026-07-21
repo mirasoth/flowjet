@@ -153,9 +153,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 async def run_async(args: argparse.Namespace) -> int:
-    if args.command == "setup":
-        return run_setup(getattr(args, "config", None))
-
     if not args.query_text:
         sys.stderr.write(USAGE)
         return 2
@@ -198,9 +195,16 @@ async def run_async(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    configure_cli_logging()
-    args = parse_args(argv)
-    return asyncio.run(run_async(args))
+    try:
+        configure_cli_logging()
+        args = parse_args(argv)
+        # Keep interactive setup off the event loop so Ctrl+C exits cleanly.
+        if args.command == "setup":
+            return run_setup(getattr(args, "config", None))
+        return asyncio.run(run_async(args))
+    except KeyboardInterrupt:
+        sys.stderr.write("\ninterrupted\n")
+        return 130
 
 
 if __name__ == "__main__":  # pragma: no cover
