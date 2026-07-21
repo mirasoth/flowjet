@@ -306,6 +306,24 @@ async def run_async(args: argparse.Namespace) -> int:
     return 0
 
 
+_FOLLOW_SUBCOMMANDS = frozenset({"setup", "completion", "__complete"})
+
+
+def _inject_follow(argv: list[str]) -> list[str]:
+    """Prepend ``--follow`` unless argv already sets it or is a subcommand."""
+    if argv and argv[0] in _FOLLOW_SUBCOMMANDS:
+        return argv
+    if "-f" in argv or "--follow" in argv:
+        return argv
+    return ["--follow", *argv]
+
+
+def main_follow(argv: list[str] | None = None) -> int:
+    """``fjf`` entry point — same as ``fj --follow``."""
+    raw = list(sys.argv[1:] if argv is None else argv)
+    return main(_inject_follow(raw))
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         configure_cli_logging()

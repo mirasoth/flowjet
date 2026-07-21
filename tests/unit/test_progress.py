@@ -90,20 +90,88 @@ def test_format_tool_done_error_includes_detail() -> None:
 
 
 def test_progress_respects_width_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fj_ai.progress import _display_width
+
     monkeypatch.setenv("FJ_PROGRESS_WIDTH", "40")
     long_path = "/Users/chenxm/Workspace/fj-ai/src/fj_ai/" + ("very_long_dir/" * 8) + "cli.py"
     label, _color = format_tool_activity("read_file", {"file_path": long_path})
-    assert len(label) <= 40
+    assert _display_width(label) <= 40
     assert label.startswith("Reading ")
     assert "cli.py" in label  # basename preserved
 
 
 def test_truncate_path_keeps_basename() -> None:
-    from fj_ai.progress import _truncate_path
+    from fj_ai.progress import _display_width, _truncate_path
 
     out = _truncate_path("/a/b/c/d/e/f/g/important.py", 18)
     assert out.endswith("important.py") or "important.py" in out
-    assert len(out) <= 18
+    assert _display_width(out) <= 18
+
+
+def test_display_width_counts_cjk_double() -> None:
+    from fj_ai.progress import _display_width, _truncate_cols
+
+    text = "中文测试"
+    assert _display_width(text) == 8
+    assert _truncate_cols(text, 6, tail=False) == "中文…"
+    assert _truncate_cols(text, 6, tail=True) == "…测试"
+
+
+def test_fit_tail_shows_latest_narration() -> None:
+    from fj_ai.progress import _display_width, _fit
+
+    long = "前面很长的一段说明。" + "现在创建 GitHub Release v1.0.8。"
+    fitted = _fit(long, budget=20, tail=True)
+    assert _display_width(fitted) <= 20
+    assert "Release" in fitted or "v1.0.8" in fitted
+    assert "前面" not in fitted
+
+
+def test_truncate_cols_mixed_ascii_cjk() -> None:
+    from fj_ai.progress import _display_width, _truncate_cols
+
+    text = "CI 全部绿色通过"
+    assert _display_width(text) == 15
+    out = _truncate_cols(text, 10, tail=True)
+    assert _display_width(out) <= 10
+    assert "通过" in out
+
+
+def test_progress_line_update_tail_prefers_latest_clause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fj_ai.progress import _display_width, _line_budget
+
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "24")
+    buf = StringIO()
+    line = ProgressLine(buf, enabled=True)
+    long = "前面很长说明。现在创建 GitHub Release v1.0.8。"
+    line.update(long, color="green", tail=True)
+    rendered = buf.getvalue()
+    assert "\r" in rendered
+    plain = rendered.split("\r")[-1].replace("\033[2K", "")
+    for code in ("\033[0m", "\033[1m", "\033[32m"):
+        plain = plain.replace(code, "")
+    plain = plain.lstrip("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ").strip()
+    assert _display_width(plain) <= _line_budget()
+    assert "Release" in plain or "v1.0.8" in plain
+    assert "前面" not in plain
+
+
+def test_progress_line_cjk_paint_respects_display_width(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fj_ai.progress import _display_width, _line_budget
+
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "24")
+    buf = StringIO()
+    line = ProgressLine(buf, enabled=True)
+    line.update("中" * 20, color="cyan")
+    plain = buf.getvalue().split("\r")[-1].replace("\033[2K", "")
+    for esc in ("\033[0m", "\033[1m", "\033[36m"):
+        plain = plain.replace(esc, "")
+    plain = plain.lstrip("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ").strip()
+    assert _display_width(plain) <= _line_budget()
 
 
 def test_friendly_tool_result_keeps_context() -> None:

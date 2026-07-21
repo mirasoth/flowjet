@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import sys
+import unicodedata
 from typing import Any, TextIO
 
 # ANSI
@@ -29,6 +30,7 @@ _TICK_SECONDS = 0.08
 _PROGRESS_MIN = 36
 _PROGRESS_DEFAULT = 72
 _PROGRESS_MAX = 96
+_ELLIPSIS = "…"
 _SKIP_ARG_KEYS = frozenset(
     {
         "_raw",
@@ -80,6 +82,52 @@ _TOOL_VERBS: dict[str, tuple[str, str]] = {
 }
 
 
+def _char_display_width(ch: str) -> int:
+    if unicodedata.east_asian_width(ch) in ("F", "W"):
+        return 2
+    return 1
+
+
+def _display_width(text: str) -> int:
+    """Terminal column count (CJK and fullwidth count double)."""
+    return sum(_char_display_width(ch) for ch in text)
+
+
+def _truncate_cols(text: str, limit: int, *, tail: bool = False) -> str:
+    """Fit ``text`` to ``limit`` terminal columns; keep start or end."""
+    if limit <= 0:
+        return _ELLIPSIS if limit == 1 else ""
+    text = re.sub(r"\s+", " ", text.strip())
+    if _display_width(text) <= limit:
+        return text
+
+    ell_w = _display_width(_ELLIPSIS)
+    if limit <= ell_w:
+        return _ELLIPSIS[:1] if limit == 1 else _ELLIPSIS
+
+    budget = limit - ell_w
+    if tail:
+        picked: list[str] = []
+        used = 0
+        for ch in reversed(text):
+            cw = _char_display_width(ch)
+            if used + cw > budget:
+                break
+            picked.append(ch)
+            used += cw
+        return _ELLIPSIS + "".join(reversed(picked))
+
+    picked = []
+    used = 0
+    for ch in text:
+        cw = _char_display_width(ch)
+        if used + cw > budget:
+            break
+        picked.append(ch)
+        used += cw
+    return "".join(picked) + _ELLIPSIS
+
+
 def _color_enabled(stream: TextIO) -> bool:
     if os.environ.get("NO_COLOR"):
         return False
@@ -104,35 +152,35 @@ def _line_budget() -> int:
 def _truncate(text: str, limit: int | None = None) -> str:
     """Keep the start of ``text`` (commands, queries)."""
     limit = _line_budget() if limit is None else limit
-    text = re.sub(r"\s+", " ", text.strip())
-    if limit <= 0 or len(text) <= limit:
-        return text
-    if limit == 1:
-        return "…"
-    return text[: limit - 1] + "…"
+    return _truncate_cols(text, limit, tail=False)
 
 
 def _truncate_path(text: str, limit: int | None = None) -> str:
     """Keep the end of a path so the basename stays visible."""
     limit = _line_budget() if limit is None else limit
     text = re.sub(r"\s+", " ", text.strip())
-    if limit <= 0 or len(text) <= limit:
+    if _display_width(text) <= limit:
         return text
-    if limit == 1:
-        return "…"
+    if limit <= 1:
+        return _ELLIPSIS
     # Prefer cutting after a path separator when possible.
-    tail = text[-(limit - 1) :]
-    slash = tail.find("/")
-    if slash > 0 and slash < len(tail) - 4:
-        tail = tail[slash + 1 :]
-        return "…/" + tail if not tail.startswith("…") else "…" + tail
-    return "…" + text[-(limit - 1) :]
+    tail = _truncate_cols(text, limit, tail=True)
+    if tail.startswith(_ELLIPSIS):
+        body = tail[len(_ELLIPSIS) :]
+        slash = body.find("/")
+        if slash > 0 and slash < len(body) - 4:
+            body = body[slash + 1 :]
+            candidate = _ELLIPSIS + "/" + body
+            if _display_width(candidate) <= limit:
+                return candidate
+    return tail
 
 
-def _fit(label: str, *, budget: int | None = None) -> str:
+def _fit(label: str, *, budget: int | None = None, tail: bool = False) -> str:
     """Final single-line fit for the progress status."""
     limit = _line_budget() if budget is None else budget
-    return _truncate(re.sub(r"\s+", " ", label.strip()), limit)
+    normalized = re.sub(r"\s+", " ", label.strip())
+    return _truncate_cols(normalized, limit, tail=tail)
 
 
 def _compact(value: Any) -> str:
@@ -594,12 +642,12 @@ class ProgressLine:
         except asyncio.CancelledError:
             raise
 
-    def update(self, message: str, *, color: str = "cyan") -> None:
+    def update(self, message: str, *, color: str = "cyan", tail: bool = False) -> None:
         if not self._enabled:
             return
         # Reclaim the line after a live-answer handoff (e.g. tool call mid-run).
         self._released = False
-        self._message = _fit(message.strip() or "Working…")
+        self._message = _fit(message.strip() or "Working…", tail=tail)
         self._style = color
         self._active = True
         self._paint()

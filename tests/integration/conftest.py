@@ -134,3 +134,92 @@ def run_fj(
         return code, captured.out, captured.err
 
     yield _run
+
+
+@pytest.fixture
+def live_stream_runtime(
+    soothe_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, Any]:
+    """Stub agent wiring but run real ``stream_query`` (progress + answer path)."""
+    import sys
+
+    import fj_ai.agent as agent_mod
+    import fj_ai.completion.history as history_mod
+    import fj_ai.config as config_mod
+    import fj_ai.threads as threads_mod
+    from fj_ai.progress import ProgressLine
+
+    # ProgressLine only paints on TTY; capsys stdout is non-interactive.
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+
+    seen: dict[str, Any] = {
+        "chunks": [],
+        "progress_updates": 0,
+        "tail_updates": 0,
+    }
+
+    class _FakeAgent:
+        async def astream(self, *_a: object, **_k: object) -> Any:
+            for chunk in seen["chunks"]:
+                yield chunk
+
+    @asynccontextmanager
+    async def fake_cp(_config: object) -> Any:
+        yield object()
+
+    async def fake_resolve(*_a: object, **_k: object) -> str:
+        return "fj-stream-stub"
+
+    async def fake_build(*_a: object, **_k: object) -> _FakeAgent:
+        return _FakeAgent()
+
+    original_update = ProgressLine.update
+
+    def counting_update(
+        self: ProgressLine,
+        message: str,
+        *,
+        color: str = "cyan",
+        tail: bool = False,
+    ) -> None:
+        seen["progress_updates"] += 1
+        if tail:
+            seen["tail_updates"] += 1
+        original_update(self, message, color=color, tail=tail)
+
+    monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
+    monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
+    monkeypatch.setattr(agent_mod, "build_agent", fake_build)
+    monkeypatch.setattr(threads_mod, "resolve_thread_id", fake_resolve)
+    monkeypatch.setattr(history_mod, "append_history", lambda _q: None)
+    monkeypatch.setattr(ProgressLine, "update", counting_update)
+    return seen
+
+
+@pytest.fixture
+def run_fjf(
+    soothe_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> Iterator[Any]:
+    """Call ``fj_ai.cli.main_follow(argv)`` and return ``(code, stdout, stderr)``."""
+    from fj_ai import cli
+
+    monkeypatch.setattr(cli, "configure_cli_logging", lambda **_k: None)
+
+    def _run(argv: list[str]) -> tuple[int, str, str]:
+        try:
+            code = cli.main_follow(argv)
+        except SystemExit as exc:
+            raw = exc.code
+            if raw is None:
+                code = 0
+            elif isinstance(raw, int):
+                code = raw
+            else:
+                code = 1
+        captured = capsys.readouterr()
+        return code, captured.out, captured.err
+
+    yield _run

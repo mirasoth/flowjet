@@ -102,6 +102,16 @@ def test_status_preview_prefers_latest_sentence() -> None:
     assert _status_preview("   ") == "Writing answer…"
 
 
+def test_status_preview_splits_cjk_sentences() -> None:
+    text = "最近一次 CI 全部绿色通过。现在创建 GitHub Release v1.0.8。"
+    assert _status_preview(text) == "现在创建 GitHub Release v1.0.8。"
+
+
+def test_status_preview_splits_em_dash() -> None:
+    text = "annotation 仅是警告——现在提交并发布。"
+    assert _status_preview(text) == "现在提交并发布。"
+
+
 def test_answer_writer_live_buffers_until_finish() -> None:
     out = StringIO()
     status = ProgressLine(out, enabled=False)
@@ -154,9 +164,134 @@ def test_answer_writer_live_updates_progress_preview() -> None:
     status = ProgressLine(out, enabled=True)
     writer = AnswerWriter(out, status, live=True)
     writer.set("I'll fetch the latest stock news")
-    assert "fetch the latest" in out.getvalue()
+    assert "fetch the latest" in out.getvalue() or "stock news" in out.getvalue()
     assert writer.buf == "I'll fetch the latest stock news"
     assert not out.getvalue().endswith("I'll fetch the latest stock news\n")
+
+
+def test_answer_writer_throttles_rapid_preview_updates(monkeypatch: pytest.MonkeyPatch) -> None:
+    out = StringIO()
+    status = ProgressLine(out, enabled=True)
+    writer = AnswerWriter(out, status, live=True)
+    times = iter([0.0, 0.01, 0.02, 0.20])
+    monkeypatch.setattr("fj_ai.stream.time.monotonic", lambda: next(times))
+
+    writer.set("a")
+    writer.set("ab")
+    writer.set("abc")
+    paints_before = out.getvalue().count("\r")
+    writer.set("abcd")
+    paints_after = out.getvalue().count("\r")
+    assert paints_before == 1
+    assert paints_after == 2
+
+
+def test_answer_writer_reset_clears_throttle_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    out = StringIO()
+    status = ProgressLine(out, enabled=True)
+    writer = AnswerWriter(out, status, live=True)
+    times = iter([0.0, 0.01, 0.02, 0.03, 0.04])
+    monkeypatch.setattr("fj_ai.stream.time.monotonic", lambda: next(times))
+
+    writer.set("before tools")
+    paints_after_first = out.getvalue().count("\r")
+    writer.reset_for_tools()
+    writer.set("after tools")
+    paints_after_reset = out.getvalue().count("\r")
+    assert paints_after_reset == paints_after_first + 1
+
+
+def test_status_preview_skips_trailing_marker_without_tail() -> None:
+    assert _status_preview("全部通过。") == "全部通过。"
+    assert _status_preview("第一段。第二段。") == "第二段。"
+
+
+@pytest.mark.asyncio
+async def test_stream_query_cjk_narration_preview_uses_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fj_ai.progress import ProgressLine, _display_width, _line_budget
+
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "36")
+    clock = {"t": 0.0}
+
+    def fake_monotonic() -> float:
+        clock["t"] += 0.15
+        return clock["t"]
+
+    monkeypatch.setattr("fj_ai.stream.time.monotonic", fake_monotonic)
+    out = StringIO()
+    progress = ProgressLine(out, enabled=True)
+    updates: list[tuple[str, bool]] = []
+    original_update = ProgressLine.update
+
+    def capture_update(
+        self: ProgressLine, message: str, *, color: str = "cyan", tail: bool = False
+    ) -> None:
+        updates.append((message, tail))
+        original_update(self, message, color=color, tail=tail)
+
+    monkeypatch.setattr(ProgressLine, "update", capture_update)
+
+    prefix = "最近一次 CI 运行全部绿色通过。"
+    suffix = "现在创建 GitHub Release v1.0.8。"
+    full = prefix + suffix
+    agent = _FakeAgent(
+        [
+            _msg_chunk(AIMessageChunk(content=prefix)),
+            _msg_chunk(AIMessageChunk(content=full)),
+        ]
+    )
+    result = await stream_query(
+        agent,  # type: ignore[arg-type]
+        "status",
+        thread_id="t1",
+        live_answer=True,
+        out=out,
+        progress=progress,
+    )
+    assert result == full
+    assert out.getvalue().endswith(full + "\n")
+    tail_updates = [msg for msg, used_tail in updates if used_tail]
+    assert tail_updates
+    assert any("现在创建" in msg for msg in tail_updates)
+    assert tail_updates[-1] == suffix or "现在创建" in tail_updates[-1]
+    assert _display_width(tail_updates[-1]) <= _line_budget()
+
+
+@pytest.mark.asyncio
+async def test_stream_query_many_chunks_throttles_narration_updates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out = StringIO()
+    times = iter([float(i) * 0.01 for i in range(200)])
+    monkeypatch.setattr("fj_ai.stream.time.monotonic", lambda: next(times))
+
+    chunks = [_msg_chunk(AIMessageChunk(content="x" * (i + 1))) for i in range(40)]
+    chunks.append(_msg_chunk(AIMessage(content="x" * 40)))
+    agent = _FakeAgent(chunks)
+
+    narration_updates = 0
+    original_set = AnswerWriter.set
+
+    def counting_set(self: AnswerWriter, new_buf: str) -> None:
+        nonlocal narration_updates
+        before = self._last_preview
+        original_set(self, new_buf)
+        if self._last_preview != before and self._live:
+            narration_updates += 1
+
+    monkeypatch.setattr(AnswerWriter, "set", counting_set)
+
+    await stream_query(
+        agent,  # type: ignore[arg-type]
+        "q",
+        thread_id="t1",
+        live_answer=True,
+        out=out,
+        progress=ProgressLine(out, enabled=False),
+    )
+    assert narration_updates < 40
 
 
 def test_answer_writer_finish_prints_complete_buffer() -> None:

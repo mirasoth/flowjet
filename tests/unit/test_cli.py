@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from fj_ai.argv import split_argv
-from fj_ai.cli import parse_args
+from fj_ai.cli import main_follow, parse_args
 
 
 @pytest.mark.parametrize(
@@ -67,6 +67,49 @@ def test_parse_args_follow_flag() -> None:
     args = parse_args(["-f", "continue", "please"])
     assert args.follow is True
     assert args.query_text == "continue please"
+
+
+def test_main_follow_injects_follow_flag(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import cli
+
+    seen: list[list[str] | None] = []
+
+    def fake_main(argv: list[str] | None = None) -> int:
+        seen.append(argv)
+        return 0
+
+    monkeypatch.setattr(cli, "main", fake_main)
+    assert main_follow(["continue", "please"]) == 0
+    assert seen == [["--follow", "continue", "please"]]
+
+
+def test_main_follow_skips_subcommands(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import cli
+
+    seen: list[list[str] | None] = []
+
+    def fake_main(argv: list[str] | None = None) -> int:
+        seen.append(argv)
+        return 0
+
+    monkeypatch.setattr(cli, "main", fake_main)
+    assert main_follow(["setup"]) == 0
+    assert main_follow(["completion", "zsh"]) == 0
+    assert seen == [["setup"], ["completion", "zsh"]]
+
+
+def test_main_follow_idempotent_when_follow_present(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import cli
+
+    seen: list[list[str] | None] = []
+
+    def fake_main(argv: list[str] | None = None) -> int:
+        seen.append(argv)
+        return 0
+
+    monkeypatch.setattr(cli, "main", fake_main)
+    assert main_follow(["-f", "continue"]) == 0
+    assert seen == [["-f", "continue"]]
 
 
 @pytest.mark.asyncio
