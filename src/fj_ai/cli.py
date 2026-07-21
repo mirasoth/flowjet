@@ -38,6 +38,8 @@ Examples:
 
 Queries continue the latest active thread by default.
 Use ``--reset`` to start a new active thread.
+Only one ``fj`` query runs at a time (session lock); concurrent runs are refused.
+With ``-v``, prints ``thread <id>`` on stderr.
 Everything after options is joined as the query (any Unicode).
 Use ``--`` to force the rest of the line into the query (including leading dashes).
 """
@@ -209,11 +211,21 @@ async def run_list_async(args: argparse.Namespace) -> int:
 
 def run_reset_only() -> int:
     """Pin a new active thread id and print it (no agent run)."""
-    from fj_ai.threads import new_thread_id, write_active_thread_id
+    from fj_ai.threads import (
+        ConcurrentSessionError,
+        hold_session_lock,
+        new_thread_id,
+        write_active_thread_id,
+    )
 
-    tid = new_thread_id()
-    write_active_thread_id(tid)
-    sys.stdout.write(f"{tid}\n")
+    try:
+        with hold_session_lock():
+            tid = new_thread_id()
+            write_active_thread_id(tid)
+            sys.stdout.write(f"{tid}\n")
+    except ConcurrentSessionError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 1
     return 0
 
 
@@ -231,7 +243,7 @@ async def run_async(args: argparse.Namespace) -> int:
     # Lazy: keep ``fj __complete`` / setup free of agent import cost.
     from fj_ai.agent import build_agent, open_sqlite_checkpointer
     from fj_ai.stream import invoke_query, stream_query
-    from fj_ai.threads import resolve_thread_id
+    from fj_ai.threads import ConcurrentSessionError, hold_session_lock, resolve_thread_id
 
     config = _load_config_or_exit(args)
     if isinstance(config, int):
@@ -240,28 +252,35 @@ async def run_async(args: argparse.Namespace) -> int:
     workspace = Path(args.workspace).expanduser().resolve() if args.workspace else None
 
     try:
-        async with open_sqlite_checkpointer(config) as checkpointer:
-            thread_id = await resolve_thread_id(
-                checkpointer,
-                explicit=args.thread,
-                reset=getattr(args, "reset", False),
-            )
-
-            agent = await build_agent(
-                config,
-                workspace=workspace,
-                checkpointer=checkpointer,
-                verbose=args.verbose,
-            )
-            if args.no_stream:
-                await invoke_query(agent, args.query_text, thread_id=thread_id)
-            else:
-                await stream_query(
-                    agent,
-                    args.query_text,
-                    thread_id=thread_id,
-                    show_tool_calls=args.verbose,
+        with hold_session_lock():
+            async with open_sqlite_checkpointer(config) as checkpointer:
+                thread_id = await resolve_thread_id(
+                    checkpointer,
+                    explicit=args.thread,
+                    reset=getattr(args, "reset", False),
                 )
+                if args.verbose:
+                    sys.stderr.write(f"thread {thread_id}\n")
+                    sys.stderr.flush()
+
+                agent = await build_agent(
+                    config,
+                    workspace=workspace,
+                    checkpointer=checkpointer,
+                    verbose=args.verbose,
+                )
+                if args.no_stream:
+                    await invoke_query(agent, args.query_text, thread_id=thread_id)
+                else:
+                    await stream_query(
+                        agent,
+                        args.query_text,
+                        thread_id=thread_id,
+                        show_tool_calls=args.verbose,
+                    )
+    except ConcurrentSessionError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 1
     except KeyboardInterrupt:
         sys.stderr.write("\ninterrupted\n")
         return 130

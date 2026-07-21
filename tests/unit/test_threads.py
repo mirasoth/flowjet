@@ -139,6 +139,23 @@ def test_active_thread_roundtrip(tmp_path, monkeypatch) -> None:  # type: ignore
     assert threads_mod.read_active_thread_id() == "fj-abc"
 
 
+def test_hold_session_lock_blocks_second_holder(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import threads as threads_mod
+
+    lock = tmp_path / "fj_active_thread.lock"
+    monkeypatch.setattr(threads_mod, "active_thread_lock_path", lambda: lock)
+    monkeypatch.setattr(threads_mod, "_soothe_home", lambda: tmp_path)
+
+    with threads_mod.hold_session_lock():
+        with pytest.raises(threads_mod.ConcurrentSessionError, match="already running"):
+            with threads_mod.hold_session_lock():
+                pass
+
+    # Released — second acquire succeeds.
+    with threads_mod.hold_session_lock():
+        assert lock.read_text(encoding="utf-8").strip().isdigit()
+
+
 @pytest.mark.asyncio
 async def test_list_threads_none_checkpointer() -> None:
     assert await list_threads(None) == []

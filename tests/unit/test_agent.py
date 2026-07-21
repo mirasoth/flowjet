@@ -22,6 +22,31 @@ def test_apply_fj_defaults_forces_sqlite() -> None:
     assert forced.resolve_checkpointer_backend() == "sqlite"
 
 
+def test_apply_fj_defaults_sets_core_skills_when_unset() -> None:
+    from fj_ai.skills import fj_core_skill_names
+
+    cfg = SootheConfig()
+    assert cfg.progressive_skills.core_skills is None
+    forced = apply_fj_defaults(cfg)
+    assert forced.progressive_skills.core_skills == fj_core_skill_names()
+    # Nano defaults are included via DEFAULT_CORE_SKILL_NAMES, not hard-coded in fj.
+    assert "weather" in forced.progressive_skills.core_skills
+    assert "brainstorming" in forced.progressive_skills.core_skills
+
+
+def test_apply_fj_defaults_preserves_explicit_core_skills() -> None:
+    cfg = SootheConfig()
+    cfg = cfg.model_copy(
+        update={
+            "progressive_skills": cfg.progressive_skills.model_copy(
+                update={"core_skills": ["xlsx"]}
+            ),
+        }
+    )
+    forced = apply_fj_defaults(cfg)
+    assert forced.progressive_skills.core_skills == ["xlsx"]
+
+
 def test_apply_fj_defaults_disables_virtual_mode() -> None:
     cfg = SootheConfig()
     assert cfg.security.allow_paths_outside_workspace is False
