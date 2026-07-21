@@ -25,7 +25,7 @@ _fj() {
     if [[ "$word" == -h || "$word" == --help || "$word" == -V || "$word" == --version \
        || "$word" == --no-stream || "$word" == -v || "$word" == --verbose \
        || "$word" == -l || "$word" == --list \
-       || "$word" == -f || "$word" == --follow ]]; then
+       || "$word" == --reset ]]; then
       opt_words+=("$word")
       (( i++ ))
       continue

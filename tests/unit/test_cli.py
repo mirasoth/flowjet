@@ -24,6 +24,9 @@ from fj_ai.cli import parse_args
         (["-l", "-n", "5"], ["-l", "-n", "5"], []),
         (["--reset", "start", "fresh"], ["--reset"], ["start", "fresh"]),
         (["--reset"], ["--reset"], []),
+        (["-lv"], ["-l", "-v"], []),
+        (["-vl", "hello"], ["-v", "-l"], ["hello"]),
+        (["-weird"], [], ["-weird"]),
         ([], [], []),
     ],
 )
@@ -120,8 +123,83 @@ async def test_run_async_list_invalid_limit(monkeypatch, capsys) -> None:  # typ
     from fj_ai.cli import parse_args, run_async
 
     monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
-    assert await run_async(parse_args(["-l", "-n", "0"])) == 2
-    assert "-n must be a positive integer" in capsys.readouterr().err
+    assert await run_async(parse_args(["-l", "-n", "-1"])) == 2
+    assert "-n must be >= 0" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_run_async_list_zero_means_all(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import fj_ai.agent as agent_mod
+    import fj_ai.config as config_mod
+    import fj_ai.threads as threads_mod
+    from fj_ai.cli import parse_args, run_async
+
+    seen: dict[str, int] = {}
+
+    @asynccontextmanager
+    async def fake_cp(_config: object):
+        yield object()
+
+    async def fake_list(_cp: object, *, limit: int = 20):
+        seen["limit"] = limit
+        return []
+
+    monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
+    monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
+    monkeypatch.setattr(threads_mod, "list_threads", fake_list)
+    monkeypatch.setattr(threads_mod, "write_thread_list", lambda *a, **k: None)
+
+    assert await run_async(parse_args(["-l", "-n", "0"])) == 0
+    assert seen["limit"] == 0
+
+
+@pytest.mark.asyncio
+async def test_arg_composition_conflicts(capsys) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai.cli import parse_args, run_async
+
+    cases = [
+        (["-n", "5"], "-n requires -l/--list"),
+        (["-n", "5", "hello"], "-n requires -l/--list"),
+        (["-l", "hello"], "-l/--list does not take a query"),
+        (["-l", "--reset"], "-l/--list cannot be combined with --reset"),
+        (["-l", "-t", "fj-x"], "-l/--list cannot be combined with -t/--thread"),
+        (["-l", "-w", "/tmp"], "-l/--list cannot be combined with -w/--workspace"),
+        (["-l", "--no-stream"], "-l/--list cannot be combined with --no-stream"),
+        (["--reset", "-t", "fj-x"], "--reset and -t/--thread are mutually exclusive"),
+        (["--reset", "-t", "fj-x", "hi"], "--reset and -t/--thread are mutually exclusive"),
+    ]
+    for argv, needle in cases:
+        assert await run_async(parse_args(argv)) == 2
+        err = capsys.readouterr().err
+        assert needle in err, (argv, err)
+
+
+def test_run_pin_thread(monkeypatch, capsys, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import asyncio
+
+    import fj_ai.threads as threads_mod
+    from fj_ai.cli import parse_args, run_async, run_pin_thread
+
+    path = tmp_path / "fj_active_thread"
+    monkeypatch.setattr(threads_mod, "active_thread_path", lambda: path)
+
+    assert run_pin_thread("fj-pinned") == 0
+    assert capsys.readouterr().out.strip() == "fj-pinned"
+    assert path.read_text(encoding="utf-8").strip() == "fj-pinned"
+
+    assert asyncio.run(run_async(parse_args(["-t", "fj-from-cli"]))) == 0
+    assert capsys.readouterr().out.strip() == "fj-from-cli"
+    assert path.read_text(encoding="utf-8").strip() == "fj-from-cli"
+
+
+def test_parse_args_clustered_shorts() -> None:
+    args = parse_args(["-lv"])
+    assert args.list is True
+    assert args.verbose is True
+    assert args.query_text == ""
 
 
 @pytest.mark.asyncio
