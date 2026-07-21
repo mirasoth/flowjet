@@ -5,6 +5,8 @@
 [![CI](https://github.com/caesar0301/fj-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/caesar0301/fj-ai/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+🎥 [Watch the demo video on Vimeo](https://vimeo.com/1211730182)
+
 **fj** is a one-shot coding-agent CLI for the terminal. Type a question, get an answer — no UI, no context-switching:
 
 ```bash
