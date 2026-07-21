@@ -13,6 +13,7 @@ from soothe_nano.config import SootheConfig
 from soothe_nano.resolve import resolve_checkpointer
 
 from fj_ai.logging_setup import configure_cli_logging, silence_after_plugins
+from fj_ai.skills import register_fj_builtin_skills
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,9 @@ def apply_fj_defaults(config: SootheConfig) -> SootheConfig:
 
     - SQLite checkpointer / durability
     - Disable soothe virtual mode (allow paths outside workspace)
+    - Register fj package builtin skills
     """
+    register_fj_builtin_skills()
     durability = config.agent.protocols.durability.model_copy(
         update={"backend": "sqlite", "checkpointer": "sqlite"}
     )

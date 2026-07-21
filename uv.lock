@@ -1269,7 +1269,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3.0" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.0" },
-    { name = "soothe-nano", specifier = ">=0.9.8,<1.0.0" },
+    { name = "soothe-nano", editable = "../soothe/packages/soothe-nano" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=5.0.0" },
 ]
 provides-extras = ["dev"]
@@ -7658,8 +7658,8 @@ wheels = [
 
 [[package]]
 name = "soothe-deepagents"
-version = "0.8.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.8.1"
+source = { editable = "../soothe/packages/soothe-deepagents" }
 dependencies = [
     { name = "langchain" },
     { name = "langchain-anthropic" },
@@ -7668,15 +7668,47 @@ dependencies = [
     { name = "langsmith" },
     { name = "wcmatch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ea/86/26c90a505c96b111c99f2ae663a26a930d66dbf64a5a85c21a9dfe900cd7/soothe_deepagents-0.8.0.tar.gz", hash = "sha256:5627e3e29c5935e03bf8643dd27a99fb85faf0a775064d45e9708841aae202f6", size = 278023, upload-time = "2026-07-20T16:30:50.335Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/93/d9/0ac7c2e5de501bffbcff662414ca3b356db35df272c08346f1ddd71e8d39/soothe_deepagents-0.8.0-py3-none-any.whl", hash = "sha256:3af03a37a7e45d47ccb400d52d87ed2d2d40ee141ffc9e0da593dc0b235f346e", size = 308182, upload-time = "2026-07-20T16:30:48.403Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "av", marker = "extra == 'video'", specifier = ">=17.0.0,<18.0.0" },
+    { name = "langchain", specifier = ">=1.3.12,<2.0.0" },
+    { name = "langchain-anthropic", specifier = ">=1.4.8,<2.0.0" },
+    { name = "langchain-aws", marker = "extra == 'aws'", specifier = ">=1.6.2,<2.0.0" },
+    { name = "langchain-core", specifier = ">=1.4.9,<2.0.0" },
+    { name = "langchain-google-genai", specifier = ">=4.2.7,<5.0.0" },
+    { name = "langchain-quickjs", marker = "extra == 'quickjs'", specifier = ">=0.3.2" },
+    { name = "langsmith", specifier = ">=0.9.3" },
+    { name = "pillow", marker = "extra == 'video'", specifier = ">=10.0.0,<13.0.0" },
+    { name = "wcmatch", specifier = ">=10.1" },
+]
+provides-extras = ["aws", "quickjs", "video"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "av", specifier = ">=17.0.0,<18.0.0" },
+    { name = "build" },
+    { name = "langchain-openai" },
+    { name = "langchain-tests", specifier = ">=1.1.9" },
+    { name = "pillow", specifier = ">=10.0.0,<13.0.0" },
+    { name = "pytest" },
+    { name = "pytest-asyncio", specifier = ">=1.4.0" },
+    { name = "pytest-benchmark" },
+    { name = "pytest-codspeed", specifier = ">=5.0.3,<6.0.0" },
+    { name = "pytest-cov" },
+    { name = "pytest-socket" },
+    { name = "pytest-timeout", specifier = ">=2.4.0,<3.0.0" },
+    { name = "pytest-watcher", specifier = ">=0.6.3,<1.0.0" },
+    { name = "pytest-xdist" },
+    { name = "ruff", specifier = ">=0.15.20,<0.16.0" },
+    { name = "twine" },
+    { name = "ty", specifier = ">=0.0.54,<1.0.0" },
 ]
 
 [[package]]
 name = "soothe-nano"
-version = "0.9.8"
-source = { registry = "https://pypi.org/simple" }
+version = "0.9.9"
+source = { editable = "../soothe/packages/soothe-nano" }
 dependencies = [
     { name = "aiofiles" },
     { name = "aiohttp" },
@@ -7715,23 +7747,75 @@ dependencies = [
     { name = "wcmatch" },
     { name = "wizsearch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/11/bb/d95c4a89e7dbb6ca08c1d3aa5588602bce036c334be709acad247eb29e74/soothe_nano-0.9.8.tar.gz", hash = "sha256:7c6e6ea00d07b0b604653d7befa7fd3835674fc0c16a51bd2ad32b307555906e", size = 431013, upload-time = "2026-07-21T08:51:25.569Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c2/0f/40683c03684fb092b792cf18e87d6e3cf5221c29e669d8dfff17f7c00273/soothe_nano-0.9.8-py3-none-any.whl", hash = "sha256:f12d7c82c45157eefe32ccf9ef1507611a0abbf1aaee0ee3df93e3c57aea9d0c", size = 577790, upload-time = "2026-07-21T08:51:24.045Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "aiofiles", specifier = ">=24.1.0" },
+    { name = "aiohttp", specifier = ">=3.9.0,<4.0.0" },
+    { name = "browser-use", specifier = ">=0.11.0,<0.13.0" },
+    { name = "dashscope", specifier = ">=1.20.0" },
+    { name = "deepxiv-sdk", specifier = ">=0.2.5" },
+    { name = "docx2txt", specifier = ">=0.8.0" },
+    { name = "httpx", specifier = ">=0.27.0,<1.0.0" },
+    { name = "jsonschema", specifier = ">=4.0.0,<5.0.0" },
+    { name = "langchain", specifier = ">=1.2.11,<2.0.0" },
+    { name = "langchain-community", specifier = ">=0.3.0,<1.0.0" },
+    { name = "langchain-core", specifier = ">=1.2.18,<2.0.0" },
+    { name = "langchain-experimental", specifier = ">=0.0.50,<1.0.0" },
+    { name = "langchain-mcp-adapters", specifier = ">=0.2.0,<1.0.0" },
+    { name = "langchain-openai", specifier = ">=0.3.0,<1.0.0" },
+    { name = "langchain-quickjs", specifier = ">=0.1.0" },
+    { name = "langchain-tavily", specifier = ">=0.2.17" },
+    { name = "langgraph", specifier = ">=1.1.1,<2.0.0" },
+    { name = "langgraph-checkpoint", specifier = ">=4.0.0,<5.0.0" },
+    { name = "langgraph-checkpoint-postgres", specifier = ">=3.1.0,<4.0.0" },
+    { name = "langgraph-checkpoint-sqlite", specifier = ">=3.0.3" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "openpyxl", specifier = ">=3.1.0" },
+    { name = "packaging", specifier = ">=23.0" },
+    { name = "pandas", specifier = ">=2.0.0" },
+    { name = "pathspec", specifier = ">=0.12.0,<2.0.0" },
+    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2.0,<4.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0,<3.0.0" },
+    { name = "pydantic-settings", specifier = ">=2.0.0,<3.0.0" },
+    { name = "pymupdf", specifier = ">=1.24.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'" },
+    { name = "python-dotenv", specifier = ">=1.0.0,<2.0.0" },
+    { name = "pyyaml", specifier = ">=6.0.0,<7.0.0" },
+    { name = "requests", specifier = ">=2.32.3,<3.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.0" },
+    { name = "soothe-deepagents", editable = "../soothe/packages/soothe-deepagents" },
+    { name = "soothe-sdk", editable = "../soothe/packages/soothe-sdk" },
+    { name = "sqlite-vec", specifier = ">=0.1.0" },
+    { name = "twine", marker = "extra == 'dev'", specifier = ">=5.0.0" },
+    { name = "wcmatch", specifier = ">=10.1" },
+    { name = "wizsearch", specifier = ">=1.1.8,<2.0.0" },
 ]
+provides-extras = ["dev"]
 
 [[package]]
 name = "soothe-sdk"
 version = "1.0.4"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../soothe/packages/soothe-sdk" }
 dependencies = [
     { name = "langchain-core" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c9/fa/99e7f70d71b075fd68df3b25efed949542ca56b70806871d1e4867df1447/soothe_sdk-1.0.4.tar.gz", hash = "sha256:2996f6dc0dac4bd73d8ca0b201927f1d391917d1f4b5826d379d05c2653693c8", size = 95427, upload-time = "2026-07-21T05:54:15.552Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c6/b6/5a30774c1fa0d4f39db5a1f05f39876b0d600395a596dca480cf81eff149/soothe_sdk-1.0.4-py3-none-any.whl", hash = "sha256:c2ea938d7c728abb78d678e63b2dc5a345d4d58256fdefd7af0142331f65f347", size = 128310, upload-time = "2026-07-21T05:54:13.875Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "langchain-core", specifier = ">=1.2.0,<2.0.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0,<3.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.0" },
+    { name = "twine", marker = "extra == 'dev'", specifier = ">=5.0.0" },
 ]
+provides-extras = ["dev"]
 
 [[package]]
 name = "soupsieve"
