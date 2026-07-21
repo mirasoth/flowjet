@@ -68,7 +68,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-stream",
         action="store_true",
-        help="Disable token streaming; print final answer only",
+        help="Generic progress only (hide live AI narration preview on the status line)",
     )
     parser.add_argument(
         "-v",

@@ -1,8 +1,9 @@
-"""Stream agent events: ephemeral progress + live answer tokens by default."""
+"""Stream agent events: ephemeral progress + final answer only."""
 
 from __future__ import annotations
 
 import json
+import re
 import sys
 import warnings
 from typing import Any, TextIO
@@ -82,8 +83,26 @@ def accumulate_ai_text(current: str, message: AIMessage) -> str:
     return text
 
 
+def _status_preview(text: str) -> str:
+    """Single-line preview of AI narration for the ephemeral progress line."""
+    line = re.sub(r"\s+", " ", text.strip())
+    if not line:
+        return "Writing answer…"
+    # Prefer the latest sentence so long multi-step narration stays useful.
+    for sep in (". ", "! ", "? ", "; "):
+        if sep in line:
+            line = line.rsplit(sep, 1)[-1].strip() or line
+            break
+    return line
+
+
 class AnswerWriter:
-    """Buffer answer text and optionally emit tokens as they arrive."""
+    """Buffer answer text; show narration on the progress line; print only at end.
+
+    Multi-step agent turns emit intermediate AI text ("Let me try…") before tool
+    calls. Those must not become permanent stdout — only the final buffer after
+    the stream ends is the user-visible result.
+    """
 
     def __init__(
         self,
@@ -96,60 +115,27 @@ class AnswerWriter:
         self._stdout = stdout
         self._status = status
         self._live = live
-        self._emitted = ""
-        self._live_active = False
 
     def set(self, new_buf: str) -> None:
-        """Replace the answer buffer; stream any new suffix when ``live``."""
+        """Replace the answer buffer; mirror a preview onto the progress line."""
         self.buf = new_buf
-        if not self._live or not new_buf:
-            if new_buf and not self._live:
-                self._status.update("Writing answer…", color="green")
+        if not new_buf:
             return
-
-        if not self._live_active:
-            # Hand stdout from the spinner to the answer stream.
-            self._status.release()
-            self._live_active = True
-
-        if new_buf.startswith(self._emitted):
-            delta = new_buf[len(self._emitted) :]
-        elif self._emitted.startswith(new_buf):
-            delta = ""
+        if self._live:
+            self._status.update(_status_preview(new_buf), color="green")
         else:
-            # Divergent replace after partial emit — start a new paragraph.
-            if self._emitted and not self._emitted.endswith("\n"):
-                self._stdout.write("\n")
-            delta = new_buf
-            self._emitted = ""
-
-        if delta:
-            self._stdout.write(delta)
-            self._stdout.flush()
-        self._emitted = new_buf
+            self._status.update("Writing answer…", color="green")
 
     def reset_for_tools(self) -> None:
-        """Drop buffered answer when a tool call starts.
-
-        Already-emitted live text stays on screen; progress resumes on a new line.
-        """
-        if self._live and self._live_active and self._emitted and not self._emitted.endswith("\n"):
-            self._stdout.write("\n")
-            self._stdout.flush()
+        """Drop buffered narration when a tool call starts (it was status, not result)."""
         self.buf = ""
-        self._emitted = ""
-        self._live_active = False
 
     def finish(self) -> str:
-        """Flush remaining output and return the final answer buffer."""
-        if not self._live:
-            if self.buf:
-                self._stdout.write(self.buf)
-                if not self.buf.endswith("\n"):
-                    self._stdout.write("\n")
-                self._stdout.flush()
-        elif self._emitted and not self._emitted.endswith("\n"):
-            self._stdout.write("\n")
+        """Print the final answer buffer once (progress is cleared by ``ProgressLine.stop``)."""
+        if self.buf:
+            self._stdout.write(self.buf)
+            if not self.buf.endswith("\n"):
+                self._stdout.write("\n")
             self._stdout.flush()
         return self.buf
 
@@ -165,7 +151,7 @@ async def stream_query(
     err: TextIO | None = None,
     progress: ProgressLine | None = None,
 ) -> str:
-    """Run a query with ephemeral progress and a streamed (or final) answer."""
+    """Run a query with ephemeral progress; print only the final answer."""
     stdout = out or sys.stdout
     stderr = err or sys.stderr
     status = progress if progress is not None else ProgressLine(stdout)
@@ -291,7 +277,7 @@ async def invoke_query(
     out: TextIO | None = None,
     progress: ProgressLine | None = None,
 ) -> str:
-    """Non-streaming answer write: progress until done, then print the final text."""
+    """Progress until done, then print the final text (no live narration preview)."""
     return await stream_query(
         agent,
         query,

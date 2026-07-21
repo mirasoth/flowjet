@@ -66,7 +66,7 @@ Missing `nano.yml` falls back to `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 | Config | `~/.soothe/config/nano.yml` (`SOOTHE_HOME` overrides home) |
 | Checkpoints | SQLite at `~/.soothe/data/soothe_checkpoints.db` |
 | Workspace | CWD (`SOOTHE_WORKSPACE`) |
-| Output | Progress on stdout line 1; answer tokens stream by default (`--no-stream` for final-only) |
+| Output | Progress on stdout line 1 (tools + AI narration); final answer printed once (`--no-stream` hides narration preview) |
 
 ## Usage
 
@@ -81,7 +81,7 @@ fj [options] [--] <query...>
 | `-c PATH` / `--config` | Alternate `nano.yml` |
 | `-t ID` / `--thread` | Reuse LangGraph thread id |
 | `-w DIR` / `--workspace` | Workspace root |
-| `--no-stream` | Final-only answer (progress still on TTY) |
+| `--no-stream` | Hide live AI narration on the status line (final answer still printed once) |
 | `-v` / `--verbose` | Mirror tool/custom events on stderr |
 | `-V` / `--version` | Version |
 | `--` | Force remaining argv into the query |

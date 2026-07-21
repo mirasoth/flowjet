@@ -1,4 +1,4 @@
-"""Tests for AI text accumulation, live answer writing, and stream_query."""
+"""Tests for AI text accumulation, progress narration, and stream_query."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from fj_ai.stream import (
     AnswerWriter,
     _ai_text,
     _format_content,
+    _status_preview,
     _truncate,
     accumulate_ai_text,
     invoke_query,
@@ -87,14 +88,19 @@ def test_accumulate_full_message_replaces() -> None:
     assert buf == "Full final answer."
 
 
-def test_answer_writer_live_emits_deltas() -> None:
+def test_status_preview_prefers_latest_sentence() -> None:
+    assert _status_preview("First. Second step now") == "Second step now"
+    assert _status_preview("   ") == "Writing answer…"
+
+
+def test_answer_writer_live_buffers_until_finish() -> None:
     out = StringIO()
     status = ProgressLine(out, enabled=False)
     writer = AnswerWriter(out, status, live=True)
 
     writer.set("Hello")
     writer.set("Hello world")
-    assert out.getvalue() == "Hello world"
+    assert out.getvalue() == ""
     assert writer.finish() == "Hello world"
     assert out.getvalue() == "Hello world\n"
 
@@ -111,7 +117,7 @@ def test_answer_writer_buffered_waits_until_finish() -> None:
     assert out.getvalue() == "Hello world\n"
 
 
-def test_answer_writer_reset_for_tools_keeps_emitted_line() -> None:
+def test_answer_writer_reset_for_tools_drops_intermediate() -> None:
     out = StringIO()
     status = ProgressLine(out, enabled=False)
     writer = AnswerWriter(out, status, live=True)
@@ -120,10 +126,10 @@ def test_answer_writer_reset_for_tools_keeps_emitted_line() -> None:
     writer.reset_for_tools()
     writer.set("Done.")
     assert writer.finish() == "Done."
-    assert out.getvalue() == "Looking around\nDone.\n"
+    assert out.getvalue() == "Done.\n"
 
 
-def test_answer_writer_divergent_replace_starts_new_paragraph() -> None:
+def test_answer_writer_divergent_replace_keeps_latest_only() -> None:
     out = StringIO()
     status = ProgressLine(out, enabled=False)
     writer = AnswerWriter(out, status, live=True)
@@ -131,16 +137,18 @@ def test_answer_writer_divergent_replace_starts_new_paragraph() -> None:
     writer.set("First draft")
     writer.set("Completely different")
     assert writer.finish() == "Completely different"
-    assert out.getvalue() == "First draft\nCompletely different\n"
+    assert out.getvalue() == "Completely different\n"
 
 
-def test_answer_writer_shorter_prefix_emits_nothing() -> None:
+def test_answer_writer_live_updates_progress_preview() -> None:
     out = StringIO()
-    status = ProgressLine(out, enabled=False)
+    status = ProgressLine(out, enabled=True)
     writer = AnswerWriter(out, status, live=True)
-    writer.set("Hello world")
-    writer.set("Hello")
-    assert out.getvalue() == "Hello world"
+    writer.set("I'll fetch the latest stock news")
+    assert "fetch the latest" in out.getvalue()
+    assert writer.buf == "I'll fetch the latest stock news"
+    # Progress only — not yet the committed result line.
+    assert not out.getvalue().endswith("I'll fetch the latest stock news\n")
 
 
 class _FakeAgent:
@@ -180,7 +188,7 @@ async def test_stream_query_live_answer_and_custom_event() -> None:
         progress=ProgressLine(out, enabled=False),
     )
     assert result == "Hi there"
-    assert "Hi there" in out.getvalue()
+    assert out.getvalue() == "Hi there\n"
     assert "[event]" in err.getvalue()
 
 
@@ -233,11 +241,65 @@ async def test_stream_query_tool_call_and_error_result() -> None:
         progress=ProgressLine(out, enabled=False),
     )
     assert result == "Recovered."
+    assert out.getvalue() == "Recovered.\n"
     stderr = err.getvalue()
     assert "[interrupted]" in stderr
     assert "[tool]" in stderr
     assert "[error]" in stderr
     assert "limit" in stderr
+
+
+@pytest.mark.asyncio
+async def test_stream_query_drops_intermediate_ai_narration() -> None:
+    """Multi-step agent talk before tools must not appear in the final result."""
+    out = StringIO()
+
+    def tool_chunk(call_id: str) -> AIMessageChunk:
+        return AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "name": "web_search",
+                    "args": '{"query": "stock news"}',
+                    "id": call_id,
+                    "index": 0,
+                    "type": "tool_call_chunk",
+                }
+            ],
+            tool_calls=[
+                {
+                    "name": "web_search",
+                    "args": {"query": "stock news"},
+                    "id": call_id,
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+    agent = _FakeAgent(
+        [
+            _msg_chunk(AIMessage(content="I'll fetch the latest stock news.")),
+            _msg_chunk(tool_chunk("call_1")),
+            _msg_chunk(ToolMessage(content="headlines…", tool_call_id="call_1", name="web_search")),
+            _msg_chunk(AIMessage(content="Yahoo is rate-limiting. Trying RSS.")),
+            _msg_chunk(tool_chunk("call_2")),
+            _msg_chunk(ToolMessage(content="rss ok", tool_call_id="call_2", name="web_search")),
+            _msg_chunk(AIMessage(content="## Latest Stock Market News\n1. Futures rise")),
+        ]
+    )
+    result = await stream_query(
+        agent,  # type: ignore[arg-type]
+        "latest stock news",
+        thread_id="t1",
+        live_answer=True,
+        out=out,
+        progress=ProgressLine(out, enabled=False),
+    )
+    assert result.startswith("## Latest Stock Market News")
+    printed = out.getvalue()
+    assert printed == "## Latest Stock Market News\n1. Futures rise\n"
+    assert "I'll fetch" not in printed
+    assert "rate-limiting" not in printed
 
 
 @pytest.mark.asyncio
