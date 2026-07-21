@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 import warnings
 from typing import Any, TextIO
 
@@ -19,6 +20,22 @@ from fj_ai.progress import (
     friendly_tool_result,
 )
 from fj_ai.tool_stream import ToolCallArgAccumulator
+
+# Min interval between live narration previews on the progress line (seconds).
+_STATUS_PREVIEW_MIN_INTERVAL = 0.12
+# Western + CJK sentence boundaries for status preview.
+_STATUS_SENTENCE_SEPS = (
+    ". ",
+    "! ",
+    "? ",
+    "; ",
+    "。",
+    "！",
+    "？",
+    "；",
+    "——",
+    "… ",
+)
 
 
 def _truncate(text: str, limit: int = 200) -> str:
@@ -91,11 +108,22 @@ def _status_preview(text: str) -> str:
     line = re.sub(r"\s+", " ", text.strip())
     if not line:
         return "Writing answer…"
-    # Prefer the latest sentence so long multi-step narration stays useful.
-    for sep in (". ", "! ", "? ", "; "):
-        if sep in line:
-            line = line.rsplit(sep, 1)[-1].strip() or line
-            break
+    # Prefer the latest sentence/clause with non-empty tail (skip trailing markers).
+    best_idx = -1
+    best_len = 0
+    for sep in _STATUS_SENTENCE_SEPS:
+        idx = 0
+        while True:
+            found = line.find(sep, idx)
+            if found < 0:
+                break
+            tail = line[found + len(sep) :].strip()
+            if tail and found >= best_idx:
+                best_idx = found
+                best_len = len(sep)
+            idx = found + len(sep)
+    if best_idx >= 0:
+        line = line[best_idx + best_len :].strip()
     return line
 
 
@@ -118,6 +146,8 @@ class AnswerWriter:
         self._stdout = stdout
         self._status = status
         self._live = live
+        self._last_preview_at = 0.0
+        self._last_preview = ""
 
     def set(self, new_buf: str) -> None:
         """Replace the answer buffer; mirror a preview onto the progress line."""
@@ -125,13 +155,23 @@ class AnswerWriter:
         if not new_buf:
             return
         if self._live:
-            self._status.update(_status_preview(new_buf), color="green")
+            preview = _status_preview(new_buf)
+            now = time.monotonic()
+            if preview != self._last_preview and (
+                not self._last_preview
+                or now - self._last_preview_at >= _STATUS_PREVIEW_MIN_INTERVAL
+            ):
+                self._status.update(preview, color="green", tail=True)
+                self._last_preview = preview
+                self._last_preview_at = now
         else:
             self._status.update("Writing answer…", color="green")
 
     def reset_for_tools(self) -> None:
         """Drop buffered narration when a tool call starts (it was status, not result)."""
         self.buf = ""
+        self._last_preview = ""
+        self._last_preview_at = 0.0
 
     def finish(self) -> str:
         """Print the complete answer buffer once (progress is cleared by ``stop``)."""
