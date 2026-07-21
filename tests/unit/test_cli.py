@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from fj_ai.cli import parse_args, split_argv
+from fj_ai.argv import split_argv
+from fj_ai.cli import parse_args
 
 
 @pytest.mark.parametrize(
@@ -53,12 +54,13 @@ def test_parse_args_setup_command() -> None:
 
 
 def test_main_setup_skips_asyncio(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import fj_ai.setup_cmd as setup_cmd
     from fj_ai import cli
 
     called: list[str] = []
 
     monkeypatch.setattr(cli, "configure_cli_logging", lambda: None)
-    monkeypatch.setattr(cli, "run_setup", lambda _path: called.append("setup") or 0)
+    monkeypatch.setattr(setup_cmd, "run_setup", lambda _path: called.append("setup") or 0)
 
     def boom(*_a: object, **_k: object) -> int:
         raise AssertionError("setup must not use asyncio.run")

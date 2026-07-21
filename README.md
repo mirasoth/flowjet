@@ -72,6 +72,7 @@ Missing `nano.yml` falls back to `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 
 ```text
 fj setup
+fj completion zsh|bash
 fj [options] [--] <query...>
 ```
 
@@ -86,14 +87,33 @@ fj [options] [--] <query...>
 | `--` | Force remaining argv into the query |
 
 ```bash
-fj setup
-fj who is your name
-fj -v refactor the CLI parser
-fj --thread demo-1 continue: what files did you touch?
-fj -w ~/code/myapp find TODO comments
+# put fj on PATH (pick one)
+uv tool install fj-ai
+# or: export PATH="/Users/chenxm/Workspace/fj-ai/.venv/bin:$PATH"
+
+# enable Tab completion (zsh)
+eval "$(fj completion zsh)"
+# persist in ~/.zshrc:
+#   eval "$(fj completion zsh)"
 ```
 
-## Add skills
+Tab completion predicts natural-language intents (not only flags). It uses the
+router **`fast`** model from `nano.yml` via soothe-nano — it does **not** start
+the coding agent. Configure an optional fast role:
+
+```yaml
+router_profiles:
+  - name: default
+    router:
+      default: "local:llama3.2"
+      fast: "local:llama3.2:1b"
+```
+
+If `fast` is omitted, completion falls back to `default`.
+
+**Note:** Tab only works when `fj` is resolvable for the same command you type
+(on `PATH`, or as an absolute/venv path). If completion is not installed or
+`fj` is missing, Tab falls through silently.## Add skills
 
 Point nano at skill folders (`SKILL.md` + frontmatter) in `nano.yml`:
 
@@ -188,10 +208,12 @@ uv run fj who is your name
 
 ```text
 src/fj_ai/
-  cli.py       # argv → query
-  config.py    # nano.yml loader
-  agent.py     # create_nano_agent + sqlite
-  stream.py    # stdout streaming
+  cli.py         # argv → query / setup / completion
+  config.py      # nano.yml loader
+  agent.py       # create_nano_agent + sqlite
+  stream.py      # stdout streaming
+  completion/    # Tab intent completion (fast model, no agent)
+  shell/         # zsh/bash completion scripts
 nano.yml
 .github/workflows/
   ci.yml

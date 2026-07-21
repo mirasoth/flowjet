@@ -1,6 +1,8 @@
 # fj AI-Native Natural Language Auto Completion
 
-## Design Proposal v1.0
+## Design Proposal v1.1
+
+**Status:** MVP specification approved (2026-07-21). Full platform vision retained below as post-MVP roadmap.
 
 ---
 
@@ -87,6 +89,178 @@ Completion predicts only.
 Execution begins after Enter.
 
 ---
+
+# MVP Specification (Approved)
+
+Clean, efficient Tab completion that **never boots `CodingCoreAgent`**. Inference uses soothe-nano facilities and the configured router **`fast`** role.
+
+## MVP goals
+
+1. Shell Tab → intent candidates (multi-word natural language).
+2. Reuse `load_config()` + `SootheConfig.create_chat_model("fast")`.
+3. Stay off the agent path: no `build_agent`, no `create_nano_agent`, no tools.
+4. Local candidates (static / history) always available; LLM is best-effort within a hard timeout.
+
+## Hard constraints
+
+| Constraint | Rule |
+| ---------- | ---- |
+| No agent | Completion must not import or call `fj_ai.agent.build_agent` / `create_nano_agent` |
+| Model role | `config.create_chat_model("fast")` — soothe-nano falls back to `default` when `fast` is unset |
+| Predict only | No tool calls, no workspace mutations, no task execution |
+| Latency | Hard LLM deadline (~200–250ms); on timeout/error return local candidates only |
+| Output | One candidate per stdout line; shell inserts the full query after `fj ` |
+
+## Architecture
+
+```
+Bash / Zsh TAB
+        │
+        ▼
+fj __complete -- <COMP_WORDS...>
+        │
+        ▼
+load_config()                     # existing fj_ai.config
+        │
+        ▼
+slim CompletionContext            # cwd, git summary, prefix, history
+        │
+        ├──► StaticProvider       # flags / setup (Mode 1)
+        ├──► HistoryProvider      # recent fj queries
+        └──► LLMProvider          # create_chat_model("fast") + ainvoke
+        │
+        ▼
+merge → dedupe → rank → top K
+        │
+        ▼
+stdout (one candidate per line)
+```
+
+## Module layout
+
+```text
+src/fj_ai/completion/
+  __init__.py
+  cmd.py          # __complete entrypoint
+  context.py      # slim CompletionContext builder
+  engine.py       # orchestrate providers, timeout, top-k
+  llm.py          # create_chat_model("fast") + prompt + parse
+  history.py      # read/append recent queries under ~/.soothe/
+  static.py       # option / subcommand candidates
+
+shell/
+  _fj.zsh
+  fj.bash
+```
+
+## CLI surface
+
+```text
+fj __complete -- <words...>     # hidden; shell completion protocol
+fj completion zsh|bash          # print install snippet (optional in first cut)
+```
+
+Successful normal queries (`fj <query>`) may append to completion history so later Tabs personalize without an LLM.
+
+## Model resolution
+
+```python
+from fj_ai.config import load_config
+
+config = load_config(config_path)
+model = config.create_chat_model("fast")  # fallback_role defaults to "default"
+# await model.ainvoke(messages)  — BaseChatModel only
+```
+
+Config (existing `nano.yml` router; no new provider stack):
+
+```yaml
+router_profiles:
+  - name: default
+    router:
+      default: "local:llama3.2"
+      fast: "local:llama3.2:1b"   # optional; else resolve_model("fast") → default
+```
+
+## Slim context (MVP)
+
+Collect only what the prompt and local providers need:
+
+* `cwd`, project root hint
+* git: repo yes/no, branch, short status (staged/modified counts or names, capped)
+* language / project type heuristic (lightweight)
+* recent `fj` history (last N)
+* current input prefix (query portion after options)
+
+Defer for post-MVP: clipboard, editor/IDE, open files, terminal size, time-of-day, previous completion.
+
+## Modes (MVP)
+
+| Mode | When | Behavior |
+| ---- | ---- | -------- |
+| Static | Prefix looks like options (`-`, `--`) or known subcommands (`setup`, `completion`) | No LLM; <10ms |
+| Intent | Non-empty query prefix | History filter + LLM continuations |
+| Task prediction | Empty query after `fj` | History + LLM task suggestions |
+
+## LLM prompt contract
+
+* System: autocomplete engine; return N continuations; one per line; no markdown; no explanations; no `fj` prefix; each line independently usable as the query after `fj `.
+* User: compact context + current input.
+* Parse: split lines, strip bullets/numbers/`fj ` prefix, drop empties/dupes, cap at top K.
+
+## Ranking (MVP)
+
+Simple merge:
+
+1. Exact / prefix history matches first
+2. LLM candidates next (order preserved)
+3. Static last (when relevant)
+4. Deduplicate case-insensitively
+
+No plugin ranking signals in MVP.
+
+## Latency budget (MVP)
+
+| Stage | Target |
+| ----- | ------ |
+| Context + local providers | ≤30ms |
+| LLM (`fast` role) | ≤200–250ms hard timeout |
+| Merge / print | ≤10ms |
+| Perceived (first paint) | local candidates always; LLM when it wins the race |
+
+Async cache refresh for *next* Tab is post-MVP; MVP may use a simple disk cache keyed by `(repo, branch, prefix)` if cheap to add.
+
+## MVP non-goals
+
+* Plugin / third-party `CompletionProvider` registry
+* Privacy mode UI (local / hybrid / offline productization)
+* Streaming refresh of an open completion menu
+* Multi-line completion
+* Agent-aware tool inventory
+* IDE / Cursor context bridges
+* Booting or warming `CodingCoreAgent`
+
+## Acceptance criteria
+
+1. `fj __complete` with empty query returns task-like candidates without starting an agent.
+2. Partial prefix (e.g. `rev`) returns history and/or LLM continuations.
+3. `fj --<TAB>` returns flag completions without LLM.
+4. With only `default` router role configured, completion still works via fast→default fallback.
+5. LLM timeout or offline endpoint does not hang the shell; local candidates still appear.
+6. Selecting a multi-word candidate in zsh/bash fills the full query string.
+
+## Implementation notes
+
+* Keep completion imports lazy so normal `fj <query>` path stays unchanged.
+* Prefer sync-friendly orchestration with a bounded async LLM call (or `asyncio.wait_for`).
+* History store: dedicated file/SQLite under `~/.soothe/` (not LangGraph checkpoints).
+* Shell scripts must quote / use `compadd -U` (zsh) so spaces in candidates survive.
+
+---
+
+# Full Platform Design (Post-MVP)
+
+Sections below describe the longer-term completion platform. Implement after MVP acceptance.
 
 # High-Level Architecture
 
@@ -272,6 +446,8 @@ class CompletionContext:
 
 Not every provider uses every field.
 
+MVP uses the slim subset documented above.
+
 ---
 
 # Context Providers
@@ -447,6 +623,8 @@ Output
 ```
 Top N predicted user intents
 ```
+
+**Implementation note:** use `SootheConfig.create_chat_model("fast")`, never the coding agent.
 
 ---
 
@@ -724,6 +902,8 @@ PluginProvider
 
 Third-party plugins register new providers.
 
+Post-MVP.
+
 ---
 
 # Privacy Modes
@@ -880,6 +1060,6 @@ The experience feels less like navigating a CLI grammar and more like interactin
 4. **Fast by default**: rely on caching, asynchronous refresh, and lightweight reranking to keep perceived latency low.
 5. **Privacy by choice**: support local-only, hybrid, and cloud-backed completion.
 6. **Extensible**: allow plugins to add context sources, candidate providers, and ranking signals without changing the core engine.
+7. **Agent-free completion path**: inference via soothe-nano `create_chat_model("fast")` only — never boot `CodingCoreAgent` for Tab.
 
 This architecture positions `fj` not as another CLI with shell completion, but as an **AI-native command prediction platform**, where pressing **Tab** surfaces the most probable next task rather than merely the next valid argument.
-

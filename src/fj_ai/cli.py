@@ -10,17 +10,15 @@ from pathlib import Path
 from typing import Any
 
 from fj_ai import __version__
-from fj_ai.agent import build_agent, open_sqlite_checkpointer
-from fj_ai.config import default_config_path, load_config
+from fj_ai.argv import split_argv
 from fj_ai.logging_setup import configure_cli_logging
-from fj_ai.setup_cmd import run_setup
-from fj_ai.stream import invoke_query, stream_query
 
 USAGE = """\
 fj — coding agent CLI (soothe-nano)
 
 Usage:
   fj setup
+  fj completion zsh|bash
   fj <query...>
   fj [options] [--] <query...>
 
@@ -28,6 +26,7 @@ Examples:
   fj who is your name
   fj 修改这个文件。
   fj explain how asyncio works in this repo
+  eval "$(fj completion zsh)"
 
 Everything after options is joined as the query (any Unicode).
 Use ``--`` to force the rest of the line into the query (including leading dashes).
@@ -52,7 +51,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "-c",
         "--config",
         metavar="PATH",
-        help=f"nano.yml path (default: {default_config_path()})",
+        help="nano.yml path (default: ~/.soothe/config/nano.yml)",
     )
     parser.add_argument(
         "-t",
@@ -80,44 +79,6 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def split_argv(argv: list[str]) -> tuple[list[str], list[str]]:
-    """Split argv into (option_tokens, query_tokens).
-
-    Options are peeled from the left. After ``--``, or the first non-option
-    token, the remainder is the query (preserving spaces when rejoined).
-    """
-    options: list[str] = []
-    i = 0
-    value_flags = {"-c", "--config", "-t", "--thread", "-w", "--workspace"}
-    while i < len(argv):
-        tok = argv[i]
-        if tok == "--":
-            return options, argv[i + 1 :]
-        if tok in {"-h", "--help", "-V", "--version", "--no-stream", "-v", "--verbose"}:
-            options.append(tok)
-            i += 1
-            continue
-        if tok in value_flags:
-            options.append(tok)
-            if i + 1 < len(argv):
-                options.append(argv[i + 1])
-                i += 2
-            else:
-                i += 1
-            continue
-        if (
-            tok.startswith("--config=")
-            or tok.startswith("--thread=")
-            or tok.startswith("--workspace=")
-        ):
-            options.append(tok)
-            i += 1
-            continue
-        # First non-option token starts the query (may include leading dashes).
-        return options, argv[i:]
-    return options, []
-
-
 def _build_setup_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fj setup",
@@ -127,7 +88,7 @@ def _build_setup_parser() -> argparse.ArgumentParser:
         "-c",
         "--config",
         metavar="PATH",
-        help=f"nano.yml path (default: {default_config_path()})",
+        help="nano.yml path (default: ~/.soothe/config/nano.yml)",
     )
     return parser
 
@@ -145,6 +106,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         setup_args = _build_setup_parser().parse_args(raw[1:])
         setup_args.query_text = ""
         return _namespace_with_command(setup_args, "setup")
+    if raw and raw[0] == "__complete":
+        ns = argparse.Namespace(query_text="", complete_argv=raw[1:])
+        return _namespace_with_command(ns, "__complete")
+    if raw and raw[0] == "completion":
+        ns = argparse.Namespace(query_text="", completion_argv=raw[1:])
+        return _namespace_with_command(ns, "completion")
 
     option_tokens, query_tokens = split_argv(raw)
     args = _build_parser().parse_args(option_tokens)
@@ -156,6 +123,11 @@ async def run_async(args: argparse.Namespace) -> int:
     if not args.query_text:
         sys.stderr.write(USAGE)
         return 2
+
+    # Lazy: keep ``fj __complete`` / setup free of agent import cost.
+    from fj_ai.agent import build_agent, open_sqlite_checkpointer
+    from fj_ai.config import load_config
+    from fj_ai.stream import invoke_query, stream_query
 
     try:
         config = load_config(args.config)
@@ -191,6 +163,13 @@ async def run_async(args: argparse.Namespace) -> int:
     except Exception as exc:
         sys.stderr.write(f"error: {type(exc).__name__}: {exc}\n")
         return 1
+
+    try:
+        from fj_ai.completion.history import append_history
+
+        append_history(args.query_text)
+    except Exception:
+        pass
     return 0
 
 
@@ -198,9 +177,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         configure_cli_logging()
         args = parse_args(argv)
-        # Keep interactive setup off the event loop so Ctrl+C exits cleanly.
+        # Keep interactive setup / completion off the event loop so Ctrl+C exits cleanly.
         if args.command == "setup":
+            from fj_ai.setup_cmd import run_setup
+
             return run_setup(getattr(args, "config", None))
+        if args.command == "__complete":
+            from fj_ai.completion.cmd import run_complete
+
+            return run_complete(getattr(args, "complete_argv", []))
+        if args.command == "completion":
+            from fj_ai.completion.cmd import run_completion_script
+
+            return run_completion_script(getattr(args, "completion_argv", []))
         return asyncio.run(run_async(args))
     except KeyboardInterrupt:
         sys.stderr.write("\ninterrupted\n")
