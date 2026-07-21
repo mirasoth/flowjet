@@ -120,7 +120,15 @@ If `fast` is omitted, completion falls back to `default`.
 
 **Note:** Tab only works when `fj` is resolvable for the same command you type
 (on `PATH`, or as an absolute/venv path). If completion is not installed or
-`fj` is missing, Tab falls through silently.## Add skills
+`fj` is missing, Tab falls through silently.
+
+## Builtin skills
+
+fj ships AgentSkills under `fj_ai/builtin_skills/` (planning, TDD, debugging,
+document tools, and more) and registers them with soothe-nano on startup.
+They appear in progressive skill discovery alongside nano’s own builtins.
+
+## Add skills
 
 Point nano at skill folders (`SKILL.md` + frontmatter) in `nano.yml`:
 
@@ -128,16 +136,16 @@ Point nano at skill folders (`SKILL.md` + frontmatter) in `nano.yml`:
 skills:
   - ~/.soothe/skills/my-reviewer
   - ./skills/deploy
+
+# Or register a whole package root of builtins:
+builtin_skill_roots:
+  - ./my-package/builtin_skills
 ```
 
 ```text
 ~/.soothe/skills/my-reviewer/
   SKILL.md
 ```
-
-## Powered by
-
-**fj** is built on [soothe-nano](https://github.com/mirasoth/soothe-nano) — tools, skills, MCP, subagents, and progressive loading, with SQLite persistence.
 
 ```markdown
 ---
@@ -151,6 +159,10 @@ When asked to review code, check for ...
 ```
 
 Progressive skills are on by default (compact catalog + load on demand). Tune under `progressive_skills:` in `nano.yml`.
+
+## Powered by
+
+**fj** is built on [soothe-nano](https://github.com/mirasoth/soothe-nano) — tools, skills, MCP, subagents, and progressive loading, with SQLite persistence.
 
 ## Add MCP servers
 
@@ -201,6 +213,11 @@ For a full TUI coding agent from the same stack, see [mirasoth/soothe](https://g
 
 ## Development
 
+Requires a sibling [soothe](https://github.com/mirasoth/soothe) checkout at
+`../soothe` (see `[tool.uv.sources]` in `pyproject.toml`) until
+`soothe-nano>=0.9.9` is on PyPI — then remove the path source and lock against
+the registry.
+
 ```bash
 git clone https://github.com/caesar0301/fj-ai.git
 cd fj-ai
@@ -208,19 +225,19 @@ make sync-dev
 make test
 make lint
 
-# optional local soothe-nano:
-#   uv add --editable ../soothe/packages/soothe-nano
 uv run fj who is your name
 ```
 
 ```text
 src/fj_ai/
-  cli.py         # argv → query / setup / completion
-  config.py      # nano.yml loader
-  agent.py       # create_nano_agent + sqlite
-  stream.py      # stdout streaming
-  completion/    # Tab intent completion (fast model, no agent)
-  shell/         # zsh/bash completion scripts
+  agent.py          # create_nano_agent + sqlite + fj defaults
+  builtin_skills/   # AgentSkills tree (registered at startup)
+  cli.py            # argv → query / setup / completion
+  config.py         # nano.yml loader
+  skills.py         # register_fj_builtin_skills()
+  stream.py         # stdout streaming
+  completion/       # Tab intent completion (fast model, no agent)
+  shell/            # zsh/bash completion scripts
 nano.yml
 .github/workflows/
   ci.yml

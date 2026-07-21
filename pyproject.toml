@@ -25,7 +25,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "soothe-nano>=0.9.8,<1.0.0",
+    "soothe-nano>=0.9.9,<1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -51,6 +51,11 @@ constraint-dependencies = [
     "cryptography>=45,<46; platform_machine == 'x86_64' and sys_platform == 'darwin'",
 ]
 
+# Local monorepo: sibling soothe checkout. Remove before publishing fj when
+# soothe-nano 0.9.9+ is on PyPI.
+[tool.uv.sources]
+soothe-nano = { path = "../soothe/packages/soothe-nano", editable = true }
+
 [project.scripts]
 fj = "fj_ai.cli:main"
 
@@ -65,14 +70,17 @@ packages = ["src/fj_ai"]
 [tool.hatch.build.targets.sdist]
 include = ["src/fj_ai/", "nano.yml", "README.md", "LICENSE", "docs/completion-design.md"]
 
-# Ensure non-Python shell completion scripts ship in the wheel.
+# Ensure non-Python shell completion scripts and builtin skills ship in the wheel.
 [tool.hatch.build.targets.wheel.force-include]
 "src/fj_ai/shell/_fj.zsh" = "fj_ai/shell/_fj.zsh"
 "src/fj_ai/shell/fj.bash" = "fj_ai/shell/fj.bash"
+"src/fj_ai/builtin_skills" = "fj_ai/builtin_skills"
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# AgentSkills scripts are third-party / skill-local style; keep them out of package lint.
+extend-exclude = ["src/fj_ai/builtin_skills"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
