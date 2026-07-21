@@ -1238,7 +1238,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3.0" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.0" },
-    { name = "soothe-nano", specifier = ">=0.9.5,<1.0.0" },
+    { name = "soothe-nano", specifier = ">=0.9.6,<1.0.0" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=5.0.0" },
 ]
 provides-extras = ["dev"]
@@ -7621,7 +7621,7 @@ wheels = [
 
 [[package]]
 name = "soothe-nano"
-version = "0.9.5"
+version = "0.9.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -7670,9 +7670,9 @@ dependencies = [
     { name = "watchdog" },
     { name = "wizsearch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ac/79/be394e0cbbac5896fba7fc1a340bb049a7e44d9932e89057b144c8a8b4e5/soothe_nano-0.9.5.tar.gz", hash = "sha256:c5380fb5af1df67f675adc1a0ecbdaff8cce229dedbc8fd21bab9894b9c3c8d0", size = 466820, upload-time = "2026-07-20T17:12:42.64Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/01/0ab80641a232b59c332232064e0b45927fe696cd3a214fdd92a36a0c45fa/soothe_nano-0.9.6.tar.gz", hash = "sha256:fbf2ae2343374dde5f51eff382dcdbc64b6c2dcfa39f2a18ce1cea21f542b43a", size = 430389, upload-time = "2026-07-21T03:52:55.385Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a6/fc/404807621825d22be01f26eafee089a15744ed87bd1e2c025dafd84f28d7/soothe_nano-0.9.5-py3-none-any.whl", hash = "sha256:01900a19417055daec140ab71ef3b08fb487284d8161d3a26f93589b3477995e", size = 625640, upload-time = "2026-07-20T17:12:41.024Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/23/2a17094e09de6349ad42ce91d2d10d40b0fdcefcec50387eec17e2ff087c/soothe_nano-0.9.6-py3-none-any.whl", hash = "sha256:9fbaaa72fe4ebca599fb64684f06fe0cb48d7b9eef9d56902e6c0cac180352f0", size = 577046, upload-time = "2026-07-21T03:52:53.893Z" },
 ]
 
 [[package]]
