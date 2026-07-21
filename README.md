@@ -1,20 +1,25 @@
 # fj
 
-**fj** is a one-shot coding-agent CLI — everything after the command is the query:
+[![PyPI version](https://img.shields.io/pypi/v/fj-ai.svg)](https://pypi.org/p/fj-ai)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/fj-ai.svg)](https://pypi.org/p/fj-ai)
+[![CI](https://github.com/caesar0301/fj-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/caesar0301/fj-ai/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+**fj** is a one-shot coding-agent CLI for the terminal. Type a question, get an answer — no UI, no context-switching:
 
 ```bash
 fj explain this repo
-fj -f what did we decide last time?
 fj summarize README.md
+fj -f what did we decide last time?
 ```
 
-It embeds [soothe-nano](https://github.com/mirasoth/soothe-nano) — tools, skills, MCP, subagents, and progressive loading — with SQLite persistence.
+It runs on [soothe-nano](https://github.com/mirasoth/soothe-nano) — tools, skills, MCP, subagents, and progressive loading — with SQLite persistence so every thread is resumable.
 
-> Package name: **fj-ai**. Runtime: **soothe-nano**.
+> Package: **fj-ai** · Runtime: **soothe-nano**
 
-## Quick start
+---
 
-### 1. Install
+## Install
 
 ```bash
 pip install fj-ai
@@ -24,15 +29,17 @@ uv tool install fj-ai
 
 Requires Python 3.11+.
 
-### 2. Config
+## Configure
+
+**Option A — Local model (guided):**
 
 ```bash
 fj setup
 ```
 
-`fj setup` is a guided setup for a local OpenAI-compatible server (Ollama, LM Studio, vLLM, ...) — it updates only endpoint/key/model basics in `~/.soothe/config/nano.yml` and keeps other keys intact.
+Walks you through an OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, …) and writes the basics to `~/.soothe/config/nano.yml`.
 
-**Cloud (no config file):**
+**Option B — Cloud (no config file):**
 
 ```bash
 export OPENAI_API_KEY=sk-...
@@ -41,74 +48,59 @@ fj summarize README.md
 
 Missing `nano.yml` falls back to `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 
-### 3. Run
+## Run
 
 ```bash
 fj who are you
 fj list Python files in this directory
+fj refactor the parser to use dataclasses
 ```
 
-## Usage
+---
+
+## Conversation
+
+Threads persist across runs in SQLite. Continue the latest, jump to a specific one, or list them:
+
+```bash
+fj -f and now add tests          # continue latest active thread
+fj -t abc123 continue from here  # continue a specific thread
+fj -l                            # list recent threads
+```
+
+## Flags
 
 ```text
-fj setup
-fj completion zsh|bash
 fj [options] [--] <query...>
 ```
 
 | Flag | Meaning |
 |------|---------|
-| `-c PATH` / `--config` | Alternate `nano.yml` |
-| `-t ID` / `--thread` | Alone: pin active thread; with query: continue it |
 | `-f` / `--follow` | Continue the latest active thread |
-| `-l` / `--list` | List latest threads (newest first; default 20) |
-| `-n NUM` | Threads to list with `-l` (`0` = all); requires `-l` |
+| `-t ID` / `--thread` | Continue (or pin) a specific thread |
+| `-l` / `--list` | List recent threads (newest first) |
+| `-n NUM` | How many threads `-l` shows (`0` = all) |
+| `-c PATH` / `--config` | Use an alternate `nano.yml` |
 | `-w DIR` / `--workspace` | Workspace root |
-| `--no-stream` | Wait for the full answer instead of streaming tokens |
-| `-v` / `--verbose` | Mirror tool calls and custom events on stderr |
-| `-V` / `--version` | Version |
-| `--` | Force remaining argv into the query |
+| `--no-stream` | Wait for the full answer instead of streaming |
+| `-v` / `--verbose` | Mirror tool calls on stderr |
 
-**Query modes:**
-
-```text
-fj QUERY...              # start a new thread (default)
-fj -f QUERY...           # continue the latest active thread
-fj -t ID QUERY...        # continue a specific thread
-fj -t ID                 # pin thread as active (no query)
-```
-
-- Queries start a **new thread** by default; use `-f` to continue the latest or `-t` to continue/pin a specific one.
-- `-f` and `-t` are mutually exclusive; `-n` requires `-l`; `-l` takes no query.
-- One query per thread at a time; different threads may run concurrently.
-- With `-v`, `fj` prints the thread `<id>` on stderr before the run.
-
-### Shell completion
+Shell completion (AI-assisted, predicts natural-language intents, not just flags):
 
 ```bash
-# zsh
-eval "$(fj completion zsh)"
-# bash
-eval "$(fj completion bash)"
-# persist in ~/.zshrc / ~/.bashrc
+eval "$(fj completion zsh)"     # or: fj completion bash
 ```
 
-Tab completion predicts natural-language intents (not only flags) using the router **`fast`** model from `nano.yml` — it does not start the coding agent. If `fast` is omitted, it falls back to `default`.
+---
 
-## Defaults
 
-| Concern | Default |
-|--------|---------|
-| Config | `~/.soothe/config/nano.yml` (`SOOTHE_HOME` overrides home) |
-| Checkpoints | SQLite at `~/.soothe/data/soothe_checkpoints.db` |
-| Workspace | CWD (`SOOTHE_WORKSPACE`) |
-| Output | Progress on stdout line 1 (tools + AI narration); final answer printed once (`--no-stream` hides narration preview) |
+---
 
-## Builtin skills
+## Extend
 
-fj ships AgentSkills under `fj_ai/builtin_skills/` (planning, TDD, debugging, document tools, and more) and registers them with soothe-nano on startup. They appear in progressive skill discovery alongside nano’s own builtins.
+### Skills
 
-Add your own by pointing `nano.yml` at skill folders (`SKILL.md` + frontmatter):
+fj ships AgentSkills (planning, TDD, debugging, document tools, MCP builder, and more) and supports your own via `nano.yml`:
 
 ```yaml
 skills:
@@ -116,28 +108,23 @@ skills:
   - ./skills/deploy
 ```
 
-Progressive skills are on by default (compact catalog + load on demand). Tune under `progressive_skills:` in `nano.yml`.
+Each skill is a `SKILL.md` with frontmatter; progressive loading keeps the catalog compact and loads on demand.
 
-## MCP servers
+### MCP servers
+
+Connect any Model Context Protocol server:
 
 ```yaml
-mcp_builtins:
-  - playwright
-
 mcp_servers:
   - name: filesystem
     transport: stdio
     command: npx
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-    defer: true
-    enabled: true
 ```
 
 With `defer: true` (default), MCP tools activate on demand.
 
-## Powered by
-
-**fj** is built on [soothe-nano](https://github.com/mirasoth/soothe-nano) — tools, skills, MCP, subagents, and progressive loading, with SQLite persistence. For a full TUI coding agent from the same stack, see [mirasoth/soothe](https://github.com/mirasoth/soothe).
+---
 
 ## Development
 
@@ -149,8 +136,11 @@ make test
 make lint
 ```
 
-- **CI** — format, lint, tests on Python 3.11–3.13; build + `twine check`
-- **Release** — GitHub Release → PyPI
+CI runs format, lint, and tests on Python 3.11–3.13; releases go GitHub Release → PyPI.
+
+## Powered by
+
+Built on [soothe-nano](https://github.com/mirasoth/soothe-nano). For a full TUI coding agent from the same stack, see [mirasoth/soothe](https://github.com/mirasoth/soothe).
 
 ## License
 
