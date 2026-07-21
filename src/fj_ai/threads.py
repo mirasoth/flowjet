@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
 
 _PREVIEW_LIMIT = 72
+
+
+class ConcurrentSessionError(RuntimeError):
+    """Raised when another ``fj`` process holds the active-thread session lock."""
 
 
 def _soothe_home() -> Path:
@@ -23,6 +29,11 @@ def _soothe_home() -> Path:
 def active_thread_path() -> Path:
     """Return ``~/.soothe/data/fj_active_thread`` (respects ``SOOTHE_HOME``)."""
     return _soothe_home() / "data" / "fj_active_thread"
+
+
+def active_thread_lock_path() -> Path:
+    """Return ``~/.soothe/data/fj_active_thread.lock`` (fcntl lock + owner pid)."""
+    return _soothe_home() / "data" / "fj_active_thread.lock"
 
 
 def read_active_thread_id(path: Path | None = None) -> str | None:
@@ -45,6 +56,78 @@ def write_active_thread_id(thread_id: str, path: Path | None = None) -> None:
 def new_thread_id() -> str:
     """Allocate a fresh ``fj-<uuid>`` thread id."""
     return f"fj-{uuid.uuid4()}"
+
+
+def _lock_holder_pid(lock_path: Path) -> int | None:
+    try:
+        text = lock_path.read_text(encoding="utf-8").strip().splitlines()
+    except OSError:
+        return None
+    if not text:
+        return None
+    try:
+        return int(text[0].strip())
+    except ValueError:
+        return None
+
+
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    else:
+        return True
+
+
+@contextlib.contextmanager
+def hold_session_lock(*, blocking: bool = False) -> Iterator[None]:
+    """Exclusive lock for the duration of an ``fj`` query (or reset).
+
+    Prevents concurrent CLIs from racing ``fj_active_thread`` and minting
+    divergent thread ids. Non-blocking by default: if another live ``fj`` holds
+    the lock, raises :class:`ConcurrentSessionError`.
+
+    Uses ``fcntl.flock`` (POSIX). The kernel releases the lock if the holder
+    exits, so stale locks after crashes are not sticky.
+    """
+    import fcntl
+
+    lock_path = active_thread_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+    flags = fcntl.LOCK_EX
+    if not blocking:
+        flags |= fcntl.LOCK_NB
+    try:
+        try:
+            fcntl.flock(fd, flags)
+        except BlockingIOError as exc:
+            holder = _lock_holder_pid(lock_path)
+            if holder is not None and _pid_is_alive(holder):
+                msg = (
+                    f"another fj process is already running (pid {holder}); "
+                    "wait for it to finish, or use -t <thread-id> / --reset"
+                )
+            else:
+                msg = (
+                    "another fj process is already running; "
+                    "wait for it to finish, or use -t <thread-id> / --reset"
+                )
+            raise ConcurrentSessionError(msg) from exc
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        os.write(fd, f"{os.getpid()}\n".encode())
+        os.fsync(fd)
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 @dataclass(frozen=True)

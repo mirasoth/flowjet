@@ -13,7 +13,7 @@ from soothe_nano.config import SootheConfig
 from soothe_nano.resolve import resolve_checkpointer
 
 from fj_ai.logging_setup import configure_cli_logging, silence_after_plugins
-from fj_ai.skills import register_fj_builtin_skills
+from fj_ai.skills import fj_core_skill_names, register_fj_builtin_skills
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,7 @@ def apply_fj_defaults(config: SootheConfig) -> SootheConfig:
     - SQLite checkpointer / durability
     - Disable soothe virtual mode (allow paths outside workspace)
     - Register fj package builtin skills
+    - Core listing = nano defaults + a few fj workflow skills (rest deferred)
     """
     register_fj_builtin_skills()
     durability = config.agent.protocols.durability.model_copy(
@@ -48,11 +49,17 @@ def apply_fj_defaults(config: SootheConfig) -> SootheConfig:
     agent = config.agent.model_copy(update={"protocols": protocols})
     security = config.security.model_copy(update={"allow_paths_outside_workspace": True})
     persistence = config.persistence.model_copy(update={"default_backend": "sqlite"})
+    progressive_skills = config.progressive_skills
+    if progressive_skills.core_skills is None:
+        progressive_skills = progressive_skills.model_copy(
+            update={"core_skills": fj_core_skill_names()}
+        )
     return config.model_copy(
         update={
             "agent": agent,
             "security": security,
             "persistence": persistence,
+            "progressive_skills": progressive_skills,
         }
     )
 

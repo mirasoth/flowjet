@@ -8,6 +8,22 @@ _REGISTERED = False
 
 BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent / "builtin_skills"
 
+# fj-only additions on top of soothe-nano's DEFAULT_CORE_SKILL_NAMES.
+# Nano defaults (weather, github, clawhub, skill-creator) come from nano itself.
+FJ_CORE_SKILL_NAMES: tuple[str, ...] = (
+    "brainstorming",
+    "requesting-code-review",
+    "systematic-debugging",
+    "using-superpowers",
+)
+
+
+def fj_core_skill_names() -> list[str]:
+    """Nano default core skills plus fj high-traffic workflow skills."""
+    from soothe_nano.skills.registry import DEFAULT_CORE_SKILL_NAMES
+
+    return sorted(DEFAULT_CORE_SKILL_NAMES | {n.lower() for n in FJ_CORE_SKILL_NAMES})
+
 
 def register_fj_builtin_skills() -> None:
     """Register ``fj_ai/builtin_skills`` as a soothe-nano builtin skill root.
