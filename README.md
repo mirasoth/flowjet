@@ -66,7 +66,7 @@ Missing `nano.yml` falls back to `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 | Config | `~/.soothe/config/nano.yml` (`SOOTHE_HOME` overrides home) |
 | Checkpoints | SQLite at `~/.soothe/data/soothe_checkpoints.db` |
 | Workspace | CWD (`SOOTHE_WORKSPACE`) |
-| Output | Progress on stdout line 1; final answer when done |
+| Output | Progress on stdout line 1; answer tokens stream by default (`--no-stream` for final-only) |
 
 ## Usage
 

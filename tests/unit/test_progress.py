@@ -11,6 +11,7 @@ from fj_ai.progress import (
     ProgressLine,
     format_args_preview,
     format_tool_activity,
+    format_tool_done,
     friendly_progress,
     friendly_tool_call,
     friendly_tool_result,
@@ -76,6 +77,18 @@ def test_format_args_preview_primary() -> None:
     assert "nano.yml" in preview
 
 
+def test_format_tool_done_error_includes_detail() -> None:
+    label, color = format_tool_done(
+        "wizsearch_search",
+        {"query": "fj-ai"},
+        is_error=True,
+        detail="unexpected argument 'limit'",
+    )
+    assert color == "red"
+    assert "Failed" in label
+    assert "limit" in label
+
+
 def test_progress_respects_width_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FJ_PROGRESS_WIDTH", "40")
     long_path = "/Users/chenxm/Workspace/fj-ai/src/fj_ai/" + ("very_long_dir/" * 8) + "cli.py"
@@ -123,6 +136,19 @@ def test_progress_line_ephemeral_clear() -> None:
     assert "Thinking" in buf.getvalue()
     line.clear()
     assert buf.getvalue().endswith("\033[2K") or "\033[2K" in buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_progress_line_release_skips_clear_on_stop() -> None:
+    buf = StringIO()
+    line = ProgressLine(buf, enabled=True, tick_seconds=0.05)
+    async with line:
+        line.update("Thinking…", color="cyan")
+        line.release()
+        before = buf.getvalue()
+        buf.write("Hello answer")
+    # stop() must not erase the answer with another clear sequence after it.
+    assert buf.getvalue() == before + "Hello answer"
 
 
 @pytest.mark.asyncio

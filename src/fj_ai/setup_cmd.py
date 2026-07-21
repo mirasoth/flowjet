@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - Windows
     tty = None  # type: ignore[assignment]
 
 import yaml
+from soothe_nano.config import _ENV_VAR_RE, _resolve_env
 
 from fj_ai.config import default_config_path
 
@@ -100,7 +101,9 @@ def _run_setup(config_path: str | None = None) -> int:
 
     sys.stdout.write("Fetching available models...\n")
     try:
-        models = fetch_models(endpoint, api_key)
+        resolved_endpoint = resolve_config_value(endpoint, field="API endpoint")
+        resolved_api_key = resolve_config_value(api_key, field="API key")
+        models = fetch_models(resolved_endpoint, resolved_api_key)
     except RuntimeError as exc:
         sys.stderr.write(f"error: {exc}\n")
         return 1
@@ -216,6 +219,19 @@ def choose_provider_interactive(providers: list[dict[str, Any]]) -> dict[str, An
         sys.stdout.write("Invalid selection. Try again.\n")
 
 
+def resolve_config_value(value: str, *, field: str) -> str:
+    """Expand ``${ENV_VAR}`` placeholders; raise if any remain unresolved."""
+    resolved = _resolve_env(value)
+    match = _ENV_VAR_RE.search(resolved)
+    if match:
+        env_name = match.group(1)
+        raise RuntimeError(
+            f"unresolved env var ${{{env_name}}} in {field}. "
+            f"Set {env_name} or enter a literal value."
+        )
+    return resolved
+
+
 def fetch_models(endpoint: str, api_key: str, timeout_s: float = 15.0) -> list[str]:
     """Fetch model ids from an OpenAI-compatible endpoint."""
     normalized = endpoint.rstrip("/")
@@ -225,14 +241,18 @@ def fetch_models(endpoint: str, api_key: str, timeout_s: float = 15.0) -> list[s
 
     last_error: str | None = None
     for url in candidates:
-        req = request.Request(
-            url=url,
-            method="GET",
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-        )
+        try:
+            req = request.Request(
+                url=url,
+                method="GET",
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+            )
+        except ValueError as exc:
+            last_error = f"{url} -> {exc}"
+            continue
         try:
             with request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310
                 raw = resp.read().decode("utf-8")

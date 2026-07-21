@@ -100,13 +100,14 @@ async def build_agent(
     *,
     workspace: Path | None = None,
     checkpointer: Any | None = None,
+    verbose: bool = False,
 ) -> CodingCoreAgent:
     """Build a full nano coding agent for the current workspace."""
-    configure_cli_logging()
+    configure_cli_logging(verbose=verbose)
     ensure_workspace(workspace)
     agent = create_nano_agent(apply_fj_defaults(config))
     # Plugin imports (e.g. browser_use) may still attach root console handlers.
-    silence_after_plugins()
+    silence_after_plugins(verbose=verbose)
     if checkpointer is not None:
         agent.graph.checkpointer = checkpointer
     return agent

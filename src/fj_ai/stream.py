@@ -1,4 +1,4 @@
-"""Stream agent events: ephemeral progress, then final answer only."""
+"""Stream agent events: ephemeral progress + live answer tokens by default."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any, TextIO
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from soothe_nano import CodingCoreAgent
 
+from fj_ai.errors import simplify_tool_error, tool_result_error_detail
 from fj_ai.progress import (
     ProgressLine,
     friendly_progress,
@@ -81,23 +82,96 @@ def accumulate_ai_text(current: str, message: AIMessage) -> str:
     return text
 
 
+class AnswerWriter:
+    """Buffer answer text and optionally emit tokens as they arrive."""
+
+    def __init__(
+        self,
+        stdout: TextIO,
+        status: ProgressLine,
+        *,
+        live: bool = True,
+    ) -> None:
+        self.buf = ""
+        self._stdout = stdout
+        self._status = status
+        self._live = live
+        self._emitted = ""
+        self._live_active = False
+
+    def set(self, new_buf: str) -> None:
+        """Replace the answer buffer; stream any new suffix when ``live``."""
+        self.buf = new_buf
+        if not self._live or not new_buf:
+            if new_buf and not self._live:
+                self._status.update("Writing answer…", color="green")
+            return
+
+        if not self._live_active:
+            # Hand stdout from the spinner to the answer stream.
+            self._status.release()
+            self._live_active = True
+
+        if new_buf.startswith(self._emitted):
+            delta = new_buf[len(self._emitted) :]
+        elif self._emitted.startswith(new_buf):
+            delta = ""
+        else:
+            # Divergent replace after partial emit — start a new paragraph.
+            if self._emitted and not self._emitted.endswith("\n"):
+                self._stdout.write("\n")
+            delta = new_buf
+            self._emitted = ""
+
+        if delta:
+            self._stdout.write(delta)
+            self._stdout.flush()
+        self._emitted = new_buf
+
+    def reset_for_tools(self) -> None:
+        """Drop buffered answer when a tool call starts.
+
+        Already-emitted live text stays on screen; progress resumes on a new line.
+        """
+        if self._live and self._live_active and self._emitted and not self._emitted.endswith("\n"):
+            self._stdout.write("\n")
+            self._stdout.flush()
+        self.buf = ""
+        self._emitted = ""
+        self._live_active = False
+
+    def finish(self) -> str:
+        """Flush remaining output and return the final answer buffer."""
+        if not self._live:
+            if self.buf:
+                self._stdout.write(self.buf)
+                if not self.buf.endswith("\n"):
+                    self._stdout.write("\n")
+                self._stdout.flush()
+        elif self._emitted and not self._emitted.endswith("\n"):
+            self._stdout.write("\n")
+            self._stdout.flush()
+        return self.buf
+
+
 async def stream_query(
     agent: CodingCoreAgent,
     query: str,
     *,
     thread_id: str,
     show_tool_calls: bool = False,
+    live_answer: bool = True,
     out: TextIO | None = None,
     err: TextIO | None = None,
     progress: ProgressLine | None = None,
 ) -> str:
-    """Run a query with ephemeral progress; print only the final answer."""
+    """Run a query with ephemeral progress and a streamed (or final) answer."""
     stdout = out or sys.stdout
     stderr = err or sys.stderr
     status = progress if progress is not None else ProgressLine(stdout)
     messages = [HumanMessage(content=query)]
     config = {"configurable": {"thread_id": thread_id}}
-    answer_buf = ""
+    answer = AnswerWriter(stdout, status, live=live_answer)
     tool_args = ToolCallArgAccumulator()
     last_tool_name: str | None = None
     last_tool_args: dict[str, Any] = {}
@@ -158,7 +232,7 @@ async def stream_query(
                         # and refresh the progress line as args become available.
                         updates = tool_args.ingest_message(message_obj)
                         if updates:
-                            answer_buf = ""
+                            answer.reset_for_tools()
                             for tc_id, name, args in updates:
                                 last_tool_name = name
                                 last_tool_args = args
@@ -174,9 +248,7 @@ async def stream_query(
                             getattr(message_obj, "tool_calls", None)
                             or getattr(message_obj, "tool_call_chunks", None)
                         ):
-                            answer_buf = accumulate_ai_text(answer_buf, message_obj)
-                            if answer_buf:
-                                status.update("Writing answer…", color="green")
+                            answer.set(accumulate_ai_text(answer.buf, message_obj))
 
                     elif isinstance(message_obj, ToolMessage):
                         tc_id = getattr(message_obj, "tool_call_id", None)
@@ -189,27 +261,26 @@ async def stream_query(
                         if name:
                             last_tool_name = str(name)
                         status_code = getattr(message_obj, "status", None)
-                        is_error = status_code == "error"
+                        err_detail = tool_result_error_detail(message_obj.content)
+                        is_error = status_code == "error" or err_detail is not None
+                        short_err = simplify_tool_error(err_detail) if err_detail else None
                         label, color = friendly_tool_result(
                             str(name) if name else None,
                             tc_args,
                             is_error=is_error,
+                            detail=short_err,
                         )
                         status.update(label, color=color)
                         last_progress_key = ""
                         if show_tool_calls:
-                            preview = _truncate(_format_content(message_obj.content))
-                            stderr.write(f"  [result] {preview}\n")
+                            preview = short_err or _truncate(_format_content(message_obj.content))
+                            tag = "error" if is_error else "result"
+                            stderr.write(f"  [{tag}] {preview}\n")
                             stderr.flush()
             except Exception:
                 raise
 
-    if answer_buf:
-        stdout.write(answer_buf)
-        if not answer_buf.endswith("\n"):
-            stdout.write("\n")
-        stdout.flush()
-    return answer_buf
+    return answer.finish()
 
 
 async def invoke_query(
@@ -220,12 +291,13 @@ async def invoke_query(
     out: TextIO | None = None,
     progress: ProgressLine | None = None,
 ) -> str:
-    """Non-streaming invoke with the same ephemeral progress + final-only output."""
+    """Non-streaming answer write: progress until done, then print the final text."""
     return await stream_query(
         agent,
         query,
         thread_id=thread_id,
         show_tool_calls=False,
+        live_answer=False,
         out=out,
         progress=progress,
     )

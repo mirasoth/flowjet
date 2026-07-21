@@ -361,6 +361,7 @@ def format_tool_done(
     args: Any | None = None,
     *,
     is_error: bool = False,
+    detail: str | None = None,
 ) -> tuple[str, str]:
     """Status after a tool returns — keep context while model thinks."""
     name = (tool_name or "tool").strip() or "tool"
@@ -368,7 +369,10 @@ def format_tool_done(
     display = _display_name(name)
     summary = f"{display}({preview})" if preview else display
     if is_error:
-        return _fit(f"Failed {summary}"), "red"
+        label = f"Failed {summary}"
+        if detail:
+            label = f"{label} · {_truncate(_compact(detail), 36)}"
+        return _fit(label), "red"
     return _fit(f"Thinking… · after {summary}"), "cyan"
 
 
@@ -516,8 +520,9 @@ def friendly_tool_result(
     args: Any | None = None,
     *,
     is_error: bool = False,
+    detail: str | None = None,
 ) -> tuple[str, str]:
-    return format_tool_done(name, args, is_error=is_error)
+    return format_tool_done(name, args, is_error=is_error, detail=detail)
 
 
 class ProgressLine:
@@ -545,6 +550,8 @@ class ProgressLine:
         self._style = "cyan"
         self._tick_seconds = tick_seconds
         self._task: asyncio.Task[None] | None = None
+        # When True, stdout belongs to the answer stream; stop() must not clear.
+        self._released = False
 
     @property
     def enabled(self) -> bool:
@@ -566,7 +573,7 @@ class ProgressLine:
         self._task = asyncio.create_task(self._spin(), name="fj-progress-spinner")
 
     async def stop(self) -> None:
-        """Stop the ticker and clear the line."""
+        """Stop the ticker; clear the line unless handed off to answer output."""
         task = self._task
         self._task = None
         if task is not None:
@@ -575,13 +582,14 @@ class ProgressLine:
                 await task
             except asyncio.CancelledError:
                 pass
-        self.clear()
+        if not self._released:
+            self.clear()
 
     async def _spin(self) -> None:
         try:
             while True:
                 await asyncio.sleep(self._tick_seconds)
-                if self._active:
+                if self._active and not self._released:
                     self._paint()
         except asyncio.CancelledError:
             raise
@@ -589,11 +597,26 @@ class ProgressLine:
     def update(self, message: str, *, color: str = "cyan") -> None:
         if not self._enabled:
             return
+        # Reclaim the line after a live-answer handoff (e.g. tool call mid-run).
+        self._released = False
         self._message = _fit(message.strip() or "Working…")
         self._style = color
         self._active = True
         self._paint()
         self._ensure_ticker()
+
+    def release(self) -> None:
+        """Clear the progress line once and hand stdout to the answer stream."""
+        if self._released:
+            return
+        self._released = True
+        self._active = False
+        if not self._enabled:
+            return
+        if self._frame > 0 or self._message:
+            self._stream.write("\r\033[2K")
+            self._stream.flush()
+        self._message = ""
 
     def _ensure_ticker(self) -> None:
         if not self._enabled or self._task is not None:
@@ -605,7 +628,7 @@ class ProgressLine:
         self._task = loop.create_task(self._spin(), name="fj-progress-spinner")
 
     def _paint(self) -> None:
-        if not self._enabled:
+        if not self._enabled or self._released:
             return
         text = _fit(self._message)
         frame = _SPINNER[self._frame % len(_SPINNER)]
@@ -620,7 +643,7 @@ class ProgressLine:
 
     def clear(self) -> None:
         self._active = False
-        if not self._enabled:
+        if not self._enabled or self._released:
             return
         if self._frame > 0 or self._message:
             self._stream.write("\r\033[2K")

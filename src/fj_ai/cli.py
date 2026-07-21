@@ -147,6 +147,7 @@ async def run_async(args: argparse.Namespace) -> int:
                 config,
                 workspace=workspace,
                 checkpointer=checkpointer,
+                verbose=args.verbose,
             )
             if args.no_stream:
                 await invoke_query(agent, args.query_text, thread_id=thread_id)
@@ -161,7 +162,9 @@ async def run_async(args: argparse.Namespace) -> int:
         sys.stderr.write("\ninterrupted\n")
         return 130
     except Exception as exc:
-        sys.stderr.write(f"error: {type(exc).__name__}: {exc}\n")
+        from fj_ai.errors import write_cli_error
+
+        write_cli_error(exc, verbose=args.verbose)
         return 1
 
     try:
@@ -177,6 +180,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         configure_cli_logging()
         args = parse_args(argv)
+        # Re-apply after parse so ``-v`` can enable compact console warnings.
+        if getattr(args, "verbose", False):
+            configure_cli_logging(verbose=True)
         # Keep interactive setup / completion off the event loop so Ctrl+C exits cleanly.
         if args.command == "setup":
             from fj_ai.setup_cmd import run_setup

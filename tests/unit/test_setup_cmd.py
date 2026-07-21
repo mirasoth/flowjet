@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from fj_ai.setup_cmd import (
     DEFAULT_NEW_PROVIDER_NAME,
     DEFAULT_PROVIDER_NAME,
@@ -11,6 +13,7 @@ from fj_ai.setup_cmd import (
     _prompt_secret_with_default,
     choose_model_interactive,
     choose_provider_interactive,
+    resolve_config_value,
     suggest_provider_name,
     update_config_for_model,
 )
@@ -104,6 +107,57 @@ def test_update_config_uses_provider_prefix_and_activates_current_profile() -> N
     # Preserve sibling router roles.
     assert production["router"]["fast"] == "dashscope:qwen3.6-flash"
     assert production["router"]["think"] == "dashscope:glm-5.2"
+
+
+def test_update_config_preserves_env_placeholders() -> None:
+    existing: dict[str, Any] = {
+        "providers": [
+            {
+                "name": "dashscope",
+                "provider_type": "openai",
+                "api_base_url": "${DASHSCOPE_BASE_URL}",
+                "api_key": "${DASHSCOPE_API_KEY}",
+                "models": ["glm-5.2"],
+            }
+        ],
+        "active_router_profile": "default",
+    }
+    updated = update_config_for_model(
+        existing,
+        provider_name="dashscope",
+        endpoint="${DASHSCOPE_BASE_URL}",
+        api_key="${DASHSCOPE_API_KEY}",
+        model="qwen3.7-plus",
+    )
+    provider = next(p for p in updated["providers"] if p["name"] == "dashscope")
+    assert provider["api_base_url"] == "${DASHSCOPE_BASE_URL}"
+    assert provider["api_key"] == "${DASHSCOPE_API_KEY}"
+    assert provider["models"] == ["qwen3.7-plus", "glm-5.2"]
+
+
+def test_resolve_config_value_expands_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DASHSCOPE_BASE_URL", "https://dashscope.example/v1")
+    assert (
+        resolve_config_value("${DASHSCOPE_BASE_URL}", field="API endpoint")
+        == "https://dashscope.example/v1"
+    )
+    assert (
+        resolve_config_value("prefix-${DASHSCOPE_BASE_URL}-suffix", field="API endpoint")
+        == "prefix-https://dashscope.example/v1-suffix"
+    )
+
+
+def test_resolve_config_value_missing_env_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MISSING_SETUP_VAR", raising=False)
+    with pytest.raises(RuntimeError, match="unresolved env var \\$\\{MISSING_SETUP_VAR\\}"):
+        resolve_config_value("${MISSING_SETUP_VAR}", field="API key")
+
+
+def test_fetch_models_invalid_url_raises_runtime_error() -> None:
+    from fj_ai.setup_cmd import fetch_models
+
+    with pytest.raises(RuntimeError, match="unknown url type"):
+        fetch_models("${DASHSCOPE_BASE_URL}", "sk-test")
 
 
 def test_suggest_provider_name_from_endpoint() -> None:
@@ -201,6 +255,51 @@ def test_choose_model_interactive_eof_cancels(monkeypatch) -> None:  # type: ign
 
     monkeypatch.setattr("builtins.input", boom)
     assert choose_model_interactive(["a", "b"]) is None
+
+
+def test_run_setup_resolves_env_before_fetch(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai.setup_cmd import _run_setup
+
+    cfg_path = tmp_path / "nano.yml"
+    cfg_path.write_text(
+        """
+providers:
+  - name: dashscope
+    provider_type: openai
+    api_base_url: "${DASHSCOPE_BASE_URL}"
+    api_key: "${DASHSCOPE_API_KEY}"
+    models: [glm-5.2]
+router_profiles:
+  - name: default
+    router:
+      default: "dashscope:glm-5.2"
+active_router_profile: default
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DASHSCOPE_BASE_URL", "https://dashscope.example/v1")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-from-env")
+
+    answers = iter(["1", "", "1"])  # provider, endpoint default, model
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr("fj_ai.setup_cmd._read_secret_masked", lambda _prompt: "")
+
+    seen: dict[str, str] = {}
+
+    def fake_fetch(endpoint: str, api_key: str, timeout_s: float = 15.0) -> list[str]:
+        seen["endpoint"] = endpoint
+        seen["api_key"] = api_key
+        return ["glm-5.2", "qwen3.7-plus"]
+
+    monkeypatch.setattr("fj_ai.setup_cmd.fetch_models", fake_fetch)
+    assert _run_setup(str(cfg_path)) == 0
+    assert seen == {
+        "endpoint": "https://dashscope.example/v1",
+        "api_key": "sk-from-env",
+    }
+    saved = cfg_path.read_text(encoding="utf-8")
+    assert "${DASHSCOPE_BASE_URL}" in saved
+    assert "${DASHSCOPE_API_KEY}" in saved
 
 
 def test_run_setup_keyboard_interrupt_is_clean(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
