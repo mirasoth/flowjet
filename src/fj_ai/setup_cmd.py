@@ -205,7 +205,9 @@ def choose_model_interactive(models: list[str], page_size: int = 20) -> str | No
             continue
         if choice.startswith("/"):
             active_filter = choice[1:].strip().lower()
-            visible = [m for m in models if active_filter in m.lower()] if active_filter else list(models)
+            visible = (
+                [m for m in models if active_filter in m.lower()] if active_filter else list(models)
+            )
             page = 0
             continue
         if choice.isdigit():
