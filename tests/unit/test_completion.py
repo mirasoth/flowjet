@@ -8,11 +8,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from fj_ai import cli
-from fj_ai.completion.context import build_context
-from fj_ai.completion.engine import Candidate, complete, merge_candidates
-from fj_ai.completion.history import append_history, read_history
-from fj_ai.completion.llm import parse_candidates
-from fj_ai.completion.static import static_candidates
+from fj_ai.completion.context import append_history, build_context, read_history
+from fj_ai.completion.engine import (
+    Candidate,
+    complete,
+    merge_candidates,
+    parse_candidates,
+    static_candidates,
+)
 
 
 def test_static_flags() -> None:
@@ -125,7 +128,7 @@ def test_main_complete_no_agent(
 
     # Agent is imported lazily inside run_async; patch the module if loaded.
     import fj_ai.agent as agent_mod
-    import fj_ai.completion.history as history_mod
+    import fj_ai.completion.context as history_mod
 
     monkeypatch.setattr(agent_mod, "build_agent", boom_agent)
     monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", boom_agent)
@@ -137,7 +140,7 @@ def test_main_complete_no_agent(
 
 
 def test_completion_script_zsh() -> None:
-    from fj_ai.completion.cmd import run_completion_script
+    from fj_ai.completion.engine import run_completion_script
 
     code = run_completion_script(["zsh"])
     assert code == 0
@@ -147,7 +150,7 @@ def test_llm_candidates_uses_fast_role() -> None:
     import asyncio
     from pathlib import Path
 
-    from fj_ai.completion import llm as llm_mod
+    from fj_ai.completion import engine as llm_mod
     from fj_ai.completion.context import CompletionContext
 
     calls: list[str] = []

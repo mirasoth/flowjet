@@ -23,7 +23,7 @@ def test_apply_fj_defaults_forces_sqlite() -> None:
 
 
 def test_apply_fj_defaults_sets_core_skills_when_unset() -> None:
-    from fj_ai.skills import fj_core_skill_names
+    from fj_ai.agent import fj_core_skill_names
 
     cfg = SootheConfig()
     assert cfg.progressive_skills.core_skills is None
