@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fj-ai"
-version = "1.0.11"
+version = "1.0.12"
 description = "fj — one-shot CLI coding agent powered by soothe-nano"
 readme = "README.md"
 license = { text = "MIT" }
@@ -25,7 +25,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "soothe-nano>=0.9.9,<1.0.0",
+    "soothe-nano>=0.9.9,<1.1.0",
 ]
 
 [project.optional-dependencies]
