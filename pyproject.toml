@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fj-ai"
-version = "1.0.9"
+version = "1.0.10"
 description = "fj — one-shot CLI coding agent powered by soothe-nano"
 readme = "README.md"
 license = { text = "MIT" }
