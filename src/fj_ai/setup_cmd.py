@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - Windows
 import yaml
 from soothe_nano.config import _ENV_VAR_RE, _resolve_env
 
-from fj_ai.config import default_config_path
+from fj_ai.agent import default_config_path
 
 DEFAULT_PROVIDER_NAME = "local"
 DEFAULT_NEW_PROVIDER_NAME = "fj-ai-default"

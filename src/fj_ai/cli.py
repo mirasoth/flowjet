@@ -9,8 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fj_ai import __version__
-from fj_ai.argv import split_argv, validate_arg_composition
-from fj_ai.logging_setup import configure_cli_logging
+from fj_ai.agent import configure_cli_logging
 
 _CLI_DESCRIPTION = """\
 fj — coding agent CLI (soothe-nano)
@@ -43,6 +42,119 @@ notes:
   • With -v, prints thread <id> on stderr before the run
 """
 
+# Boolean short flags that may appear clustered (``-lv`` → ``-l -v``).
+_BOOL_SHORTS = frozenset({"h", "V", "l", "v", "f"})
+# Short flags that consume the next argv token as a value.
+_VALUE_FLAGS = frozenset({"-c", "--config", "-t", "--thread", "-w", "--workspace", "-n"})
+_FLAG_ONLY = frozenset(
+    {
+        "-h",
+        "--help",
+        "-V",
+        "--version",
+        "--no-stream",
+        "-v",
+        "--verbose",
+        "-l",
+        "--list",
+        "-f",
+        "--follow",
+    }
+)
+_EQUALS_PREFIXES = ("--config=", "--thread=", "--workspace=")
+
+
+def _expand_short_cluster(tok: str) -> list[str] | None:
+    """Expand ``-lv`` → ``['-l', '-v']`` when every letter is a known bool short.
+
+    Returns ``None`` when ``tok`` is not a pure boolean short cluster (caller
+    treats it as a query token or a normal flag).
+    """
+    if not tok.startswith("-") or tok.startswith("--") or len(tok) < 3 or "=" in tok:
+        return None
+    chars = tok[1:]
+    if not chars.isalpha() or not all(c in _BOOL_SHORTS for c in chars):
+        return None
+    return [f"-{c}" for c in chars]
+
+
+def split_argv(argv: list[str]) -> tuple[list[str], list[str]]:
+    """Split argv into (option_tokens, query_tokens).
+
+    Options are peeled from the left. After ``--``, or the first non-option
+    token, the remainder is the query (preserving spaces when rejoined).
+
+    Boolean short flags may be clustered (``-lv`` → ``-l -v``). Clusters that
+    mix unknown letters stay in the query (so ``-weird`` is still a query).
+    """
+    options: list[str] = []
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok == "--":
+            return options, argv[i + 1 :]
+        expanded = _expand_short_cluster(tok)
+        if expanded is not None:
+            options.extend(expanded)
+            i += 1
+            continue
+        if tok in _FLAG_ONLY:
+            options.append(tok)
+            i += 1
+            continue
+        if tok in _VALUE_FLAGS:
+            options.append(tok)
+            if i + 1 < len(argv):
+                options.append(argv[i + 1])
+                i += 2
+            else:
+                i += 1
+            continue
+        if any(tok.startswith(p) for p in _EQUALS_PREFIXES):
+            options.append(tok)
+            i += 1
+            continue
+        # First non-option token starts the query (may include leading dashes).
+        return options, argv[i:]
+    return options, []
+
+
+def validate_arg_composition(args: Any) -> str | None:
+    """Return an error message when flag combinations are invalid, else ``None``.
+
+    Rules:
+    - ``-n`` requires ``-l``/``--list``
+    - ``-l`` is exclusive with a query, ``-f``, ``-t``, ``-w``, ``--no-stream``
+    - ``-f``/``--follow`` and ``-t``/``--thread`` are mutually exclusive
+    """
+    listing = bool(getattr(args, "list", False))
+    list_limit = getattr(args, "list_limit", None)
+    follow = bool(getattr(args, "follow", False))
+    thread = getattr(args, "thread", None)
+    workspace = getattr(args, "workspace", None)
+    no_stream = bool(getattr(args, "no_stream", False))
+    query = (getattr(args, "query_text", None) or "").strip()
+
+    if list_limit is not None and not listing:
+        return "-n requires -l/--list"
+
+    if listing:
+        if query:
+            return "-l/--list does not take a query (got leftover text after options)"
+        if follow:
+            return "-l/--list cannot be combined with -f/--follow"
+        if thread:
+            return "-l/--list cannot be combined with -t/--thread"
+        if workspace:
+            return "-l/--list cannot be combined with -w/--workspace"
+        if no_stream:
+            return "-l/--list cannot be combined with --no-stream"
+
+    if follow and thread:
+        return "-f/--follow and -t/--thread are mutually exclusive"
+
+    return None
+
 
 class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
     """Preserve paragraph breaks; align option help cleanly."""
@@ -52,7 +164,7 @@ class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
 
 
 def _default_config_help() -> str:
-    from fj_ai.config import default_config_path
+    from fj_ai.agent import default_config_path
 
     return f"Alternate nano.yml (default: {default_config_path()})"
 
@@ -175,7 +287,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _load_config_or_exit(args: argparse.Namespace) -> Any | int:
-    from fj_ai.config import load_config
+    from fj_ai.agent import load_config
 
     try:
         return load_config(args.config)
@@ -211,7 +323,7 @@ async def run_list_async(args: argparse.Namespace) -> int:
         sys.stderr.write("\ninterrupted\n")
         return 130
     except Exception as exc:
-        from fj_ai.errors import write_cli_error
+        from fj_ai.stream import write_cli_error
 
         write_cli_error(exc, verbose=getattr(args, "verbose", False))
         return 1
@@ -292,13 +404,13 @@ async def run_async(args: argparse.Namespace) -> int:
         sys.stderr.write("\ninterrupted\n")
         return 130
     except Exception as exc:
-        from fj_ai.errors import write_cli_error
+        from fj_ai.stream import write_cli_error
 
         write_cli_error(exc, verbose=args.verbose)
         return 1
 
     try:
-        from fj_ai.completion.history import append_history
+        from fj_ai.completion.context import append_history
 
         append_history(args.query_text)
     except Exception:
@@ -337,11 +449,11 @@ def main(argv: list[str] | None = None) -> int:
 
             return run_setup(getattr(args, "config", None))
         if args.command == "__complete":
-            from fj_ai.completion.cmd import run_complete
+            from fj_ai.completion import run_complete
 
             return run_complete(getattr(args, "complete_argv", []))
         if args.command == "completion":
-            from fj_ai.completion.cmd import run_completion_script
+            from fj_ai.completion import run_completion_script
 
             return run_completion_script(getattr(args, "completion_argv", []))
         return asyncio.run(run_async(args))

@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from fj_ai.completion.cmd import run_complete, run_completion_script
+from fj_ai.completion.engine import run_complete, run_completion_script
 
 __all__ = ["run_complete", "run_completion_script"]

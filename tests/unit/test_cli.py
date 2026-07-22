@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fj_ai.argv import split_argv
-from fj_ai.cli import main_follow, parse_args
+from fj_ai.cli import main_follow, parse_args, split_argv
 
 
 @pytest.mark.parametrize(
@@ -118,7 +117,7 @@ async def test_run_async_list_threads(monkeypatch, capsys) -> None:  # type: ign
     from types import SimpleNamespace
 
     import fj_ai.agent as agent_mod
-    import fj_ai.config as config_mod
+    import fj_ai.agent as config_mod
     import fj_ai.threads as threads_mod
     from fj_ai.cli import parse_args, run_async
     from fj_ai.threads import ThreadInfo
@@ -155,7 +154,7 @@ async def test_run_async_list_threads(monkeypatch, capsys) -> None:  # type: ign
 async def test_run_async_list_invalid_limit(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
     from types import SimpleNamespace
 
-    import fj_ai.config as config_mod
+    import fj_ai.agent as config_mod
     from fj_ai.cli import parse_args, run_async
 
     monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
@@ -169,7 +168,7 @@ async def test_run_async_list_zero_means_all(monkeypatch) -> None:  # type: igno
     from types import SimpleNamespace
 
     import fj_ai.agent as agent_mod
-    import fj_ai.config as config_mod
+    import fj_ai.agent as config_mod
     import fj_ai.threads as threads_mod
     from fj_ai.cli import parse_args, run_async
 
@@ -242,7 +241,7 @@ async def test_run_async_default_starts_new_thread(monkeypatch) -> None:  # type
     from types import SimpleNamespace
 
     import fj_ai.agent as agent_mod
-    import fj_ai.config as config_mod
+    import fj_ai.agent as config_mod
     import fj_ai.stream as stream_mod
     import fj_ai.threads as threads_mod
     from fj_ai.cli import parse_args, run_async
@@ -292,7 +291,7 @@ async def test_run_async_follow_uses_latest_thread(monkeypatch) -> None:  # type
     from types import SimpleNamespace
 
     import fj_ai.agent as agent_mod
-    import fj_ai.config as config_mod
+    import fj_ai.agent as config_mod
     import fj_ai.stream as stream_mod
     import fj_ai.threads as threads_mod
     from fj_ai.cli import parse_args, run_async
@@ -380,7 +379,7 @@ async def test_run_async_empty_query_prints_usage(capsys) -> None:  # type: igno
 
 @pytest.mark.asyncio
 async def test_run_async_missing_config(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
-    import fj_ai.config as config_mod
+    import fj_ai.agent as config_mod
     from fj_ai.cli import parse_args, run_async
 
     def missing(_path: object = None) -> object:
@@ -394,7 +393,7 @@ async def test_run_async_missing_config(monkeypatch, capsys) -> None:  # type: i
 
 @pytest.mark.asyncio
 async def test_run_async_config_load_failure(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
-    import fj_ai.config as config_mod
+    import fj_ai.agent as config_mod
     from fj_ai.cli import parse_args, run_async
 
     monkeypatch.setattr(
@@ -410,8 +409,8 @@ async def test_run_async_query_success_and_history(monkeypatch) -> None:  # type
     from types import SimpleNamespace
 
     import fj_ai.agent as agent_mod
-    import fj_ai.completion.history as history_mod
-    import fj_ai.config as config_mod
+    import fj_ai.agent as config_mod
+    import fj_ai.completion.context as history_mod
     import fj_ai.stream as stream_mod
     from fj_ai.cli import parse_args, run_async
 
@@ -451,7 +450,7 @@ async def test_run_async_no_stream_and_error(monkeypatch, capsys) -> None:  # ty
     from types import SimpleNamespace
 
     import fj_ai.agent as agent_mod
-    import fj_ai.config as config_mod
+    import fj_ai.agent as config_mod
     import fj_ai.stream as stream_mod
     from fj_ai.cli import parse_args, run_async
 
@@ -488,7 +487,7 @@ async def test_run_async_keyboard_interrupt(monkeypatch, capsys) -> None:  # typ
     from types import SimpleNamespace
 
     import fj_ai.agent as agent_mod
-    import fj_ai.config as config_mod
+    import fj_ai.agent as config_mod
     import fj_ai.stream as stream_mod
     from fj_ai.cli import parse_args, run_async
 

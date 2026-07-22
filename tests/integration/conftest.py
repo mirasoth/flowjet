@@ -36,7 +36,7 @@ def stub_agent_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     Records resolve/stream/invoke/list calls for assertions.
     """
     import fj_ai.agent as agent_mod
-    import fj_ai.config as config_mod
+    import fj_ai.agent as config_mod
     import fj_ai.stream as stream_mod
     import fj_ai.threads as threads_mod
 
@@ -145,8 +145,8 @@ def live_stream_runtime(
     import sys
 
     import fj_ai.agent as agent_mod
-    import fj_ai.completion.history as history_mod
-    import fj_ai.config as config_mod
+    import fj_ai.agent as config_mod
+    import fj_ai.completion.context as history_mod
     import fj_ai.threads as threads_mod
     from fj_ai.progress import ProgressLine
 

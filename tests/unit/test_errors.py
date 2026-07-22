@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from io import StringIO
 
-from fj_ai.errors import (
+from fj_ai.stream import (
     format_cli_error,
     simplify_tool_error,
     tool_result_error_detail,

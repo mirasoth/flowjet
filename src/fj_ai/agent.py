@@ -1,27 +1,164 @@
-"""Create and wire a soothe-nano agent with fj runtime defaults."""
+"""Agent bootstrap, config load, builtin skills, and quiet CLI logging."""
 
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
 from soothe_nano import CodingCoreAgent, create_nano_agent
-from soothe_nano.config import SootheConfig
+from soothe_nano.config import SOOTHE_HOME, SootheConfig
 from soothe_nano.resolve import resolve_checkpointer
 
-from fj_ai.logging_setup import configure_cli_logging, silence_after_plugins
-from fj_ai.skills import fj_core_skill_names, register_fj_builtin_skills
-
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+
+def default_config_path() -> Path:
+    """Return ``~/.soothe/config/nano.yml`` (respects ``SOOTHE_HOME``)."""
+    return SOOTHE_HOME / "config" / "nano.yml"
+
+
+def load_config(config_path: str | Path | None = None) -> SootheConfig:
+    """Load ``SootheConfig`` from YAML, or bootstrap from env when missing.
+
+    Resolution order:
+    1. Explicit ``config_path``
+    2. ``SOOTHE_HOME / config / nano.yml`` (default ``~/.soothe/config/nano.yml``)
+    3. ``SootheConfig()`` zero-config from ``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY``
+    """
+    path = Path(config_path).expanduser() if config_path else default_config_path()
+    if path.is_file():
+        return SootheConfig.from_yaml_file(str(path))
+    if config_path is not None:
+        raise FileNotFoundError(f"Config not found: {path}")
+    return SootheConfig()
+
+
+# ---------------------------------------------------------------------------
+# Builtin skills
+# ---------------------------------------------------------------------------
+
+_REGISTERED = False
+
+BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent / "builtin_skills"
+
+# fj-only additions on top of soothe-nano's DEFAULT_CORE_SKILL_NAMES.
+# Nano defaults (weather, github, clawhub, skill-creator) come from nano itself.
+FJ_CORE_SKILL_NAMES: tuple[str, ...] = (
+    "brainstorming",
+    "requesting-code-review",
+    "systematic-debugging",
+    "using-superpowers",
+)
+
+
+def fj_core_skill_names() -> list[str]:
+    """Nano default core skills plus fj high-traffic workflow skills."""
+    from soothe_nano.skills.registry import DEFAULT_CORE_SKILL_NAMES
+
+    return sorted(DEFAULT_CORE_SKILL_NAMES | {n.lower() for n in FJ_CORE_SKILL_NAMES})
+
+
+def register_fj_builtin_skills() -> None:
+    """Register ``fj_ai/builtin_skills`` as a soothe-nano builtin skill root.
+
+    Idempotent — safe to call from multiple entry points. Requires
+    ``soothe-nano>=0.9.9`` (``register_builtin_skill_root``).
+    """
+    global _REGISTERED
+    if _REGISTERED:
+        return
+    if not BUILTIN_SKILLS_DIR.is_dir():
+        return
+    from soothe_nano.skills import register_builtin_skill_root
+
+    register_builtin_skill_root(BUILTIN_SKILLS_DIR, source="builtin")
+    _REGISTERED = True
+
+
+# ---------------------------------------------------------------------------
+# CLI logging
+# ---------------------------------------------------------------------------
+
+_BROWSER_USE_SETUP_LOGGING = "BROWSER_USE_SETUP_LOGGING"
+_FJ_CONSOLE_HANDLER = "fj-console"
+
+
+class _CompactConsoleFormatter(logging.Formatter):
+    """One-line console records without exception tracebacks."""
+
+    def formatException(self, ei: object) -> str:  # noqa: N802 - logging API
+        return ""
+
+    def format(self, record: logging.LogRecord) -> str:
+        # logger.exception sets exc_info; drop it so format() stays one line.
+        record.exc_info = None
+        record.exc_text = None
+        return super().format(record)
+
+
+def configure_cli_logging(*, verbose: bool = False) -> None:
+    """Quiet the console for one-shot CLI use.
+
+    - Opt out of ``browser_use`` import-time root logger setup when unset.
+    - Remove existing root stream handlers (stderr/stdout) so init INFO
+      lines do not interleave with the agent answer.
+    - Prevent ``lastResort`` traceback dumps from soothe tool failures.
+    - When ``verbose``, show WARNING+ as single-line messages on stderr.
+    """
+    os.environ.setdefault(_BROWSER_USE_SETUP_LOGGING, "false")
+    _remove_root_console_handlers()
+    root = logging.getLogger()
+    if verbose:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.set_name(_FJ_CONSOLE_HANDLER)
+        handler.setLevel(logging.WARNING)
+        handler.setFormatter(_CompactConsoleFormatter("%(message)s"))
+        root.addHandler(handler)
+    elif not root.handlers:
+        null = logging.NullHandler()
+        null.set_name(_FJ_CONSOLE_HANDLER)
+        root.addHandler(null)
+    if root.level < logging.WARNING:
+        root.setLevel(logging.WARNING)
+
+
+def silence_after_plugins(*, verbose: bool = False) -> None:
+    """Re-apply quieting after plugin imports (belt-and-suspenders)."""
+    configure_cli_logging(verbose=verbose)
+
+
+def _remove_root_console_handlers() -> None:
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        if isinstance(handler, RotatingFileHandler):
+            continue
+        if isinstance(handler, logging.FileHandler):
+            continue
+        if isinstance(handler, logging.StreamHandler) or isinstance(handler, logging.NullHandler):
+            root.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Agent build
+# ---------------------------------------------------------------------------
 
 
 def ensure_workspace(workspace: Path | None = None) -> Path:
     """Use ``workspace`` or cwd as ``SOOTHE_WORKSPACE`` for file/shell tools."""
-    import os
-
     root = (workspace or Path.cwd()).resolve()
     os.environ.setdefault("SOOTHE_WORKSPACE", str(root))
     try:
