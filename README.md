@@ -11,8 +11,8 @@
 
 ```bash
 fj explain this repo
-fj summarize README.md
 fj -f what did we decide last time?
+fjf what did we decide last time?  // The same as fj -f
 ```
 
 It runs on [soothe-nano](https://github.com/mirasoth/soothe-nano) — tools, skills, MCP, subagents, and progressive loading — with SQLite persistence so every thread is resumable.
