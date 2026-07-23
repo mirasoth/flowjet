@@ -117,6 +117,48 @@ def test_display_width_counts_cjk_double() -> None:
     assert _truncate_cols(text, 6, tail=True) == "…测试"
 
 
+def test_truncate_middle_keeps_head_and_tail() -> None:
+    from fj_ai.progress import _display_width, _truncate_cols, _truncate_middle
+
+    text = "aaaaaaaaaa" + "bbbbbbbbbb"
+    out = _truncate_middle(text, 11)
+    assert _display_width(out) <= 11
+    assert out.startswith("a")
+    assert out.endswith("b")
+    assert "…" in out
+    assert out == _truncate_cols(text, 11, middle=True)
+
+
+def test_truncate_middle_cjk() -> None:
+    from fj_ai.progress import _display_width, _truncate_middle
+
+    text = "前面很长的内容中间被省略后面可见"
+    out = _truncate_middle(text, 12)
+    assert _display_width(out) <= 12
+    assert out.startswith("前")
+    assert out.endswith("见")
+    assert "…" in out
+
+
+def test_content_preview_uses_middle_truncate(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fj_ai.progress import _display_width
+
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "48")
+    content = "HEAD_MARKER_" + ("x" * 80) + "_TAIL_MARKER"
+    preview = format_args_preview(
+        "write_file",
+        {"file_path": "out.txt", "content": content},
+        max_parts=2,
+        prefix_width=8,
+    )
+    assert _display_width(preview) <= 48 - 8
+    # Content part should expose both ends when truncated.
+    assert "HEAD" in preview or "out.txt" in preview
+    if "HEAD" in preview:
+        assert "TAIL" in preview
+        assert "…" in preview
+
+
 def test_fit_tail_shows_latest_narration() -> None:
     from fj_ai.progress import _display_width, _fit
 
@@ -309,10 +351,76 @@ def test_color_enabled_respects_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_line_budget_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fj_ai.progress import _line_budget
+    from fj_ai.progress import _PROGRESS_MAX, _PROGRESS_MIN, _line_budget
 
     monkeypatch.setenv("FJ_PROGRESS_WIDTH", "50")
     assert _line_budget() == 50
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "9999")
+    assert _line_budget() == _PROGRESS_MAX
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "10")
+    assert _line_budget() == _PROGRESS_MIN
+
+
+def test_wide_budget_keeps_long_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fj_ai.progress import _display_width
+
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "120")
+    cmd = "ruff check src/fj_ai tests/unit --select E,F,W --fix"
+    label, _color = format_tool_activity("run_command", {"command": cmd})
+    assert _display_width(label) <= 120
+    assert "Running" in label
+    # Old hard cap was 48; wide budget should keep more of the command.
+    assert "--fix" in label or "--select" in label
+    assert "ruff check src/fj_ai" in label
+
+
+def test_wide_budget_keeps_long_pattern(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fj_ai.progress import _display_width
+
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "120")
+    pattern = "ProgressLine_and_format_args_preview_density"
+    label, _ = format_tool_activity("grep", {"pattern": pattern, "path": "src/fj_ai"})
+    assert _display_width(label) <= 120
+    assert "ProgressLine_and_format_args" in label
+    assert "src/fj_ai" in label
+
+
+def test_narrow_budget_still_clamps(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fj_ai.progress import _display_width
+
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "40")
+    cmd = "python -m pytest tests/unit/test_progress.py -q --tb=short"
+    label, _ = format_tool_activity("run_command", {"command": cmd})
+    assert _display_width(label) <= 40
+    assert label.startswith("Running")
+
+
+def test_args_preview_cjk_respects_display_width(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fj_ai.progress import _display_width
+
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "40")
+    preview = format_args_preview(
+        "grep",
+        {"pattern": "中文测试路径检查", "path": "源码/模块"},
+        prefix_width=9,
+    )
+    assert _display_width(preview) <= 40 - 9
+    assert "中" in preview or "…" in preview
+
+
+def test_wide_budget_allows_three_arg_parts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "120")
+    preview = format_args_preview(
+        "edit_file",
+        {
+            "file_path": "src/fj_ai/progress.py",
+            "old_string": "old_value_here",
+            "new_string": "new_value_here",
+        },
+    )
+    # Wide default max_parts=3 should surface path plus edit hint.
+    assert "progress.py" in preview
+    assert "replace" in preview or "→" in preview or "old_value" in preview
 
 
 def test_format_edit_file_preview() -> None:

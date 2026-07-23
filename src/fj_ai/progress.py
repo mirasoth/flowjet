@@ -29,7 +29,13 @@ _TICK_SECONDS = 0.08
 # Visible status text budget (spinner glyph + space excluded).
 _PROGRESS_MIN = 36
 _PROGRESS_DEFAULT = 72
-_PROGRESS_MAX = 96
+_PROGRESS_MAX = 200
+# Extra arg parts when the arg budget is generous enough.
+_ARGS_WIDE_BUDGET = 64
+_ARGS_DEFAULT_PARTS = 2
+_ARGS_WIDE_PARTS = 3
+# Columns reserved for a typical verb + space when building arg previews.
+_ARGS_VERB_RESERVE = 10
 _ELLIPSIS = "…"
 _SKIP_ARG_KEYS = frozenset(
     {
@@ -93,8 +99,44 @@ def _display_width(text: str) -> int:
     return sum(_char_display_width(ch) for ch in text)
 
 
-def _truncate_cols(text: str, limit: int, *, tail: bool = False) -> str:
-    """Fit ``text`` to ``limit`` terminal columns; keep start or end."""
+def _take_prefix_cols(text: str, budget: int) -> str:
+    """Take a prefix of ``text`` that fits in ``budget`` display columns."""
+    if budget <= 0:
+        return ""
+    picked: list[str] = []
+    used = 0
+    for ch in text:
+        cw = _char_display_width(ch)
+        if used + cw > budget:
+            break
+        picked.append(ch)
+        used += cw
+    return "".join(picked)
+
+
+def _take_suffix_cols(text: str, budget: int) -> str:
+    """Take a suffix of ``text`` that fits in ``budget`` display columns."""
+    if budget <= 0:
+        return ""
+    picked: list[str] = []
+    used = 0
+    for ch in reversed(text):
+        cw = _char_display_width(ch)
+        if used + cw > budget:
+            break
+        picked.append(ch)
+        used += cw
+    return "".join(reversed(picked))
+
+
+def _truncate_cols(text: str, limit: int, *, tail: bool = False, middle: bool = False) -> str:
+    """Fit ``text`` to ``limit`` terminal columns.
+
+    Modes:
+    - default: keep the start (``aaaa…``)
+    - ``tail=True``: keep the end (``…bbbb``)
+    - ``middle=True``: keep head and tail (``aaaa…bbbb``); overrides ``tail``
+    """
     if limit <= 0:
         return _ELLIPSIS if limit == 1 else ""
     text = re.sub(r"\s+", " ", text.strip())
@@ -106,26 +148,38 @@ def _truncate_cols(text: str, limit: int, *, tail: bool = False) -> str:
         return _ELLIPSIS[:1] if limit == 1 else _ELLIPSIS
 
     budget = limit - ell_w
-    if tail:
-        picked: list[str] = []
-        used = 0
-        for ch in reversed(text):
-            cw = _char_display_width(ch)
-            if used + cw > budget:
+    if middle:
+        # Prefer a slightly longer head; need at least 1 col each side when possible.
+        if budget < 2:
+            return _take_prefix_cols(text, budget) + _ELLIPSIS
+        head_budget = (budget + 1) // 2
+        tail_budget = budget - head_budget
+        head_chars: list[str] = []
+        head_used = 0
+        i = 0
+        while i < len(text):
+            cw = _char_display_width(text[i])
+            if head_used + cw > head_budget:
                 break
-            picked.append(ch)
-            used += cw
-        return _ELLIPSIS + "".join(reversed(picked))
+            head_chars.append(text[i])
+            head_used += cw
+            i += 1
+        tail_chars: list[str] = []
+        tail_used = 0
+        j = len(text)
+        while j > i:
+            cw = _char_display_width(text[j - 1])
+            if tail_used + cw > tail_budget:
+                break
+            tail_chars.append(text[j - 1])
+            tail_used += cw
+            j -= 1
+        return "".join(head_chars) + _ELLIPSIS + "".join(reversed(tail_chars))
 
-    picked = []
-    used = 0
-    for ch in text:
-        cw = _char_display_width(ch)
-        if used + cw > budget:
-            break
-        picked.append(ch)
-        used += cw
-    return "".join(picked) + _ELLIPSIS
+    if tail:
+        return _ELLIPSIS + _take_suffix_cols(text, budget)
+
+    return _take_prefix_cols(text, budget) + _ELLIPSIS
 
 
 def _color_enabled(stream: TextIO) -> bool:
@@ -155,6 +209,12 @@ def _truncate(text: str, limit: int | None = None) -> str:
     return _truncate_cols(text, limit, tail=False)
 
 
+def _truncate_middle(text: str, limit: int | None = None) -> str:
+    """Keep head and tail of ``text`` (``aaaa…bbbb``) for content previews."""
+    limit = _line_budget() if limit is None else limit
+    return _truncate_cols(text, limit, middle=True)
+
+
 def _truncate_path(text: str, limit: int | None = None) -> str:
     """Keep the end of a path so the basename stays visible."""
     limit = _line_budget() if limit is None else limit
@@ -176,11 +236,17 @@ def _truncate_path(text: str, limit: int | None = None) -> str:
     return tail
 
 
-def _fit(label: str, *, budget: int | None = None, tail: bool = False) -> str:
+def _fit(
+    label: str,
+    *,
+    budget: int | None = None,
+    tail: bool = False,
+    middle: bool = False,
+) -> str:
     """Final single-line fit for the progress status."""
     limit = _line_budget() if budget is None else budget
     normalized = re.sub(r"\s+", " ", label.strip())
-    return _truncate_cols(normalized, limit, tail=tail)
+    return _truncate_cols(normalized, limit, tail=tail, middle=middle)
 
 
 def _compact(value: Any) -> str:
@@ -328,27 +394,36 @@ def _format_arg_value(tool_name: str, key: str, value: Any, *, budget: int) -> s
     }
     if is_path:
         return _truncate_path(_abbrev_path(text), budget)
-    # Quote patterns / queries for readability.
+    # Quote patterns / queries for readability; show head…tail for long text.
     if key in {"pattern", "query", "regex", "regexp", "old_string", "new_string", "skill"}:
-        inner = _truncate(text, max(12, min(28, budget - 2)))
+        inner = _truncate_middle(text, max(12, budget - 2))
         return f"“{inner}”"
     if key in {"command", "cmd", "script"}:
-        inner = _truncate(text, max(16, min(48, budget - 2)))
+        # Keep command start (program + first args); still show trailing flags.
+        inner = _truncate_middle(text, max(16, budget - 2))
         return f"`{inner}`"
     if key in {"content"}:
-        return _truncate(text, max(10, min(20, budget)))
-    return _truncate(text, max(12, min(32, budget)))
+        return _truncate_middle(text, max(10, budget))
+    return _truncate_middle(text, max(12, budget))
 
 
-def format_args_preview(tool_name: str, args: Any | None, *, max_parts: int = 2) -> str:
+def format_args_preview(
+    tool_name: str,
+    args: Any | None,
+    *,
+    max_parts: int | None = None,
+    prefix_width: int | None = None,
+) -> str:
     """Human-readable arg summary, e.g. ``src/cli.py`` or ``“TODO” in src/``."""
     clean = _normalize_args(args)
     if not clean:
         return ""
 
     budget = _line_budget()
-    # Reserve room for verb + spaces on the final status line (~12 chars).
-    arg_budget = max(20, budget - 14)
+    reserve = _ARGS_VERB_RESERVE if prefix_width is None else max(0, prefix_width)
+    arg_budget = max(20, budget - reserve)
+    if max_parts is None:
+        max_parts = _ARGS_WIDE_PARTS if arg_budget >= _ARGS_WIDE_BUDGET else _ARGS_DEFAULT_PARTS
 
     canonical = tool_name
     meta = _tool_meta(tool_name)
@@ -356,8 +431,10 @@ def format_args_preview(tool_name: str, args: Any | None, *, max_parts: int = 2)
         canonical = meta.name
 
     parts: list[str] = []
+    sep_w = _display_width(" · ")
     for key in _ordered_arg_keys(canonical, clean):
-        remaining = max(12, arg_budget - sum(len(p) + 3 for p in parts))
+        used = sum(_display_width(p) for p in parts) + sep_w * len(parts)
+        remaining = max(12, arg_budget - used)
         text = _format_arg_value(canonical, key, clean[key], budget=remaining)
         if not text:
             continue
@@ -380,7 +457,7 @@ def format_args_preview(tool_name: str, args: Any | None, *, max_parts: int = 2)
         if len(parts) >= max_parts:
             break
 
-    return _fit(" · ".join(parts), budget=arg_budget)
+    return _fit(" · ".join(parts), budget=arg_budget, middle=True)
 
 
 def format_tool_activity(tool_name: str, args: Any | None = None) -> tuple[str, str]:
@@ -392,16 +469,29 @@ def format_tool_activity(tool_name: str, args: Any | None = None) -> tuple[str, 
         verb, color = _TOOL_VERBS.get(meta.name, (verb, color))
         name = meta.name
 
-    preview = format_args_preview(name, args)
     display = _display_name(name)
+    known = name in _TOOL_VERBS or (meta is not None and meta.name in _TOOL_VERBS)
+    # Reserve columns for the verb (or "Running DisplayName · ") before args.
+    if known:
+        prefix_width = _display_width(verb) + 1
+    else:
+        prefix_width = _display_width(f"{verb} {display} · ")
+    preview = format_args_preview(name, args, prefix_width=prefix_width)
     if preview:
-        if name in _TOOL_VERBS or (meta is not None and meta.name in _TOOL_VERBS):
+        if known:
             label = f"{verb} {preview}"
         else:
             label = f"{verb} {display} · {preview}"
     else:
         label = f"{verb}…"
     return _fit(label), color
+
+
+def _detail_budget(*, prefix: str, fraction: float = 0.5, floor: int = 16) -> int:
+    """Columns available for a detail snippet after a fixed status prefix."""
+    line = _line_budget()
+    remaining = line - _display_width(prefix)
+    return max(floor, min(remaining, int(line * fraction)))
 
 
 def format_tool_done(
@@ -413,13 +503,15 @@ def format_tool_done(
 ) -> tuple[str, str]:
     """Status after a tool returns — keep context while model thinks."""
     name = (tool_name or "tool").strip() or "tool"
-    preview = format_args_preview(name, args, max_parts=1)
+    prefix = "Failed " if is_error else "Thinking… · after "
+    preview = format_args_preview(name, args, max_parts=1, prefix_width=_display_width(prefix))
     display = _display_name(name)
     summary = f"{display}({preview})" if preview else display
     if is_error:
         label = f"Failed {summary}"
         if detail:
-            label = f"{label} · {_truncate(_compact(detail), 36)}"
+            detail_limit = _detail_budget(prefix=f"{label} · ", fraction=0.45, floor=20)
+            label = f"{label} · {_truncate_middle(_compact(detail), detail_limit)}"
         return _fit(label), "red"
     return _fit(f"Thinking… · after {summary}"), "cyan"
 
@@ -505,10 +597,14 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
         color = "magenta"
         name = subagent or tool or "subagent"
         preview = format_args_preview(name, args) if args else ""
-        detail = preview or _fit(
-            _compact(data.get("action_preview") or data.get("query") or ""),
-            budget=max(20, _line_budget() - 20),
-        )
+        if not preview:
+            prefix = f"{verb} {name} · " if action else f"Delegating to {name} · "
+            detail = _fit(
+                _compact(data.get("action_preview") or data.get("query") or ""),
+                budget=_detail_budget(prefix=prefix, fraction=0.55, floor=20),
+            )
+        else:
+            detail = preview
         if action in {"completed", "finished"}:
             label = f"Thinking… · after {name}"
             color = "cyan"
@@ -527,7 +623,8 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
     if domain in {"error"} or action in {"failed", "error"}:
         color = "red"
         err = data.get("error") or data.get("message") or short
-        label = f"Error · {_truncate(_compact(err), 40)}"
+        err_limit = _detail_budget(prefix="Error · ", fraction=0.55, floor=24)
+        label = f"Error · {_truncate_middle(_compact(err), err_limit)}"
         return _fit(label), color
 
     if domain == "cognition":
@@ -541,11 +638,11 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
             label = "Thinking…"
         elif "intent" in short:
             intent = data.get("intent") or data.get("label") or data.get("message")
-            label = (
-                f"Understanding… · {_truncate(_compact(intent), 28)}"
-                if intent
-                else "Understanding…"
-            )
+            if intent:
+                intent_limit = _detail_budget(prefix="Understanding… · ", fraction=0.5, floor=16)
+                label = f"Understanding… · {_truncate_middle(_compact(intent), intent_limit)}"
+            else:
+                label = "Understanding…"
         else:
             label = f"{verb}…"
         return _fit(label), color
