@@ -564,7 +564,13 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
         return None
 
     # Skip noisy / internal stream plumbing
-    if event_type in {"soothe.stream.end", "soothe.protocol.message.received"}:
+    if event_type in {
+        "soothe.stream.end",
+        "soothe.protocol.message.received",
+        # Fired on every tool call; stomps useful tool status with a bare verb.
+        "soothe.internal.policy.checked",
+        "soothe.internal.plugin.health_checked",
+    }:
         return None
     if event_type.startswith("soothe.output."):
         return None
@@ -584,6 +590,34 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
         subagent = data["subagent"]
     elif "subagent_type" in data and isinstance(data["subagent_type"], str):
         subagent = data["subagent_type"]
+
+    if event_type == "soothe.internal.policy.denied":
+        denied_action = _compact(data.get("action"))
+        reason = _compact(data.get("reason") or data.get("message"))
+        head = f"Policy denied {denied_action}" if denied_action else "Policy denied"
+        if reason:
+            reason_limit = _detail_budget(prefix=f"{head} · ", fraction=0.55, floor=20)
+            label = f"{head} · {_truncate_middle(reason, reason_limit)}"
+        else:
+            label = head
+        return _fit(label), "red"
+
+    if event_type == "soothe.internal.memory.recalled":
+        count = data.get("count")
+        query = _compact(data.get("query"))
+        if query:
+            q_limit = _detail_budget(prefix="Recalling memory · ", fraction=0.55, floor=16)
+            label = f"Recalling memory · {_truncate_middle(query, q_limit)}"
+        elif isinstance(count, int) and count > 0:
+            label = f"Recalled {count} memor{'y' if count == 1 else 'ies'}"
+        else:
+            label = "Recalling memory…"
+        return _fit(label), "cyan"
+
+    if event_type == "soothe.internal.memory.stored":
+        mem_id = _compact(data.get("id"))
+        label = f"Stored memory · {mem_id}" if mem_id else "Stored memory"
+        return _fit(label), "cyan"
 
     if domain in {"tool", "mcp"}:
         name = tool or (parts[1] if len(parts) > 1 else "tool")

@@ -314,6 +314,48 @@ def test_friendly_skips_output_and_empty() -> None:
     assert friendly_progress("not-a-dict") is None  # type: ignore[arg-type]
 
 
+def test_friendly_skips_policy_checked() -> None:
+    # High-frequency allow checks must not replace tool progress with "Checked…".
+    assert (
+        friendly_progress(
+            {
+                "type": "soothe.internal.policy.checked",
+                "action": "shell",
+                "verdict": "allow",
+            }
+        )
+        is None
+    )
+    assert friendly_progress({"type": "soothe.internal.plugin.health_checked"}) is None
+
+
+def test_friendly_policy_denied_includes_detail() -> None:
+    label, color = friendly_progress(
+        {
+            "type": "soothe.internal.policy.denied",
+            "action": "shell",
+            "reason": "network access blocked",
+        }
+    )
+    assert color == "red"
+    assert "Policy denied" in label
+    assert "shell" in label
+    assert "network" in label
+
+
+def test_friendly_memory_events() -> None:
+    label, color = friendly_progress(
+        {"type": "soothe.internal.memory.recalled", "count": 2, "query": "auth flow"}
+    )
+    assert color == "cyan"
+    assert "memory" in label.lower()
+    assert "auth" in label
+
+    label, _ = friendly_progress({"type": "soothe.internal.memory.stored", "id": "mem_1"})
+    assert "Stored" in label
+    assert "mem_1" in label
+
+
 def test_normalize_args_variants() -> None:
     from fj_ai.progress import _normalize_args
 
