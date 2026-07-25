@@ -1241,7 +1241,7 @@ wheels = [
 
 [[package]]
 name = "fj-ai"
-version = "1.0.17"
+version = "1.0.18"
 source = { editable = "." }
 dependencies = [
     { name = "soothe-nano" },
@@ -1269,7 +1269,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3.0" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.0" },
-    { name = "soothe-nano", specifier = ">=1.0.7,<1.1.0" },
+    { name = "soothe-nano", specifier = ">=1.0.8,<1.1.0" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=5.0.0" },
 ]
 provides-extras = ["dev"]
@@ -7662,7 +7662,7 @@ wheels = [
 
 [[package]]
 name = "soothe-nano"
-version = "1.0.7"
+version = "1.0.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -7701,9 +7701,9 @@ dependencies = [
     { name = "wcmatch" },
     { name = "wizsearch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e6/6b/c03bc13d527865314f18d793ae75782c80386407d7ec9da6845cf932f0d1/soothe_nano-1.0.7.tar.gz", hash = "sha256:fcab166b39638adf2620fc825dcb6b7352a1d0fda9f90fdd1830e0afc49c986c", size = 470644, upload-time = "2026-07-25T10:10:43.172Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/50/62/3dd5be3d927471691f16e14084342e289f67c1556c3463ef7e06abfe2778/soothe_nano-1.0.8.tar.gz", hash = "sha256:ab1785e356c70fcc301c7071182694c989620df208537c701cab0713c7f06781", size = 477448, upload-time = "2026-07-25T12:08:02.155Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/3d/7570b2f01499eb607b8cf7a44335f34c292018a153cf2fa26ece4f64011e/soothe_nano-1.0.7-py3-none-any.whl", hash = "sha256:458b28b443ce4cba41a0c24294aae3c69061c2f3ab4d096b514a17b5b700fa19", size = 624400, upload-time = "2026-07-25T10:10:41.841Z" },
+    { url = "https://files.pythonhosted.org/packages/04/d5/efa318ba6808e8b4525c1143c1f6f0691c9ac245d636e4c2bb3712cd68f7/soothe_nano-1.0.8-py3-none-any.whl", hash = "sha256:f25b840a2cd654519bba9e5781c52d247ff55da75bc0cf06d71c82f2f605390e", size = 635779, upload-time = "2026-07-25T12:08:00.709Z" },
 ]
 
 [[package]]
