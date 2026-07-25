@@ -937,7 +937,7 @@ resolution-markers = [
     "python_full_version < '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "cffi", marker = "platform_machine == 'x86_64' and platform_python_implementation != 'PyPy' and sys_platform == 'darwin'" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a7/35/c495bffc2056f2dadb32434f1feedd79abde2a7f8363e1974afa9c33c7e2/cryptography-45.0.7.tar.gz", hash = "sha256:4b1654dfc64ea479c242508eb8c724044f1e964a47d1d1cacc5132292d851971", size = 744980, upload-time = "2025-09-01T11:15:03.146Z" }
 wheels = [
@@ -965,7 +965,7 @@ resolution-markers = [
     "(python_full_version < '3.12' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
 ]
 dependencies = [
-    { name = "cffi", marker = "(platform_machine != 'x86_64' and platform_python_implementation != 'PyPy') or (platform_python_implementation != 'PyPy' and sys_platform != 'darwin')" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1f/99/d1c90d6041656cc6ee229dc99cd67fd0cd5aec3c5f7d72fffc27cc750054/cryptography-49.0.0.tar.gz", hash = "sha256:f89660a348f4f78a92366240a61404e337586ef7f5909a2fef59ca88ef505493", size = 854345, upload-time = "2026-06-12T20:02:30.512Z" }
 wheels = [
@@ -1241,7 +1241,7 @@ wheels = [
 
 [[package]]
 name = "fj-ai"
-version = "1.0.14"
+version = "1.0.15"
 source = { editable = "." }
 dependencies = [
     { name = "soothe-nano" },
@@ -1269,7 +1269,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3.0" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.0" },
-    { name = "soothe-nano", specifier = ">=1.0.2,<1.1.0" },
+    { name = "soothe-nano", specifier = ">=1.0.5,<1.1.0" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=5.0.0" },
 ]
 provides-extras = ["dev"]
@@ -2102,19 +2102,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/2a/b9/e937d0a90b26540bff07e7a7c64349f3b29c2dcc36257cd1cd3fdce17f2a/langchain_core-1.4.9.tar.gz", hash = "sha256:f8078901145bed0466755277500a5a22822a7b628808c4c0a28d4fc88895fcf2", size = 967294, upload-time = "2026-07-08T20:06:54.191Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/84/70/ade2fada52772798ef815b6352b59e71b116aa0c32c3aef5be3dc2cbed12/langchain_core-1.4.9-py3-none-any.whl", hash = "sha256:28e3909e2a10cc81504952d795ac0a9e014c0018121ef89d48dd396fa09ec624", size = 558293, upload-time = "2026-07-08T20:06:52.382Z" },
-]
-
-[[package]]
-name = "langchain-experimental"
-version = "0.4.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "langchain-community" },
-    { name = "langchain-core" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d9/1c/8240195c1b27f2c45b2ee93a07b2a5a466c92dec8881fc1213ec8e3cb6a8/langchain_experimental-0.4.2.tar.gz", hash = "sha256:1130fa7ecad5959e687295b2f7850ae3e5d8eeee6796bf9e99910806475d8acc", size = 172068, upload-time = "2026-05-22T20:38:42.184Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f1/ce/5c56f08407648ab897b119a4add46391560a144285cf89e060091bc793e9/langchain_experimental-0.4.2-py3-none-any.whl", hash = "sha256:fd98b9948cb6f991e0f632ea3d5fb839bcfe21e6d5a190a51126a76270a66d40", size = 211226, upload-time = "2026-05-22T20:38:40.678Z" },
 ]
 
 [[package]]
@@ -6785,8 +6772,8 @@ resolution-markers = [
     "python_full_version < '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "cryptography", version = "45.0.7", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "cryptography", version = "45.0.7", source = { registry = "https://pypi.org/simple" } },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/80/be/97b83a464498a79103036bc74d1038df4a7ef0e402cfaf4d5e113fb14759/pyopenssl-25.3.0.tar.gz", hash = "sha256:c981cb0a3fd84e8602d7afc209522773b94c1c2446a3c710a75b06fe1beae329", size = 184073, upload-time = "2025-09-17T00:32:21.037Z" }
 wheels = [
@@ -6812,8 +6799,8 @@ resolution-markers = [
     "(python_full_version < '3.12' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
 ]
 dependencies = [
-    { name = "cryptography", version = "49.0.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
-    { name = "typing-extensions", marker = "(python_full_version < '3.13' and platform_machine != 'x86_64') or (python_full_version < '3.13' and sys_platform != 'darwin')" },
+    { name = "cryptography", version = "49.0.0", source = { registry = "https://pypi.org/simple" } },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/74/b7/da07bae88f5a9506b4def6f2f4903cf4c3b8831e560dba8fa18ca08f758f/pyopenssl-26.3.0.tar.gz", hash = "sha256:589de7fae1c9ea670d18422ed00fc04da787bbde8e1454aea872aa57b49ad341", size = 182024, upload-time = "2026-06-12T20:28:07.458Z" }
 wheels = [
@@ -7394,7 +7381,7 @@ resolution-markers = [
     "(python_full_version < '3.12' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
 ]
 dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz", hash = "sha256:95d8e012d8cb8816c226aef832200b1d45109ed4464303e997c5b13122b297c0", size = 30573822, upload-time = "2026-02-23T00:26:24.851Z" }
 wheels = [
@@ -7479,7 +7466,7 @@ resolution-markers = [
     "(python_full_version == '3.12.*' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version == '3.12.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
 ]
 dependencies = [
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a7/25/c2700dfaf6442b4effaa91af24ebce5dc9d31bb4a69706313aae70d72cd0/scipy-1.18.0.tar.gz", hash = "sha256:67b2ad2ad54c72ca6d04975a9b2df8c3638c34ddd5b28738e94fc2b57929d378", size = 30774447, upload-time = "2026-06-19T15:01:43.456Z" }
 wheels = [
@@ -7543,8 +7530,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", version = "49.0.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')" },
-    { name = "jeepney", marker = "(platform_machine != 'x86_64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')" },
+    { name = "cryptography", version = "49.0.0", source = { registry = "https://pypi.org/simple" } },
+    { name = "jeepney" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
@@ -7675,7 +7662,7 @@ wheels = [
 
 [[package]]
 name = "soothe-nano"
-version = "1.0.2"
+version = "1.0.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -7689,7 +7676,6 @@ dependencies = [
     { name = "langchain" },
     { name = "langchain-community" },
     { name = "langchain-core" },
-    { name = "langchain-experimental" },
     { name = "langchain-mcp-adapters" },
     { name = "langchain-openai" },
     { name = "langchain-quickjs" },
@@ -7715,22 +7701,22 @@ dependencies = [
     { name = "wcmatch" },
     { name = "wizsearch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cf/9e/62fc645d407781e5b66bccd98788b5fd6df8234e34fd6ef884bd64130124/soothe_nano-1.0.2.tar.gz", hash = "sha256:d915166749afe9da54f681d61a08ff99785c05ffa8e16866bb5126790ac099b5", size = 471638, upload-time = "2026-07-23T00:22:49.232Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/31/976e69d81beed28116df254b31b644473cef52e485c9f83d0dd376bf6fd2/soothe_nano-1.0.5.tar.gz", hash = "sha256:4c04aacea829637d9bf35630662f62cc545034b970c6f31df9b0f13126c0a65c", size = 468463, upload-time = "2026-07-24T14:38:24.671Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/12/b5/225624dfafc09c3d1e92749e9f3615c4fb14addd7430c64669d8104fd005/soothe_nano-1.0.2-py3-none-any.whl", hash = "sha256:86084683947e6112effdaad6341246fbf3b02e759ac52df034d9bee5829e6051", size = 627221, upload-time = "2026-07-23T00:22:47.63Z" },
+    { url = "https://files.pythonhosted.org/packages/41/72/44a6f994d09ad932f4444e4a56a3568da3856d6ba51a20e56cc193dfe068/soothe_nano-1.0.5-py3-none-any.whl", hash = "sha256:157ceac5be75157756d112fe88270cdc3d2fd8f7c3122804005d1cd503d72a3b", size = 622414, upload-time = "2026-07-24T14:38:23.202Z" },
 ]
 
 [[package]]
 name = "soothe-sdk"
-version = "1.0.5"
+version = "1.0.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "langchain-core" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1e/59/bf1abd6c1db66ab77ae9b0780502b3a46b7c55c824cd696d5c0654f07d3e/soothe_sdk-1.0.5.tar.gz", hash = "sha256:af90d7e28ef4a93ac35ce474c3742ae295d2b814402f1cfcbd813db7fe34801d", size = 95448, upload-time = "2026-07-22T09:25:37.465Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/eb/a8675f64a88f7a21a5f34baddd8cfa52680c063c91e773003ec1083b0ebf/soothe_sdk-1.0.6.tar.gz", hash = "sha256:b37c80c67a1e2c32a2c2360628b91c6cfa7894212bc6856883ca238ecd842fee", size = 95448, upload-time = "2026-07-24T10:13:53.299Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a5/ce/97c4658f3a8f5e9af72b6391948bf731ea2b4a00c64d20ecfa612d706e4a/soothe_sdk-1.0.5-py3-none-any.whl", hash = "sha256:478e32933ea9669e1b3f32ef3769e535b79fd0dfd88e6c97ced7cf005b2b1afc", size = 128287, upload-time = "2026-07-22T09:25:36.23Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/a6/380619e51c787502dc196a4efba306db9cb9515dc8a3909c33150481b554/soothe_sdk-1.0.6-py3-none-any.whl", hash = "sha256:042afd9154dac35d2c28a5dc0dfd02e67cd142f19762c3e9ffbe53eafc6a95af", size = 128253, upload-time = "2026-07-24T10:13:52.048Z" },
 ]
 
 [[package]]
@@ -8228,8 +8214,8 @@ name = "uvicorn"
 version = "0.51.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click", marker = "sys_platform != 'emscripten'" },
-    { name = "h11", marker = "sys_platform != 'emscripten'" },
+    { name = "click" },
+    { name = "h11" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a2/65/b7c6c443ccc58678c91e1e973bbe2a878591538655d6e1d47f24ba1c51f3/uvicorn-0.51.0.tar.gz", hash = "sha256:f6f4b69b657c312f516dd2d268ab9ae6f254b11e4bac504f37b2ab58b24dd0b0", size = 94412, upload-time = "2026-07-08T10:59:05.962Z" }
 wheels = [
