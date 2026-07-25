@@ -11,7 +11,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
-from soothe_nano import CodingCoreAgent, create_nano_agent
+from soothe_nano import SootheNanoAgent, create_nano_agent
 from soothe_nano.config import SOOTHE_HOME, SootheConfig
 from soothe_nano.resolve import resolve_checkpointer
 
@@ -248,7 +248,7 @@ async def build_agent(
     workspace: Path | None = None,
     checkpointer: Any | None = None,
     verbose: bool = False,
-) -> CodingCoreAgent:
+) -> SootheNanoAgent:
     """Build a full nano coding agent for the current workspace."""
     configure_cli_logging(verbose=verbose)
     ensure_workspace(workspace)

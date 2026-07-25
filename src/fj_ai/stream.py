@@ -11,7 +11,7 @@ import warnings
 from typing import Any, TextIO
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
-from soothe_nano import CodingCoreAgent
+from soothe_nano import SootheNanoAgent
 
 from fj_ai.progress import (
     ProgressLine,
@@ -288,7 +288,7 @@ class AnswerWriter:
 
 
 async def stream_query(
-    agent: CodingCoreAgent,
+    agent: SootheNanoAgent,
     query: str,
     *,
     thread_id: str,
@@ -434,7 +434,7 @@ async def stream_query(
 
 
 async def invoke_query(
-    agent: CodingCoreAgent,
+    agent: SootheNanoAgent,
     query: str,
     *,
     thread_id: str,
