@@ -247,7 +247,7 @@ def test_main_verbose_prints_thread_on_stderr(
 
 
 # ---------------------------------------------------------------------------
-# Subcommands: setup / completion / __complete
+# Subcommands: setup / doctor / completion / __complete
 # ---------------------------------------------------------------------------
 
 
@@ -268,6 +268,25 @@ def test_main_setup_does_not_enter_query_path(
     code, _out, err = run_fj(["setup", "-c", "/tmp/custom.yml"])
     assert code == 0
     assert called[-1] == "/tmp/custom.yml"
+
+
+def test_main_doctor_does_not_enter_query_path(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fj_ai.doctor_cmd as doctor_cmd
+
+    called: list[list[str]] = []
+    monkeypatch.setattr(
+        doctor_cmd,
+        "run_doctor",
+        lambda argv: called.append(list(argv)) or 0,
+    )
+    code, _out, err = run_fj(["doctor", "--deep"])
+    assert code == 0, err
+    assert called == [["--deep"]]
+    assert stub_agent_runtime["build_calls"] == 0
 
 
 def test_main_completion_scripts(

@@ -44,7 +44,8 @@ _fj() {
   COMPREPLY=()
 
   if [[ ${#query[@]} -eq 0 || "${query[0]}" == -* \
-     || "${query[0]}" == setup || "${query[0]}" == completion ]]; then
+     || "${query[0]}" == setup || "${query[0]}" == doctor \
+     || "${query[0]}" == completion ]]; then
     local r
     for r in "${replies[@]}"; do
       [[ -z "$r" ]] && continue

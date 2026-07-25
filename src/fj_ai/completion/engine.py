@@ -100,6 +100,25 @@ def static_candidates(prefix: str) -> list[str]:
             return list(COMPLETION_SHELLS)
         return ["completion"] if "completion".startswith(first) else []
 
+    if first == "doctor" or "doctor".startswith(first):
+        doctor_flags = (
+            "--deep",
+            "--live-llm",
+            "--format",
+            "--no-color",
+            "--fail-on",
+            "-c",
+            "--config",
+        )
+        if first == "doctor" and len(parts) >= 2:
+            flag_prefix = parts[-1]
+            if flag_prefix.startswith("-"):
+                return [f for f in doctor_flags if f.startswith(flag_prefix)]
+            return []
+        if first == "doctor":
+            return list(doctor_flags)
+        return ["doctor"] if "doctor".startswith(first) else []
+
     return [cmd for cmd in SUBCOMMANDS if cmd.startswith(first)]
 
 

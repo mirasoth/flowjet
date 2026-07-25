@@ -50,6 +50,18 @@ fj summarize README.md
 
 Missing `nano.yml` falls back to `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 
+## Doctor
+
+Check whether this machine can run fj (tool binaries, providers, observability).
+Requires ``soothe-nano`` with the ``diagnose`` API (1.0.8+):
+
+```bash
+fj doctor
+fj doctor --deep
+fj doctor --live-llm
+fj doctor --format json
+```
+
 ## Run
 
 ```bash

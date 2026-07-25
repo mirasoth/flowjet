@@ -93,8 +93,9 @@ def test_main_follow_skips_subcommands(monkeypatch) -> None:  # type: ignore[no-
 
     monkeypatch.setattr(cli, "main", fake_main)
     assert main_follow(["setup"]) == 0
+    assert main_follow(["doctor", "--deep"]) == 0
     assert main_follow(["completion", "zsh"]) == 0
-    assert seen == [["setup"], ["completion", "zsh"]]
+    assert seen == [["setup"], ["doctor", "--deep"], ["completion", "zsh"]]
 
 
 def test_main_follow_idempotent_when_follow_present(monkeypatch) -> None:  # type: ignore[no-untyped-def]

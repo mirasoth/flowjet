@@ -21,6 +21,7 @@ query when it looks like flags."""
 _CLI_EPILOG = """\
 commands:
   fj setup                 Interactive nano.yml setup
+  fj doctor                Diagnose runtime readiness (tool deps, providers, …)
   fj completion zsh|bash   Print shell completion script
 
 query modes:
@@ -34,6 +35,8 @@ examples:
   fj -f what did we decide last time?
   fj -t fj-abc-123 continue here
   fj -l -n 10
+  fj doctor
+  fj doctor --deep --live-llm
   eval "$(fj completion zsh)"
 
 notes:
@@ -273,6 +276,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         setup_args = _build_setup_parser().parse_args(raw[1:])
         setup_args.query_text = ""
         return _namespace_with_command(setup_args, "setup")
+    if raw and raw[0] == "doctor":
+        ns = argparse.Namespace(query_text="", doctor_argv=raw[1:])
+        return _namespace_with_command(ns, "doctor")
     if raw and raw[0] == "__complete":
         ns = argparse.Namespace(query_text="", complete_argv=raw[1:])
         return _namespace_with_command(ns, "__complete")
@@ -418,7 +424,7 @@ async def run_async(args: argparse.Namespace) -> int:
     return 0
 
 
-_FOLLOW_SUBCOMMANDS = frozenset({"setup", "completion", "__complete"})
+_FOLLOW_SUBCOMMANDS = frozenset({"setup", "doctor", "completion", "__complete"})
 
 
 def _inject_follow(argv: list[str]) -> list[str]:
@@ -443,11 +449,15 @@ def main(argv: list[str] | None = None) -> int:
         # Re-apply after parse so ``-v`` can enable compact console warnings.
         if getattr(args, "verbose", False):
             configure_cli_logging(verbose=True)
-        # Keep interactive setup / completion off the event loop so Ctrl+C exits cleanly.
+        # Keep interactive setup / doctor / completion off the event loop so Ctrl+C exits cleanly.
         if args.command == "setup":
             from fj_ai.setup_cmd import run_setup
 
             return run_setup(getattr(args, "config", None))
+        if args.command == "doctor":
+            from fj_ai.doctor_cmd import run_doctor
+
+            return run_doctor(getattr(args, "doctor_argv", []))
         if args.command == "__complete":
             from fj_ai.completion import run_complete
 
