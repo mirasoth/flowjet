@@ -113,6 +113,41 @@ def test_accumulator_streams_chunked_json() -> None:
     name, args = acc.args_for("call_1")
     assert name == "read_file"
     assert args.get("file_path", "").endswith("Makefile")
+    assert acc.args_complete("call_1") is True
+
+
+def test_args_complete_false_while_json_partial() -> None:
+    acc = ToolCallArgAccumulator()
+    msg = SimpleNamespace(
+        tool_calls=[],
+        tool_call_chunks=[
+            {
+                "name": "ls",
+                "args": '{"path": "/Users/',
+                "id": "c1",
+                "index": 0,
+                "type": "tool_call_chunk",
+            }
+        ],
+    )
+    acc.ingest_message(msg)
+    assert acc.args_complete("c1") is False
+    msg2 = SimpleNamespace(
+        tool_calls=[],
+        tool_call_chunks=[
+            {
+                "name": None,
+                "args": 'chenxm"}',
+                "id": "",
+                "index": 0,
+                "type": "tool_call_chunk",
+            }
+        ],
+    )
+    acc.ingest_message(msg2)
+    assert acc.args_complete("c1") is True
+    assert acc.args_complete(None) is False
+    assert acc.args_complete("missing") is False
 
 
 def test_accumulator_pop_and_args_for_missing() -> None:

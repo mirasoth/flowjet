@@ -15,9 +15,9 @@ from soothe_nano import CodingCoreAgent
 
 from fj_ai.progress import (
     ProgressLine,
+    format_tool_activity,
+    format_tool_done,
     friendly_progress,
-    friendly_tool_call,
-    friendly_tool_result,
 )
 from fj_ai.tool_stream import ToolCallArgAccumulator
 
@@ -119,21 +119,44 @@ def write_cli_error(
 # ---------------------------------------------------------------------------
 
 
-def _truncate(text: str, limit: int = 200) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "…"
-
-
-def _format_content(content: Any) -> str:
+def _verbose_preview(content: Any, *, limit: int = 200) -> str:
+    """Single-line preview for ``-v`` tool results (no mid-line newlines)."""
     if isinstance(content, str):
-        return content
-    if isinstance(content, list):
+        raw = content
+    elif isinstance(content, list):
         try:
-            return json.dumps(content, ensure_ascii=False)[:200]
+            raw = json.dumps(content, ensure_ascii=False)
         except (TypeError, ValueError):
-            return str(content)[:200]
-    return str(content)[:200]
+            raw = str(content)
+    else:
+        raw = str(content)
+    line = re.sub(r"\s+", " ", raw).strip()
+    if len(line) <= limit:
+        return line
+    return line[:limit] + "…"
+
+
+def _write_verbose(status: ProgressLine, stderr: TextIO, text: str) -> None:
+    """Write a verbose mirror line without colliding with the progress spinner."""
+    status.blank()
+    stderr.write(text if text.endswith("\n") else text + "\n")
+    stderr.flush()
+    status.repaint()
+
+
+def _mirror_tool(
+    status: ProgressLine,
+    stderr: TextIO,
+    mirrored: set[str],
+    tc_id: str,
+    name: str | None,
+    args: dict[str, Any],
+) -> None:
+    """Emit ``[tool]`` once per call id when args are available."""
+    if not tc_id or tc_id in mirrored or not name or not args:
+        return
+    mirrored.add(tc_id)
+    _write_verbose(status, stderr, f"  [tool] {name} {args}\n")
 
 
 def _ai_text(message: AIMessage) -> str:
@@ -286,6 +309,8 @@ async def stream_query(
     last_tool_name: str | None = None
     last_tool_args: dict[str, Any] = {}
     last_progress_key = ""
+    # ``-v``: emit each tool call once when args are complete (not every partial).
+    mirrored_tool_ids: set[str] = set()
 
     # Deepagents emits a deprecation warning mid-run that would smash the
     # ephemeral progress line when mixed onto the terminal.
@@ -301,94 +326,109 @@ async def stream_query(
         )
         async with status:
             status.update("Thinking…", color="cyan")
-            try:
-                async for chunk in agent.astream(
-                    {"messages": messages},
-                    config=config,
-                    stream_mode=["messages", "updates", "custom"],
-                    subgraphs=True,
-                ):
-                    if not isinstance(chunk, tuple) or len(chunk) != 3:
-                        continue
+            async for chunk in agent.astream(
+                {"messages": messages},
+                config=config,
+                stream_mode=["messages", "updates", "custom"],
+                subgraphs=True,
+            ):
+                if not isinstance(chunk, tuple) or len(chunk) != 3:
+                    continue
 
-                    _namespace, mode, data = chunk
+                _namespace, mode, data = chunk
 
-                    if mode == "custom" and isinstance(data, dict):
-                        mapped = friendly_progress(data)
-                        if mapped:
-                            label, color = mapped
-                            status.update(label, color=color)
+                if mode == "custom" and isinstance(data, dict):
+                    mapped = friendly_progress(data)
+                    if mapped:
+                        label, color = mapped
+                        status.update(label, color=color)
+                        # Only mirror events that drive the progress line
+                        # (skips policy.checked, output.*, …).
                         if show_tool_calls:
                             event_type = data.get("type", "unknown")
-                            stderr.write(f"  [event] {event_type}\n")
-                            stderr.flush()
-                        continue
+                            _write_verbose(status, stderr, f"  [event] {event_type}\n")
+                    continue
 
-                    if mode == "updates" and isinstance(data, dict) and "__interrupt__" in data:
-                        status.update("Waiting for input…", color="yellow")
-                        if show_tool_calls:
-                            stderr.write("\n  [interrupted] agent paused for input\n")
-                            stderr.flush()
-                        continue
+                if mode == "updates" and isinstance(data, dict) and "__interrupt__" in data:
+                    status.update("Waiting for input…", color="yellow")
+                    if show_tool_calls:
+                        _write_verbose(
+                            status,
+                            stderr,
+                            "\n  [interrupted] agent paused for input\n",
+                        )
+                    continue
 
-                    if mode != "messages":
-                        continue
-                    if not isinstance(data, tuple) or len(data) != 2:
-                        continue
-                    message_obj, _metadata = data
+                if mode != "messages":
+                    continue
+                if not isinstance(data, tuple) or len(data) != 2:
+                    continue
+                message_obj, _metadata = data
 
-                    if isinstance(message_obj, AIMessage):
-                        # Tool args stream as tool_call_chunks (partial JSON). Accumulate
-                        # and refresh the progress line as args become available.
-                        updates = tool_args.ingest_message(message_obj)
-                        if updates:
-                            answer.reset_for_tools()
-                            for tc_id, name, args in updates:
-                                last_tool_name = name
-                                last_tool_args = args
-                                label, color = friendly_tool_call(name, args)
-                                progress_key = f"{tc_id}:{label}"
-                                if progress_key != last_progress_key:
-                                    status.update(label, color=color)
-                                    last_progress_key = progress_key
-                                if show_tool_calls and args:
-                                    stderr.write(f"  [tool] {name} {args}\n")
-                                    stderr.flush()
-                        elif not (
-                            getattr(message_obj, "tool_calls", None)
-                            or getattr(message_obj, "tool_call_chunks", None)
-                        ):
-                            answer.set(accumulate_ai_text(answer.buf, message_obj))
+                if isinstance(message_obj, AIMessage):
+                    # Tool args stream as tool_call_chunks (partial JSON). Accumulate
+                    # and refresh the progress line as args become available.
+                    updates = tool_args.ingest_message(message_obj)
+                    if updates:
+                        answer.reset_for_tools()
+                        for tc_id, name, args in updates:
+                            last_tool_name = name
+                            last_tool_args = args
+                            label, color = format_tool_activity(name, args)
+                            progress_key = f"{tc_id}:{label}"
+                            if progress_key != last_progress_key:
+                                status.update(label, color=color)
+                                last_progress_key = progress_key
+                            if show_tool_calls and tool_args.args_complete(tc_id):
+                                _mirror_tool(
+                                    status,
+                                    stderr,
+                                    mirrored_tool_ids,
+                                    tc_id,
+                                    name,
+                                    args,
+                                )
+                    elif not (
+                        getattr(message_obj, "tool_calls", None)
+                        or getattr(message_obj, "tool_call_chunks", None)
+                    ):
+                        answer.set(accumulate_ai_text(answer.buf, message_obj))
 
-                    elif isinstance(message_obj, ToolMessage):
-                        tc_id = getattr(message_obj, "tool_call_id", None)
-                        name, tc_args = tool_args.pop(tc_id)
-                        name = name or getattr(message_obj, "name", None) or last_tool_name
-                        if not tc_args:
-                            tc_args = last_tool_args
-                        else:
-                            last_tool_args = tc_args
-                        if name:
-                            last_tool_name = str(name)
-                        status_code = getattr(message_obj, "status", None)
-                        err_detail = tool_result_error_detail(message_obj.content)
-                        is_error = status_code == "error" or err_detail is not None
-                        short_err = simplify_tool_error(err_detail) if err_detail else None
-                        label, color = friendly_tool_result(
+                elif isinstance(message_obj, ToolMessage):
+                    tc_id = getattr(message_obj, "tool_call_id", None)
+                    name, tc_args = tool_args.pop(tc_id)
+                    name = name or getattr(message_obj, "name", None) or last_tool_name
+                    if not tc_args:
+                        tc_args = last_tool_args
+                    else:
+                        last_tool_args = tc_args
+                    if name:
+                        last_tool_name = str(name)
+                    status_code = getattr(message_obj, "status", None)
+                    err_detail = tool_result_error_detail(message_obj.content)
+                    is_error = status_code == "error" or err_detail is not None
+                    short_err = simplify_tool_error(err_detail) if err_detail else None
+                    label, color = format_tool_done(
+                        str(name) if name else None,
+                        tc_args,
+                        is_error=is_error,
+                        detail=short_err,
+                    )
+                    status.update(label, color=color)
+                    last_progress_key = ""
+                    if show_tool_calls:
+                        # Late mirror if args never parsed as complete mid-stream.
+                        _mirror_tool(
+                            status,
+                            stderr,
+                            mirrored_tool_ids,
+                            str(tc_id) if tc_id else "",
                             str(name) if name else None,
                             tc_args,
-                            is_error=is_error,
-                            detail=short_err,
                         )
-                        status.update(label, color=color)
-                        last_progress_key = ""
-                        if show_tool_calls:
-                            preview = short_err or _truncate(_format_content(message_obj.content))
-                            tag = "error" if is_error else "result"
-                            stderr.write(f"  [{tag}] {preview}\n")
-                            stderr.flush()
-            except Exception:
-                raise
+                        preview = short_err or _verbose_preview(message_obj.content)
+                        tag = "error" if is_error else "result"
+                        _write_verbose(status, stderr, f"  [{tag}] {preview}\n")
 
     return answer.finish()
 
