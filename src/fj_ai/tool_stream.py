@@ -203,6 +203,26 @@ class ToolCallArgAccumulator:
                 updated_ids.add(tc_id)
                 self._last_active_id = tc_id
 
+    def args_complete(self, tool_call_id: str | None) -> bool:
+        """True when arg JSON is finished (not a mid-stream partial object)."""
+        if not tool_call_id:
+            return False
+        tc_id = str(tool_call_id)
+        state = self._pending.get(tc_id)
+        if not state:
+            return False
+        if state.get("is_complete_json"):
+            return True
+        args_str = str(state.get("args_str") or "").strip()
+        if args_str:
+            try:
+                loaded = json.loads(args_str)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return False
+            return isinstance(loaded, dict)
+        # Dict args arrived via ``tool_calls`` with no streamed JSON yet.
+        return bool(self._overlays.get(tc_id))
+
     def args_for(self, tool_call_id: str | None) -> tuple[str | None, dict[str, Any]]:
         if not tool_call_id:
             return None, {}

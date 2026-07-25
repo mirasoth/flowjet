@@ -13,8 +13,6 @@ from fj_ai.progress import (
     format_tool_activity,
     format_tool_done,
     friendly_progress,
-    friendly_tool_call,
-    friendly_tool_result,
 )
 
 
@@ -59,7 +57,7 @@ def test_format_read_file_activity() -> None:
 
 
 def test_format_run_command_activity() -> None:
-    label, color = friendly_tool_call("run_command", {"command": "ruff check src/ tests/"})
+    label, color = format_tool_activity("run_command", {"command": "ruff check src/ tests/"})
     assert "Running" in label
     assert "ruff check" in label
     assert color == "yellow"
@@ -216,8 +214,8 @@ def test_progress_line_cjk_paint_respects_display_width(
     assert _display_width(plain) <= _line_budget()
 
 
-def test_friendly_tool_result_keeps_context() -> None:
-    label, color = friendly_tool_result(
+def test_format_tool_done_keeps_context() -> None:
+    label, color = format_tool_done(
         "read_file", {"file_path": "src/fj_ai/progress.py"}, is_error=False
     )
     assert "Thinking" in label
@@ -249,16 +247,15 @@ def test_progress_line_ephemeral_clear() -> None:
 
 
 @pytest.mark.asyncio
-async def test_progress_line_release_skips_clear_on_stop() -> None:
+async def test_progress_line_blank_repaint_for_verbose() -> None:
     buf = StringIO()
     line = ProgressLine(buf, enabled=True, tick_seconds=0.05)
     async with line:
         line.update("Thinking…", color="cyan")
-        line.release()
-        before = buf.getvalue()
-        buf.write("Hello answer")
-    # stop() must not erase the answer with another clear sequence after it.
-    assert buf.getvalue() == before + "Hello answer"
+        line.blank()
+        assert buf.getvalue().endswith("\033[2K")
+        line.repaint()
+        assert "Thinking" in buf.getvalue()
 
 
 @pytest.mark.asyncio
@@ -482,13 +479,10 @@ def test_format_tool_activity_unknown_tool() -> None:
     assert label.startswith("Reading")
 
 
-def test_progress_line_release_is_idempotent() -> None:
+def test_progress_line_clear_after_update() -> None:
     buf = StringIO()
     line = ProgressLine(buf, enabled=True)
     line.update("Thinking…", color="cyan")
-    line.release()
-    before = buf.getvalue()
-    line.release()
-    assert buf.getvalue() == before
     line.clear()
-    assert buf.getvalue() == before
+    assert "\033[2K" in buf.getvalue()
+    assert line._active is False

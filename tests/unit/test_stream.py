@@ -13,9 +13,8 @@ from fj_ai.progress import ProgressLine
 from fj_ai.stream import (
     AnswerWriter,
     _ai_text,
-    _format_content,
     _status_preview,
-    _truncate,
+    _verbose_preview,
     accumulate_ai_text,
     invoke_query,
     stream_query,
@@ -50,12 +49,12 @@ def test_ai_text_fallback_str(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _ai_text(WeirdMessage()) == "12345"  # type: ignore[arg-type]
 
 
-def test_truncate_and_format_content() -> None:
-    assert _truncate("short") == "short"
-    assert _truncate("x" * 10, limit=5) == "xxxxx…"
-    assert _format_content("plain") == "plain"
-    assert "[" in _format_content([{"a": 1}])
-    assert _format_content(42) == "42"
+def test_verbose_preview_collapses_and_truncates() -> None:
+    assert _verbose_preview("plain") == "plain"
+    assert _verbose_preview("a\nb\nc") == "a b c"
+    assert _verbose_preview("x" * 10, limit=5) == "xxxxx…"
+    assert "[" in _verbose_preview([{"a": 1}])
+    assert _verbose_preview(42) == "42"
 
 
 def test_accumulate_chunk_deltas() -> None:
@@ -403,6 +402,71 @@ async def test_stream_query_tool_call_and_error_result() -> None:
     assert "[tool]" in stderr
     assert "[error]" in stderr
     assert "limit" in stderr
+
+
+@pytest.mark.asyncio
+async def test_verbose_skips_noisy_events_and_partial_tool_args() -> None:
+    """``-v`` must not dump policy.checked or mid-stream arg fragments."""
+    out = StringIO()
+    err = StringIO()
+
+    def path_chunk(args_fragment: str, *, name: str | None = None, tc_id: str = "") -> Any:
+        return AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "name": name,
+                    "args": args_fragment,
+                    "id": tc_id,
+                    "index": 0,
+                    "type": "tool_call_chunk",
+                }
+            ],
+        )
+
+    agent = _FakeAgent(
+        [
+            ((), "custom", {"type": "soothe.internal.policy.checked", "verdict": "allow"}),
+            ((), "custom", {"type": "soothe.internal.plugin.health_checked"}),
+            ((), "custom", {"type": "soothe.output.token", "text": "x"}),
+            ((), "custom", {"type": "soothe.cognition.strange_loop.started"}),
+            _msg_chunk(path_chunk("", name="ls", tc_id="call_ls")),
+            _msg_chunk(path_chunk('{"path": "/Users/')),
+            _msg_chunk(path_chunk('chenxm/Workspace"}')),
+            _msg_chunk(
+                ToolMessage(
+                    content="dir\na\nb\nc\n" * 20,
+                    tool_call_id="call_ls",
+                    name="ls",
+                )
+            ),
+            _msg_chunk(AIMessage(content="done")),
+        ]
+    )
+    result = await stream_query(
+        agent,  # type: ignore[arg-type]
+        "list",
+        thread_id="t1",
+        show_tool_calls=True,
+        live_answer=True,
+        out=out,
+        err=err,
+        progress=ProgressLine(out, enabled=False),
+    )
+    assert result == "done"
+    stderr = err.getvalue()
+    assert "policy.checked" not in stderr
+    assert "health_checked" not in stderr
+    assert "soothe.output.token" not in stderr
+    assert "[event] soothe.cognition.strange_loop.started" in stderr
+    # One complete tool mirror — not a line per partial path fragment.
+    assert stderr.count("[tool] ls") == 1
+    assert "/Users/chenxm/Workspace" in stderr
+    assert "[result]" in stderr
+    # Result preview is a single logical line (no raw newlines from tool output).
+    result_line = next(line for line in stderr.splitlines() if "[result]" in line)
+    assert result_line.count("dir") >= 1
+    assert len(result_line) <= 220
 
 
 @pytest.mark.asyncio

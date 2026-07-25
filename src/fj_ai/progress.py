@@ -203,12 +203,6 @@ def _line_budget() -> int:
     return max(_PROGRESS_MIN, min(_PROGRESS_MAX, cols - 6))
 
 
-def _truncate(text: str, limit: int | None = None) -> str:
-    """Keep the start of ``text`` (commands, queries)."""
-    limit = _line_budget() if limit is None else limit
-    return _truncate_cols(text, limit, tail=False)
-
-
 def _truncate_middle(text: str, limit: int | None = None) -> str:
     """Keep head and tail of ``text`` (``aaaa…bbbb``) for content previews."""
     limit = _line_budget() if limit is None else limit
@@ -690,20 +684,6 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
     return _fit(label), "cyan"
 
 
-def friendly_tool_call(name: str, args: Any | None = None) -> tuple[str, str]:
-    return format_tool_activity(name, args)
-
-
-def friendly_tool_result(
-    name: str | None,
-    args: Any | None = None,
-    *,
-    is_error: bool = False,
-    detail: str | None = None,
-) -> tuple[str, str]:
-    return format_tool_done(name, args, is_error=is_error, detail=detail)
-
-
 class ProgressLine:
     """Overwrite a single ephemeral status line on stdout (TTY only).
 
@@ -729,8 +709,6 @@ class ProgressLine:
         self._style = "cyan"
         self._tick_seconds = tick_seconds
         self._task: asyncio.Task[None] | None = None
-        # When True, stdout belongs to the answer stream; stop() must not clear.
-        self._released = False
 
     @property
     def enabled(self) -> bool:
@@ -752,7 +730,7 @@ class ProgressLine:
         self._task = asyncio.create_task(self._spin(), name="fj-progress-spinner")
 
     async def stop(self) -> None:
-        """Stop the ticker; clear the line unless handed off to answer output."""
+        """Stop the ticker and clear the progress line."""
         task = self._task
         self._task = None
         if task is not None:
@@ -761,14 +739,13 @@ class ProgressLine:
                 await task
             except asyncio.CancelledError:
                 pass
-        if not self._released:
-            self.clear()
+        self.clear()
 
     async def _spin(self) -> None:
         try:
             while True:
                 await asyncio.sleep(self._tick_seconds)
-                if self._active and not self._released:
+                if self._active:
                     self._paint()
         except asyncio.CancelledError:
             raise
@@ -776,26 +753,11 @@ class ProgressLine:
     def update(self, message: str, *, color: str = "cyan", tail: bool = False) -> None:
         if not self._enabled:
             return
-        # Reclaim the line after a live-answer handoff (e.g. tool call mid-run).
-        self._released = False
         self._message = _fit(message.strip() or "Working…", tail=tail)
         self._style = color
         self._active = True
         self._paint()
         self._ensure_ticker()
-
-    def release(self) -> None:
-        """Clear the progress line once and hand stdout to the answer stream."""
-        if self._released:
-            return
-        self._released = True
-        self._active = False
-        if not self._enabled:
-            return
-        if self._frame > 0 or self._message:
-            self._stream.write("\r\033[2K")
-            self._stream.flush()
-        self._message = ""
 
     def _ensure_ticker(self) -> None:
         if not self._enabled or self._task is not None:
@@ -807,7 +769,7 @@ class ProgressLine:
         self._task = loop.create_task(self._spin(), name="fj-progress-spinner")
 
     def _paint(self) -> None:
-        if not self._enabled or self._released:
+        if not self._enabled:
             return
         text = _fit(self._message)
         frame = _SPINNER[self._frame % len(_SPINNER)]
@@ -820,9 +782,22 @@ class ProgressLine:
         self._stream.write(f"\r\033[2K{rendered}")
         self._stream.flush()
 
+    def blank(self) -> None:
+        """Erase the progress line so other writers can print cleanly."""
+        if not self._enabled:
+            return
+        if self._frame > 0 or self._message:
+            self._stream.write("\r\033[2K")
+            self._stream.flush()
+
+    def repaint(self) -> None:
+        """Redraw the current progress frame after a ``blank()``."""
+        if self._active:
+            self._paint()
+
     def clear(self) -> None:
         self._active = False
-        if not self._enabled or self._released:
+        if not self._enabled:
             return
         if self._frame > 0 or self._message:
             self._stream.write("\r\033[2K")
