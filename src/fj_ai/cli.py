@@ -1,4 +1,7 @@
-"""fj CLI — any characters after the command are the agent query."""
+"""FlowJet CLI — any characters after the command are the agent query.
+
+Formal command: ``flowjet-agent``. Aliases: ``fj`` (same), ``fjf`` (``-f``).
+"""
 
 from __future__ import annotations
 
@@ -11,39 +14,71 @@ from typing import Any
 from fj_ai import __version__
 from fj_ai.agent import configure_cli_logging
 
-_CLI_DESCRIPTION = """\
-fj — coding agent CLI (soothe-nano)
+FORMAL_CLI = "flowjet-agent"
+CLI_ALIASES = frozenset({"fj", "fjf", FORMAL_CLI})
 
-Pass a natural-language query after options. Remaining words are joined into
-one query string (any Unicode). Use -- to force the rest of the line into the
-query when it looks like flags."""
 
-_CLI_EPILOG = """\
+def resolve_cli_prog(argv0: str | None = None) -> str:
+    """Return the invoked command name for help / version strings.
+
+    Known entrypoints (``flowjet-agent``, ``fj``, ``fjf``) are preserved.
+    Unknown wrappers (``python -m …``) fall back to the formal name.
+    """
+    name = Path(argv0 if argv0 is not None else sys.argv[0]).name
+    if name.endswith(".exe"):
+        name = name[: -len(".exe")]
+    if name in CLI_ALIASES:
+        return name
+    return FORMAL_CLI
+
+
+def _cli_description(prog: str) -> str:
+    alias_note = {
+        FORMAL_CLI: "Aliases: fj (same), fjf (same as flowjet-agent -f).",
+        "fj": "Alias of flowjet-agent. Also: fjf (= fj -f).",
+        "fjf": "Alias of flowjet-agent -f / fj -f (follow latest thread).",
+    }.get(prog, "Formal command: flowjet-agent. Aliases: fj, fjf (= -f).")
+    return (
+        "FlowJet — coding agent CLI (soothe-nano)\n"
+        f"\n{alias_note}\n"
+        "\nPass a natural-language query after options. Remaining words are joined into\n"
+        "one query string (any Unicode). Use -- to force the rest of the line into the\n"
+        "query when it looks like flags."
+    )
+
+
+def _cli_epilog(prog: str) -> str:
+    # Prefer short alias in examples when the user invoked fj/fjf.
+    show = prog if prog in {"fj", "fjf"} else FORMAL_CLI
+    follow = show if show == "fjf" else f"{show} -f"
+    return f"""\
 commands:
-  fj setup                 Interactive nano.yml setup
-  fj doctor                Diagnose runtime readiness (tool deps, providers, …)
-  fj completion zsh|bash   Print shell completion script
+  {show} setup                 Interactive nano.yml setup
+  {show} doctor                Diagnose runtime readiness (tool deps, providers, …)
+  {show} completion zsh|bash   Print shell completion script
 
 query modes:
-  fj QUERY...              Start a new thread (default)
-  fj -f QUERY...           Continue the latest active thread
-  fj -t ID QUERY...        Continue a specific thread
-  fj -t ID                 Pin thread as active (no query)
+  {show} QUERY...              Start a new thread (default)
+  {follow} QUERY...           Continue the latest active thread
+  {show} -t ID QUERY...        Continue a specific thread
+  {show} -t ID                 Pin thread as active (no query)
 
 examples:
-  fj explain this repo
-  fj -f what did we decide last time?
-  fj -t fj-abc-123 continue here
-  fj -l -n 10
-  fj doctor
-  fj doctor --deep --live-llm
-  eval "$(fj completion zsh)"
+  {show} explain this repo
+  {follow} what did we decide last time?
+  {show} -t fj-abc-123 continue here
+  {show} -l -n 10
+  {show} doctor
+  {show} doctor --deep --live-llm
+  eval "$({show if show != "fjf" else "fj"} completion zsh)"
 
 notes:
+  • Formal CLI: flowjet-agent · aliases: fj, fjf (= -f)
   • -f and -t are mutually exclusive; -n requires -l; -l takes no query
   • One query per thread at a time; different threads may run concurrently
   • With -v, prints thread <id> on stderr before the run
 """
+
 
 # Boolean short flags that may appear clustered (``-lv`` → ``-l -v``).
 _BOOL_SHORTS = frozenset({"h", "V", "l", "v", "f"})
@@ -172,11 +207,12 @@ def _default_config_help() -> str:
     return f"Alternate nano.yml (default: {default_config_path()})"
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(prog: str | None = None) -> argparse.ArgumentParser:
+    cli_prog = prog or resolve_cli_prog()
     parser = argparse.ArgumentParser(
-        prog="fj",
-        description=_CLI_DESCRIPTION,
-        epilog=_CLI_EPILOG,
+        prog=cli_prog,
+        description=_cli_description(cli_prog),
+        epilog=_cli_epilog(cli_prog),
         formatter_class=_HelpFormatter,
         add_help=True,
     )
@@ -184,7 +220,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "-V",
         "--version",
         action="version",
-        version=f"fj {__version__}",
+        version=f"{cli_prog} {__version__}",
     )
 
     thread = parser.add_argument_group("thread")
@@ -243,14 +279,15 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def cli_help_text() -> str:
-    """Full ``fj`` help text (same as ``fj -h``)."""
-    return _build_parser().format_help()
+def cli_help_text(prog: str | None = None) -> str:
+    """Full help text (same as ``flowjet-agent -h`` / ``fj -h``)."""
+    return _build_parser(prog).format_help()
 
 
-def _build_setup_parser() -> argparse.ArgumentParser:
+def _build_setup_parser(prog: str | None = None) -> argparse.ArgumentParser:
+    cli_prog = prog or resolve_cli_prog()
     parser = argparse.ArgumentParser(
-        prog="fj setup",
+        prog=f"{cli_prog} setup",
         description="Interactive setup for nano.yml",
         formatter_class=_HelpFormatter,
     )
@@ -437,7 +474,7 @@ def _inject_follow(argv: list[str]) -> list[str]:
 
 
 def main_follow(argv: list[str] | None = None) -> int:
-    """``fjf`` entry point — same as ``fj --follow``."""
+    """``fjf`` entry point — alias of ``flowjet-agent -f`` / ``fj -f``."""
     raw = list(sys.argv[1:] if argv is None else argv)
     return main(_inject_follow(raw))
 

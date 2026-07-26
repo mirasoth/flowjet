@@ -1,32 +1,35 @@
-# fj
+# FlowJet
 
-[![PyPI version](https://img.shields.io/pypi/v/fj-ai.svg)](https://pypi.org/p/fj-ai)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/fj-ai.svg)](https://pypi.org/p/fj-ai)
-[![CI](https://github.com/caesar0301/fj-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/caesar0301/fj-ai/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/flowjet-agent.svg)](https://pypi.org/p/flowjet-agent)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/flowjet-agent.svg)](https://pypi.org/p/flowjet-agent)
+[![CI](https://github.com/caesar0301/flowjet-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/caesar0301/flowjet-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 🎥 [Watch the demo video on Vimeo](https://vimeo.com/1211730182)
 
-**fj** is a one-shot coding-agent CLI for the terminal. Type a question, get an answer — no UI, no context-switching:
+**FlowJet** (`flowjet-agent`) is a one-shot coding-agent CLI for the terminal. Type a question, get an answer — no UI, no context-switching:
 
 ```bash
-fj explain this repo
+flowjet-agent explain this repo
+fj explain this repo                    # alias of flowjet-agent
 fj -f what did we decide last time?
-fjf what did we decide last time?  // The same as fj -f
+fjf what did we decide last time?       # alias of fj -f
 ```
 
 It runs on [soothe-nano](https://github.com/mirasoth/soothe-nano) — tools, skills, MCP, subagents, and progressive loading — with SQLite persistence so every thread is resumable.
 
-> Package: **fj-ai** · Runtime: **soothe-nano**
+> Package / formal CLI: **flowjet-agent** · aliases: **fj**, **fjf** (= `-f`) · Runtime: **soothe-nano** · Repo: **[flowjet-agent](https://github.com/caesar0301/flowjet-agent)**
+
+See [docs/naming.md](docs/naming.md) for the formal naming model.
 
 ---
 
 ## Install
 
 ```bash
-pip install fj-ai
+pip install flowjet-agent
 # or
-uv tool install fj-ai
+uv tool install flowjet-agent
 ```
 
 Requires Python 3.11+.
@@ -143,8 +146,8 @@ With `defer: true` (default), MCP tools activate on demand.
 ## Development
 
 ```bash
-git clone https://github.com/caesar0301/fj-ai.git
-cd fj-ai
+git clone https://github.com/caesar0301/flowjet-agent.git
+cd flowjet-agent
 make sync-dev
 make test
 make lint

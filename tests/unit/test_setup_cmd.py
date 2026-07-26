@@ -60,7 +60,7 @@ def test_update_config_adds_default_new_provider_name() -> None:
         model="llama3.2",
     )
     assert updated["providers"][0]["name"] == DEFAULT_NEW_PROVIDER_NAME
-    assert updated["router_profiles"][0]["router"]["default"] == "fj-ai-default:llama3.2"
+    assert updated["router_profiles"][0]["router"]["default"] == "flowjet-default:llama3.2"
     assert updated["active_router_profile"] == "default"
 
 
@@ -161,7 +161,7 @@ def test_fetch_models_invalid_url_raises_runtime_error() -> None:
 
 
 def test_suggest_provider_name_from_endpoint() -> None:
-    assert suggest_provider_name("http://127.0.0.1:11434/v1") == "fj-ai-default"
+    assert suggest_provider_name("http://127.0.0.1:11434/v1") == "flowjet-default"
     assert suggest_provider_name("https://coding.dashscope.aliyuncs.com/v1") == "coding-dashscope"
     assert suggest_provider_name("https://apihub.agnes-ai.com/v1") == "apihub-agnes-ai"
     assert suggest_provider_name("http://100.75.70.86:9642/v1") == "host-100-75-70-86"

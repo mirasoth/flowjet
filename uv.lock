@@ -1240,8 +1240,8 @@ wheels = [
 ]
 
 [[package]]
-name = "fj-ai"
-version = "1.0.18"
+name = "flowjet-agent"
+version = "1.0.19"
 source = { editable = "." }
 dependencies = [
     { name = "soothe-nano" },
@@ -1259,7 +1259,7 @@ dev = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "fj-ai", extra = ["dev"] },
+    { name = "flowjet-agent", extra = ["dev"] },
 ]
 
 [package.metadata]
@@ -1275,7 +1275,7 @@ requires-dist = [
 provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "fj-ai", extras = ["dev"] }]
+dev = [{ name = "flowjet-agent", extras = ["dev"] }]
 
 [[package]]
 name = "frozenlist"

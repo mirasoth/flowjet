@@ -1,11 +1,11 @@
-# Makefile for fj-ai
+# Makefile for flowjet-agent
 UV_RUN ?= uv run
 
 .PHONY: sync sync-dev sync-local-nano format format-check lint lint-fix \
 	test test-unit test-integration test-coverage build publish clean help
 
 help:
-	@echo "fj-ai"
+	@echo "flowjet-agent (FlowJet / fj)"
 	@echo ""
 	@echo "  make sync            - Sync dependencies"
 	@echo "  make sync-dev        - Sync with dev extras"

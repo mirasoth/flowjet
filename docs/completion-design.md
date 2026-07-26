@@ -1,4 +1,4 @@
-# fj AI-Native Natural Language Auto Completion
+# FlowJet (fj) AI-Native Natural Language Auto Completion
 
 ## Design Proposal v1.1
 
@@ -665,7 +665,7 @@ Python
 
 Project
 
-fj-ai
+flowjet-agent
 
 Files
 
@@ -1009,7 +1009,7 @@ update project documentation
 # Example User Journey
 
 ```
-$ cd fj-ai
+$ cd flowjet-agent
 
 $ fj<TAB>
 ```

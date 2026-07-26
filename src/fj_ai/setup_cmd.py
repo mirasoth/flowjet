@@ -24,7 +24,7 @@ from soothe_nano.config import _ENV_VAR_RE, _resolve_env
 from fj_ai.agent import default_config_path
 
 DEFAULT_PROVIDER_NAME = "local"
-DEFAULT_NEW_PROVIDER_NAME = "fj-ai-default"
+DEFAULT_NEW_PROVIDER_NAME = "flowjet-default"
 DEFAULT_PROVIDER_TYPE = "openai"
 DEFAULT_API_BASE_URL = "http://127.0.0.1:11434/v1"
 DEFAULT_API_KEY = "ollama"
