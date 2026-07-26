@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/fj-ai
+      url: https://pypi.org/p/flowjet-agent
 
     steps:
       - name: Checkout
@@ -34,7 +34,7 @@ jobs:
       - name: Guard — soothe-nano must be on PyPI
         run: |
           if ! curl -sf "https://pypi.org/pypi/soothe-nano/1.0.8/json" >/dev/null; then
-            echo "soothe-nano 1.0.8 must be available on PyPI before releasing fj-ai"
+            echo "soothe-nano 1.0.8 must be available on PyPI before releasing flowjet-agent"
             exit 1
           fi
           echo "soothe-nano 1.0.8 is available on PyPI"
@@ -50,7 +50,7 @@ jobs:
         id: check
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          PKG="fj-ai"
+          PKG="flowjet-agent"
           echo "Checking if ${PKG}==${VERSION} exists on PyPI..."
           if curl -sf "https://pypi.org/pypi/${PKG}/${VERSION}/json" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
@@ -80,7 +80,7 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: |
           test -d dist
-          ls dist | grep -E 'fj_ai|fj-ai'
+          ls dist | grep -E 'flowjet_agent|flowjet-agent'
           uv run twine check dist/*
 
       - name: Publish to PyPI

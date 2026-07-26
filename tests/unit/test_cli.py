@@ -68,6 +68,26 @@ def test_parse_args_follow_flag() -> None:
     assert args.query_text == "continue please"
 
 
+def test_resolve_cli_prog_known_entrypoints() -> None:
+    from fj_ai.cli import FORMAL_CLI, resolve_cli_prog
+
+    assert resolve_cli_prog("/usr/local/bin/flowjet-agent") == "flowjet-agent"
+    assert resolve_cli_prog("/usr/local/bin/fj") == "fj"
+    assert resolve_cli_prog("fjf") == "fjf"
+    assert resolve_cli_prog("fj.exe") == "fj"
+    assert resolve_cli_prog("python") == FORMAL_CLI
+    assert resolve_cli_prog("__main__.py") == FORMAL_CLI
+
+
+def test_help_mentions_formal_cli_and_aliases() -> None:
+    from fj_ai.cli import cli_help_text
+
+    help_text = cli_help_text("flowjet-agent")
+    assert "flowjet-agent" in help_text
+    assert "Aliases: fj" in help_text
+    assert "fjf" in help_text
+
+
 def test_main_follow_injects_follow_flag(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from fj_ai import cli
 
@@ -375,7 +395,7 @@ async def test_run_async_empty_query_prints_usage(capsys) -> None:  # type: igno
     from fj_ai.cli import parse_args, run_async
 
     assert await run_async(parse_args(["-v"])) == 2
-    assert "fj — coding agent CLI" in capsys.readouterr().err
+    assert "FlowJet — coding agent CLI" in capsys.readouterr().err
 
 
 @pytest.mark.asyncio

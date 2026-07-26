@@ -34,10 +34,11 @@ _SEVERITY = {
 
 def _build_parser() -> argparse.ArgumentParser:
     from fj_ai.agent import default_config_path
+    from fj_ai.cli import resolve_cli_prog
 
     parser = argparse.ArgumentParser(
-        prog="fj doctor",
-        description="Diagnose fj / soothe-nano runtime readiness (tool deps, providers, …)",
+        prog=f"{resolve_cli_prog()} doctor",
+        description="Diagnose FlowJet / soothe-nano runtime readiness (tool deps, providers, …)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

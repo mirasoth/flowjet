@@ -95,7 +95,7 @@ ipython_config.py
 # Pipfile.lock
 
 # UV
-# fj-ai commits uv.lock for reproducible CLI installs.
+# flowjet-agent commits uv.lock for reproducible CLI installs.
 
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
@@ -314,7 +314,7 @@ ipython_config.py
 # Pipfile.lock
 
 # UV
-# fj-ai commits uv.lock for reproducible CLI installs.
+# flowjet-agent commits uv.lock for reproducible CLI installs.
 
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.

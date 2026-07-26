@@ -1,4 +1,4 @@
-# Minimal fj / soothe-nano config — local only.
+# Minimal FlowJet (fj) / soothe-nano config — local only.
 #
 # Usage:
 #   mkdir -p ~/.soothe/config && cp nano.yml ~/.soothe/config/nano.yml

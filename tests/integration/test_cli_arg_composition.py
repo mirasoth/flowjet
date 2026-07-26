@@ -69,13 +69,14 @@ def test_main_rejects_negative_list_limit(
 def test_main_help_and_version_exit_cleanly(run_fj: Any) -> None:
     code, out, err = run_fj(["-h"])
     assert code == 0
-    assert "usage: fj" in out.lower() or "One-shot coding agent" in out
+    help_l = out.lower()
+    assert "usage: fj" in help_l or "usage: flowjet-agent" in help_l
     # Full composition docs live in the epilog.
     assert "-l/--list" in out or "-l" in out
 
     code, out, err = run_fj(["--version"])
     assert code == 0
-    assert "fj " in out
+    assert "fj " in out or "flowjet-agent " in out
     assert err == ""
 
 
@@ -86,7 +87,7 @@ def test_main_empty_and_option_only_prints_usage(
     for argv in ([], ["-v"], ["--verbose"], ["--no-stream"], ["-w", "/tmp"], ["-c", "/tmp/x.yml"]):
         code, _out, err = run_fj(argv)
         assert code == 2, argv
-        assert "fj — coding agent CLI" in err
+        assert "FlowJet — coding agent CLI" in err
     assert stub_agent_runtime["build_calls"] == 0
 
 

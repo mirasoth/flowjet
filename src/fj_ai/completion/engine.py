@@ -47,7 +47,7 @@ FLAGS = (
 COMPLETION_SHELLS = ("zsh", "bash")
 
 SYSTEM_PROMPT = """\
-You are an autocomplete engine for the fj coding-agent CLI.
+You are an autocomplete engine for the FlowJet (fj) coding-agent CLI.
 Predict the user's intended natural-language query.
 
 Rules:
@@ -396,7 +396,9 @@ def _split_complete_argv(raw: list[str]) -> tuple[list[str], list[str]]:
 
 def run_complete(argv: list[str] | None = None) -> int:
     """Hidden shell protocol: print one candidate per stdout line."""
-    parser = argparse.ArgumentParser(prog="fj __complete", add_help=True)
+    from fj_ai.cli import resolve_cli_prog
+
+    parser = argparse.ArgumentParser(prog=f"{resolve_cli_prog()} __complete", add_help=True)
     parser.add_argument(
         "-c",
         "--config",
@@ -445,8 +447,10 @@ def run_complete(argv: list[str] | None = None) -> int:
 
 def run_completion_script(argv: list[str] | None = None) -> int:
     """Print shell install script: ``fj completion zsh|bash``."""
+    from fj_ai.cli import resolve_cli_prog
+
     parser = argparse.ArgumentParser(
-        prog="fj completion",
+        prog=f"{resolve_cli_prog()} completion",
         description="Print shell completion script to stdout",
     )
     parser.add_argument(

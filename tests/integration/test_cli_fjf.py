@@ -112,7 +112,7 @@ def test_fjf_empty_and_option_only_prints_usage(
     for argv in ([], ["-v"], ["--no-stream"], ["-w", "/tmp"]):
         code, _out, err = run_fjf(argv)
         assert code == 2, argv
-        assert "fj — coding agent CLI" in err
+        assert "FlowJet — coding agent CLI" in err
     assert stub_agent_runtime["build_calls"] == 0
 
 
