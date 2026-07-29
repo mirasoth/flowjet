@@ -553,6 +553,6 @@ def test_main_verbose_reconfigures_logging(monkeypatch) -> None:  # type: ignore
         return 0
 
     monkeypatch.setattr(cli, "configure_cli_logging", fake_logging)
-    monkeypatch.setattr(cli.asyncio, "run", fake_run)
+    monkeypatch.setattr(cli, "run_one_shot", fake_run)
     assert cli.main(["-v", "hi"]) == 0
     assert False in seen and True in seen
