@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import sys
+from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -461,6 +463,46 @@ async def run_async(args: argparse.Namespace) -> int:
     return 0
 
 
+# Seconds a stray background task gets to honour cancellation before the loop is
+# closed anyway.
+_TEARDOWN_GRACE_S = 3.0
+
+
+async def _cancel_stray_tasks(loop: asyncio.AbstractEventLoop, grace: float) -> None:
+    """Cancel every task but this one, and close async generators, within ``grace``.
+
+    Runtimes reached through tools may ignore cancellation: ``bubus`` event buses
+    behind ``browser_use`` catch ``CancelledError`` and re-arm a 0.1s poll loop,
+    so waiting on them without a deadline never returns.
+    """
+    stray = [t for t in asyncio.all_tasks(loop) if t is not asyncio.current_task()]
+    if stray:
+        for task in stray:
+            task.cancel()
+        await asyncio.wait(stray, timeout=grace)
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(loop.shutdown_asyncgens(), timeout=grace)
+
+
+def run_one_shot(coro: Coroutine[Any, Any, int], *, grace: float = _TEARDOWN_GRACE_S) -> int:
+    """Run ``coro`` on a fresh loop, then tear that loop down with a deadline.
+
+    ``asyncio.run`` cancels leftover tasks and gathers them with no timeout, so
+    one task that swallows ``CancelledError`` pins the process after the answer
+    has already been printed. ``loop.close()`` is also where libraries install
+    their own cleanup hooks, so it runs whether or not the strays went quietly.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        with contextlib.suppress(Exception):
+            loop.run_until_complete(_cancel_stray_tasks(loop, grace))
+        asyncio.set_event_loop(None)
+        loop.close()
+
+
 _FOLLOW_SUBCOMMANDS = frozenset({"setup", "doctor", "completion", "__complete"})
 
 
@@ -503,7 +545,7 @@ def main(argv: list[str] | None = None) -> int:
             from fj_ai.completion import run_completion_script
 
             return run_completion_script(getattr(args, "completion_argv", []))
-        return asyncio.run(run_async(args))
+        return run_one_shot(run_async(args))
     except KeyboardInterrupt:
         sys.stderr.write("\ninterrupted\n")
         return 130
