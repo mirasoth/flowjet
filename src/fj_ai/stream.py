@@ -23,6 +23,26 @@ from fj_ai.tool_stream import ToolCallArgAccumulator
 
 # Min interval between live narration previews on the progress line (seconds).
 _STATUS_PREVIEW_MIN_INTERVAL = 0.12
+
+
+def _format_duration(seconds: float) -> str:
+    """Format an elapsed time as a short human-readable duration."""
+    if seconds < 0 or not seconds:
+        return "0s"
+    days, rem = divmod(int(seconds), 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    if days:
+        return f"{days}d{hours}h"
+    if hours:
+        return f"{hours}h{minutes}m"
+    if minutes:
+        return f"{minutes}m{secs}s"
+    if seconds >= 10:
+        return f"{seconds:.0f}s"
+    return f"{seconds:.1f}s"
+
+
 # Western + CJK sentence boundaries for status preview.
 _STATUS_SENTENCE_SEPS = (
     ". ",
@@ -311,6 +331,7 @@ async def stream_query(
     last_progress_key = ""
     # ``-v``: emit each tool call once when args are complete (not every partial).
     mirrored_tool_ids: set[str] = set()
+    started_at = time.monotonic()
 
     # Deepagents emits a deprecation warning mid-run that would smash the
     # ephemeral progress line when mixed onto the terminal.
@@ -430,7 +451,11 @@ async def stream_query(
                         tag = "error" if is_error else "result"
                         _write_verbose(status, stderr, f"  [{tag}] {preview}\n")
 
-    return answer.finish()
+    answer_text = answer.finish()
+    duration = _format_duration(time.monotonic() - started_at)
+    stdout.write(f"\n(Finished in {duration}, thread: {thread_id})\n")
+    stdout.flush()
+    return answer_text
 
 
 async def invoke_query(

@@ -66,7 +66,8 @@ def test_cli_cjk_stream_prints_final_answer_once(
 
     code, out, err, seen = run_fj_live_stream(["check", "release"])
     assert code == 0, err
-    assert out.endswith(full + "\n")
+    assert full + "\n" in out
+    assert out.endswith(", thread: fj-stream-stub)\n")
     assert out.count(full) == 1
     assert seen["tail_updates"] >= 1
 
@@ -125,7 +126,8 @@ def test_cli_no_stream_skips_live_narration_preview(
 
     code, out, err, seen = run_fj_live_stream(["--no-stream", "analyze"])
     assert code == 0, err
-    assert out.endswith("## 分析结果\n完成。\n")
+    assert "## 分析结果\n完成。\n" in out
+    assert out.endswith(", thread: fj-stream-stub)\n")
     assert seen["tail_updates"] == 0
     preview = _plain_progress_text(out)
     assert narration not in preview
@@ -167,6 +169,7 @@ def test_cli_stream_mixed_cjk_english_tool_then_answer(
 
     code, out, err, seen = run_fj_live_stream(["ci", "status"])
     assert code == 0, err
-    assert out.endswith(final + "\n")
+    assert final + "\n" in out
+    assert out.endswith(", thread: fj-stream-stub)\n")
     assert seen["progress_updates"] >= 2
     assert seen["tail_updates"] >= 1
