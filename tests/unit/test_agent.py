@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from soothe_nano.config import SootheConfig
 
-from fj_ai.agent import apply_fj_defaults, ensure_workspace
+from fj_ai.agent import apply_ask_mode, apply_fj_defaults, ensure_workspace
 
 
 def test_apply_fj_defaults_forces_sqlite() -> None:
@@ -140,7 +140,7 @@ async def test_build_agent_wires_checkpointer(monkeypatch: pytest.MonkeyPatch) -
         def __init__(self) -> None:
             self.graph = FakeGraph()
 
-    def fake_create(_cfg: object) -> FakeAgent:
+    def fake_create(_cfg: object, **_kwargs: object) -> FakeAgent:
         agent = FakeAgent()
         created["agent"] = agent
         return agent
@@ -154,3 +154,167 @@ async def test_build_agent_wires_checkpointer(monkeypatch: pytest.MonkeyPatch) -
     agent = await agent_mod.build_agent(SootheConfig(), checkpointer=cp, verbose=True)
     assert agent is created["agent"]
     assert agent.graph.checkpointer is cp
+
+
+@pytest.mark.asyncio
+async def test_build_agent_ask_mode_passes_interaction_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: ask mode must pass interaction_mode='ask' to create_nano_agent.
+
+    apply_ask_mode() disables config tool groups, but write_file / edit_file come
+    from soothe-nano's FilesystemMiddleware, whose tool surface is controlled by
+    interaction_mode (FILESYSTEM_TOOLS_ASK vs FILESYSTEM_TOOLS_AGENT). Without
+    interaction_mode='ask', the FS middleware keeps write_file / edit_file bound.
+    """
+    import fj_ai.agent as agent_mod
+
+    captured: dict[str, object] = {}
+
+    class FakeGraph:
+        checkpointer = None
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self.graph = FakeGraph()
+
+    def fake_create(_cfg: object, **kwargs: object) -> FakeAgent:
+        captured.update(kwargs)
+        return FakeAgent()
+
+    monkeypatch.setattr(agent_mod, "configure_cli_logging", lambda **_k: None)
+    monkeypatch.setattr(agent_mod, "ensure_workspace", lambda _w=None: Path.cwd())
+    monkeypatch.setattr(agent_mod, "create_nano_agent", fake_create)
+    monkeypatch.setattr(agent_mod, "silence_after_plugins", lambda **_k: None)
+
+    await agent_mod.build_agent(SootheConfig(), ask_mode=True)
+    assert captured.get("interaction_mode") == "ask"
+
+
+@pytest.mark.asyncio
+async def test_build_agent_default_mode_no_interaction_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-ask mode must not pass interaction_mode='ask'."""
+    import fj_ai.agent as agent_mod
+
+    captured: dict[str, object] = {}
+
+    class FakeGraph:
+        checkpointer = None
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self.graph = FakeGraph()
+
+    def fake_create(_cfg: object, **kwargs: object) -> FakeAgent:
+        captured.update(kwargs)
+        return FakeAgent()
+
+    monkeypatch.setattr(agent_mod, "configure_cli_logging", lambda **_k: None)
+    monkeypatch.setattr(agent_mod, "ensure_workspace", lambda _w=None: Path.cwd())
+    monkeypatch.setattr(agent_mod, "create_nano_agent", fake_create)
+    monkeypatch.setattr(agent_mod, "silence_after_plugins", lambda **_k: None)
+
+    await agent_mod.build_agent(SootheConfig(), ask_mode=False)
+    assert captured.get("interaction_mode") != "ask"
+
+
+# ---------------------------------------------------------------------------
+# Ask mode
+# ---------------------------------------------------------------------------
+
+
+def test_apply_ask_mode_disables_all_tool_groups() -> None:
+    cfg = apply_fj_defaults(SootheConfig())
+    forced = apply_ask_mode(cfg)
+    assert forced.tools.execution.enabled is False
+    assert forced.tools.file_ops.enabled is False
+    assert forced.tools.datetime.enabled is False
+    assert forced.tools.data.enabled is False
+    assert forced.tools.wizsearch.enabled is False
+    assert forced.tools.http_requests.enabled is False
+    assert forced.tools.deepxiv.enabled is False
+
+
+def test_apply_ask_mode_disables_progressive_discovery() -> None:
+    cfg = apply_fj_defaults(SootheConfig())
+    forced = apply_ask_mode(cfg)
+    assert forced.progressive_tools.enabled is False
+    assert forced.progressive_tools.search_tools_enabled is False
+    assert forced.progressive_skills.search_skills_enabled is False
+    assert forced.progressive_skills.semantic_search_enabled is False
+
+
+def test_apply_ask_mode_sets_readonly_policy_profile() -> None:
+    cfg = apply_fj_defaults(SootheConfig())
+    assert cfg.agent.protocols.policy.profile == "standard"
+    forced = apply_ask_mode(cfg)
+    assert forced.agent.protocols.policy.profile == "readonly"
+
+
+def test_apply_ask_mode_appends_prompt_suffix() -> None:
+    cfg = apply_fj_defaults(SootheConfig())
+    original = cfg.agent.system_prompt or ""
+    forced = apply_ask_mode(cfg)
+    new_prompt = forced.agent.system_prompt or ""
+    assert "ASK MODE" in new_prompt
+    if original:
+        assert new_prompt.startswith(original)
+        assert len(new_prompt) > len(original)
+
+
+def test_apply_ask_mode_preserves_sqlite_persistence() -> None:
+    """Ask mode layers on top of fj defaults; sqlite must stay forced."""
+    cfg = SootheConfig()
+    cfg = cfg.model_copy(
+        update={
+            "persistence": cfg.persistence.model_copy(update={"default_backend": "postgresql"}),
+        }
+    )
+    forced = apply_ask_mode(apply_fj_defaults(cfg))
+    assert forced.resolve_checkpointer_backend() == "sqlite"
+
+
+@pytest.mark.asyncio
+async def test_build_agent_ask_mode_uses_ask_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """build_agent(ask_mode=True) must pass ask-mode config + interaction_mode.
+
+    apply_ask_mode() disables config tool groups; interaction_mode='ask'
+    switches soothe-nano's FilesystemMiddleware to FILESYSTEM_TOOLS_ASK so
+    write_file / edit_file are not bound.
+    """
+    import fj_ai.agent as agent_mod
+
+    received: dict[str, object] = {}
+
+    class FakeGraph:
+        def __init__(self) -> None:
+            self.checkpointer = None
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self.graph = FakeGraph()
+
+    def fake_create(cfg: object, **kwargs: object) -> FakeAgent:
+        received["cfg"] = cfg
+        received["kwargs"] = kwargs
+        return FakeAgent()
+
+    monkeypatch.setattr(agent_mod, "configure_cli_logging", lambda **_k: None)
+    monkeypatch.setattr(agent_mod, "ensure_workspace", lambda _w=None: Path.cwd())
+    monkeypatch.setattr(agent_mod, "create_nano_agent", fake_create)
+    monkeypatch.setattr(agent_mod, "silence_after_plugins", lambda **_k: None)
+
+    await agent_mod.build_agent(SootheConfig(), ask_mode=True)
+
+    cfg = received["cfg"]
+    # The config handed to create_nano_agent must have tools disabled.
+    assert cfg.tools.execution.enabled is False
+    assert cfg.tools.file_ops.enabled is False
+    assert cfg.agent.protocols.policy.profile == "readonly"
+    # Regression: interaction_mode='ask' must be forwarded so the FS middleware
+    # binds the read-only surface (no write_file / edit_file).
+    assert received["kwargs"].get("interaction_mode") == "ask"
