@@ -68,6 +68,52 @@ def test_parse_args_follow_flag() -> None:
     assert args.query_text == "continue please"
 
 
+def test_parse_args_ask_flag_short() -> None:
+    args = parse_args(["-a", "what", "is", "2+2"])
+    assert args.ask is True
+    assert args.query_text == "what is 2+2"
+
+
+def test_parse_args_ask_flag_long() -> None:
+    args = parse_args(["--ask", "explain recursion"])
+    assert args.ask is True
+    assert args.query_text == "explain recursion"
+
+
+def test_parse_args_ask_with_follow() -> None:
+    args = parse_args(["-a", "-f", "continue here"])
+    assert args.ask is True
+    assert args.follow is True
+    assert args.query_text == "continue here"
+
+
+def test_split_argv_ask_cluster() -> None:
+    # ``-av`` → ``-a -v`` (both boolean shorts)
+    opts, query = split_argv(["-av", "hi"])
+    assert opts == ["-a", "-v"]
+    assert query == ["hi"]
+
+
+def test_validate_arg_composition_ask_with_list_rejected() -> None:
+    from argparse import Namespace
+
+    from fj_ai.cli import validate_arg_composition
+
+    ns = Namespace(
+        list=True,
+        list_limit=None,
+        follow=False,
+        thread=None,
+        workspace=None,
+        no_stream=False,
+        ask=True,
+        query_text="",
+    )
+    err = validate_arg_composition(ns)
+    assert err is not None
+    assert "-a/--ask" in err
+
+
 def test_resolve_cli_prog_known_entrypoints() -> None:
     from fj_ai.cli import FORMAL_CLI, resolve_cli_prog
 

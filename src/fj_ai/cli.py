@@ -64,6 +64,7 @@ query modes:
   {follow} QUERY...           Continue the latest active thread
   {show} -t ID QUERY...        Continue a specific thread
   {show} -t ID                 Pin thread as active (no query)
+  {show} -a QUERY...           Ask mode: answer only, no tool calls
 
 examples:
   {show} explain this repo
@@ -77,13 +78,14 @@ examples:
 notes:
   • Formal CLI: flowjet-agent · aliases: fj, fjf (= -f)
   • -f and -t are mutually exclusive; -n requires -l; -l takes no query
+  • -a/--ask disables all tools — pure Q&A, no side effects
   • One query per thread at a time; different threads may run concurrently
   • With -v, prints thread <id> on stderr before the run
 """
 
 
 # Boolean short flags that may appear clustered (``-lv`` → ``-l -v``).
-_BOOL_SHORTS = frozenset({"h", "V", "l", "v", "f"})
+_BOOL_SHORTS = frozenset({"h", "V", "l", "v", "f", "a"})
 # Short flags that consume the next argv token as a value.
 _VALUE_FLAGS = frozenset({"-c", "--config", "-t", "--thread", "-w", "--workspace", "-n"})
 _FLAG_ONLY = frozenset(
@@ -99,6 +101,8 @@ _FLAG_ONLY = frozenset(
         "--list",
         "-f",
         "--follow",
+        "-a",
+        "--ask",
     }
 )
 _EQUALS_PREFIXES = ("--config=", "--thread=", "--workspace=")
@@ -164,7 +168,7 @@ def validate_arg_composition(args: Any) -> str | None:
 
     Rules:
     - ``-n`` requires ``-l``/``--list``
-    - ``-l`` is exclusive with a query, ``-f``, ``-t``, ``-w``, ``--no-stream``
+    - ``-l`` is exclusive with a query, ``-f``, ``-t``, ``-w``, ``--no-stream``, ``--ask``
     - ``-f``/``--follow`` and ``-t``/``--thread`` are mutually exclusive
     """
     listing = bool(getattr(args, "list", False))
@@ -173,6 +177,7 @@ def validate_arg_composition(args: Any) -> str | None:
     thread = getattr(args, "thread", None)
     workspace = getattr(args, "workspace", None)
     no_stream = bool(getattr(args, "no_stream", False))
+    ask = bool(getattr(args, "ask", False))
     query = (getattr(args, "query_text", None) or "").strip()
 
     if list_limit is not None and not listing:
@@ -189,6 +194,8 @@ def validate_arg_composition(args: Any) -> str | None:
             return "-l/--list cannot be combined with -w/--workspace"
         if no_stream:
             return "-l/--list cannot be combined with --no-stream"
+        if ask:
+            return "-l/--list cannot be combined with -a/--ask"
 
     if follow and thread:
         return "-f/--follow and -t/--thread are mutually exclusive"
@@ -263,6 +270,12 @@ def _build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "--no-stream",
         action="store_true",
         help="Wait for the full answer instead of streaming tokens",
+    )
+    output.add_argument(
+        "-a",
+        "--ask",
+        action="store_true",
+        help="Ask mode: answer the query with no tools (pure Q&A)",
     )
 
     paths = parser.add_argument_group("paths")
@@ -432,6 +445,7 @@ async def run_async(args: argparse.Namespace) -> int:
                     workspace=workspace,
                     checkpointer=checkpointer,
                     verbose=args.verbose,
+                    ask_mode=getattr(args, "ask", False),
                 )
                 if args.no_stream:
                     await invoke_query(agent, args.query_text, thread_id=thread_id)
