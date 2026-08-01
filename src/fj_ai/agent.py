@@ -201,75 +201,6 @@ def apply_fj_defaults(config: SootheConfig) -> SootheConfig:
     )
 
 
-# Extra system-prompt instruction appended in ask mode so the model knows it
-# must not attempt tool calls even if (defensively) any tool slips through.
-_ASK_MODE_PROMPT_SUFFIX = (
-    "\n\nASK MODE: You are in ask mode. Answer the user's question directly from "
-    "your own knowledge. Do NOT call any tools, run commands, read or write "
-    "files, search the web, or spawn subagents. If you cannot answer without "
-    "tools, say so and explain what would be needed. Be concise and helpful."
-)
-
-
-def apply_ask_mode(config: SootheConfig) -> SootheConfig:
-    """Return a config variant with every tool group and discovery disabled.
-
-    Ask mode turns the coding agent into a pure Q&A assistant: no execution,
-    file, search, HTTP, or academic tools; no progressive tool/skill discovery;
-    no subagent spawning. The system prompt is extended with an explicit
-    instruction so the model does not attempt tool calls.
-
-    This is layered on top of ``apply_fj_defaults`` and should be called after it.
-    """
-    from soothe_nano.config.models import ToolConfig
-
-    # Disable every tool group listed in ToolsConfig.
-    tools = config.tools.model_copy(
-        update={
-            "execution": config.tools.execution.model_copy(update={"enabled": False}),
-            "file_ops": ToolConfig(enabled=False),
-            "datetime": ToolConfig(enabled=False),
-            "data": ToolConfig(enabled=False),
-            "wizsearch": config.tools.wizsearch.model_copy(update={"enabled": False}),
-            "http_requests": config.tools.http_requests.model_copy(update={"enabled": False}),
-            "deepxiv": config.tools.deepxiv.model_copy(update={"enabled": False}),
-        }
-    )
-
-    # Disable progressive tool / skill discovery so no search_tools / invoke_skill
-    # tools are bound and no deferred listings pollute the prompt.
-    progressive_tools = config.progressive_tools.model_copy(
-        update={"enabled": False, "search_tools_enabled": False}
-    )
-    progressive_skills = config.progressive_skills.model_copy(
-        update={"search_skills_enabled": False, "semantic_search_enabled": False}
-    )
-
-    # Pin policy to readonly so any tool that somehow gets bound still cannot
-    # write or execute.
-    policy = config.agent.protocols.policy.model_copy(update={"profile": "readonly"})
-
-    # Append ask-mode instruction to the system prompt body.
-    base_prompt = config.agent.system_prompt or ""
-    agent = config.agent.model_copy(
-        update={
-            "protocols": config.agent.protocols.model_copy(update={"policy": policy}),
-            "system_prompt": (base_prompt + _ASK_MODE_PROMPT_SUFFIX)
-            if base_prompt
-            else _ASK_MODE_PROMPT_SUFFIX.strip(),
-        }
-    )
-
-    return config.model_copy(
-        update={
-            "tools": tools,
-            "progressive_tools": progressive_tools,
-            "progressive_skills": progressive_skills,
-            "agent": agent,
-        }
-    )
-
-
 # Backward-compatible alias used by older tests / imports.
 _sqlite_config = apply_fj_defaults
 
@@ -321,23 +252,17 @@ async def build_agent(
 ) -> SootheNanoAgent:
     """Build a full nano coding agent for the current workspace.
 
-    When ``ask_mode`` is true, every tool group and discovery mechanism is
-    disabled so the agent runs as a pure Q&A assistant (``fj --ask``).
+    When ``ask_mode`` is true, the agent runs in native ask mode (read-only
+    filesystem surface, no mutating tool groups, ask policy profile) via
+    ``create_nano_agent(interaction_mode="ask")`` — see soothe-nano 1.1.1's
+    ``AgentBuilder.build`` / ``soothe_nano.agent.interaction_mode``.
     """
     configure_cli_logging(verbose=verbose)
     ensure_workspace(workspace)
-    if ask_mode:
-        # Pass interaction_mode="ask" so soothe-nano binds the read-only
-        # FilesystemMiddleware surface (FILESYSTEM_TOOLS_ASK, ask_permissions)
-        # and the ask policy profile. apply_ask_mode() disables the config
-        # tool groups; interaction_mode controls the FS middleware surface
-        # (write_file / edit_file) that config groups do not gate.
-        agent = create_nano_agent(
-            apply_ask_mode(apply_fj_defaults(config)),
-            interaction_mode="ask",
-        )
-    else:
-        agent = create_nano_agent(apply_fj_defaults(config))
+    agent = create_nano_agent(
+        apply_fj_defaults(config),
+        interaction_mode="ask" if ask_mode else "agent",
+    )
     # Plugin imports (e.g. browser_use) may still attach root console handlers.
     silence_after_plugins(verbose=verbose)
     if checkpointer is not None:
