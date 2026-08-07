@@ -12,8 +12,8 @@
 ```bash
 flowjet-agent explain this repo
 fj explain this repo                    # alias of flowjet-agent
-fj -f what did we decide last time?
-fjf what did we decide last time?       # alias of fj -f
+fj -f what did we decide last time
+fjf what did we decide last time       # alias of fj -f
 ```
 
 It runs on [soothe-nano](https://github.com/mirasoth/soothe-nano) — tools, skills, MCP, subagents, and progressive loading — with SQLite persistence so every thread is resumable.
