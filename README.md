@@ -10,7 +10,6 @@
 **FlowJet** (`flowjet-agent`) is a one-shot coding-agent CLI for the terminal. Type a question, get an answer — no UI, no context-switching:
 
 ```bash
-flowjet-agent explain this repo
 fj explain this repo                    # alias of flowjet-agent
 fj -f what did we decide last time
 fjf what did we decide last time       # alias of fj -f
