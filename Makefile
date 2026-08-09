@@ -1,5 +1,7 @@
 # Makefile for flowjet-agent
 UV_RUN ?= uv run
+UV_INDEX_URL ?= https://pypi.org/simple
+export UV_INDEX_URL
 
 .PHONY: sync sync-dev sync-local-nano format format-check lint lint-fix \
 	test test-unit test-integration test-coverage build publish clean help
