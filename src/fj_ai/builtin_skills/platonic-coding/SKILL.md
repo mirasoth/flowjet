@@ -3,7 +3,7 @@ name: platonic-coding
 description: Intelligent orchestrator for the Platonic Coding lifecycle. Auto-detects the user's intent and project state, then routes to the right next step—brainstorm a design, initialize a project, run the recovery flow for existing code, formalize drafts into RFCs, refine specs, implement from guides with tests, or review code compliance. Single entry point for the complete specification-driven development lifecycle, with structured design exploration built in.
 license: MIT
 metadata:
-  version: "2.4.1"
+  version: "2.5.0"
   author: "Xiaming Chen"
   category: "workflow"
   replaces:
@@ -48,9 +48,11 @@ Before inspecting project state, scan the user's natural-language request for **
 ### Project-State Detection (when no intent keywords)
 
 **Quick Reference**:
-- No `.platonic.yml` → INIT mode (scaffold new or recover existing)
+- No Platonic infrastructure (no `.platonic.yml` **and** no `docs/specs/`) → INIT mode (scaffold new or recover existing)
 - RFCs but no guides → Phase 2 (implementation)
 - Guides + code → Phase 3 (review) or resume Phase 2
+
+**Note**: `.platonic.yml` is optional. The skill auto-detects project metadata (name, language, framework) from host manifests and uses built-in default paths (`docs/specs`, `docs/impl`, `docs/drafts`). A `.platonic.yml` is only needed to override defaults or set custom spec stages.
 
 **Override** with canonical operations: `brainstorm`, `init-scaffold`, `init-scan`, `specs-refine`, `impl-full`, `review`, `workflow --phase <N>`.
 
@@ -73,6 +75,8 @@ Structured design exploration through collaborative dialogue. Produces an approv
 
 ### INIT Mode
 Bootstrap Platonic Coding infrastructure. Operations: `init-scaffold`, `init-scan`, `init-plan-modular-specs`, `init-recover-*`.
+
+**Note**: `init-scaffold` creates directories and templates but does **not** create `.platonic.yml` by default — project metadata is auto-detected from host manifests and default paths are used. A `.platonic.yml` is only created when the user explicitly requests non-default paths or custom spec stages.
 
 **Examples**: `init-scaffold for project "Acme"`, `init-scan then recover specs`.
 
@@ -136,5 +140,6 @@ Templates in `assets/` use `{{PLACEHOLDER}}` syntax.
 ## Dependencies
 
 - Read/write to project directories
-- Access to `.platonic.yml`
+- Access to host manifests (`Cargo.toml`, `package.json`, `pyproject.toml`, `go.mod`, etc.) for auto-detection
+- `.platonic.yml` is **optional** — only read if present for path/stage overrides
 - Understanding of target language/framework

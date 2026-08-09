@@ -6,9 +6,14 @@ Systematically analyze an existing codebase for spec recovery.
 
 | Input | Source |
 |-------|--------|
-| Project root | `.platonic.yml` or user-provided |
-| Language | `.platonic.yml` or auto-detected |
-| Framework | `.platonic.yml` or auto-detected |
+| Project root | User-provided or current directory |
+| Language | Auto-detected from build files (or `.platonic.yml` if present) |
+| Framework | Auto-detected from dependencies (or `.platonic.yml` if present) |
+| Specs path | `.platonic.yml` if present, else default `docs/specs` |
+| Impl path | `.platonic.yml` if present, else default `docs/impl` |
+| Drafts path | `.platonic.yml` if present, else default `docs/drafts` |
+
+**Note**: `.platonic.yml` is optional. All inputs auto-detect or use defaults when it is absent.
 
 ## Scan Phases (5 phases, in order)
 

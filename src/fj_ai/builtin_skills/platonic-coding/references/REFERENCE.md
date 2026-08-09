@@ -64,7 +64,7 @@ Intent keywords in request? (brainstorm, discuss, investigate, explore,
 
 Otherwise, inspect project state:
 
-No .platonic.yml?
+No Platonic infrastructure (no .platonic.yml AND no docs/specs/) ?
   → Has code? → recovery flow (init-scan → recover)
   → No code? → init-scaffold
 
@@ -81,6 +81,8 @@ Has RFCs + guides?
 
 Ambiguous? → Ask or resume current phase
 ```
+
+**Note**: `.platonic.yml` is optional. Project metadata (name, language, framework) is auto-detected from host manifests (`Cargo.toml`, `package.json`, `pyproject.toml`, `go.mod`, etc.). Default paths (`docs/specs`, `docs/impl`, `docs/drafts`) are used unless overridden in `.platonic.yml`. The presence of `docs/specs/` (with Platonic files like `rfc-history.md`) is the primary signal that the project is already initialized.
 
 **Override**: Use canonical operations (`brainstorm`, `init-scaffold`, `specs-refine`, `impl-full`, `review`, `workflow --phase <N>`).
 
@@ -104,9 +106,9 @@ Templates use `{{PLACEHOLDER}}` syntax. Common variables:
 - `{{AUTHOR}}` — Author name
 
 ### Paths
-- `{{SPECS_PATH}}` — Specs directory path (from `.platonic.yml`)
-- `{{IMPL_PATH}}` — Implementation guides path
-- `{{DRAFTS_PATH}}` — Design drafts path
+- `{{SPECS_PATH}}` — Specs directory path (default: `docs/specs`; from `.platonic.yml` if present)
+- `{{IMPL_PATH}}` — Implementation guides path (default: `docs/impl`; from `.platonic.yml` if present)
+- `{{DRAFTS_PATH}}` — Design drafts path (default: `docs/drafts`; from `.platonic.yml` if present)
 
 ---
 
@@ -125,9 +127,9 @@ Templates use `{{PLACEHOLDER}}` syntax. Common variables:
 
 ```
 <project-root>/
-├── .platonic.yml                   # Project config
+├── .platonic.yml                   # OPTIONAL — only present when overriding defaults
 ├── docs/
-│   ├── specs/                      # RFC specifications
+│   ├── specs/                      # RFC specifications (default path)
 │   │   ├── rfc-history.md           # Change history
 │   │   ├── rfc-index.md             # Spec index
 │   │   ├── rfc-namings.md           # Terminology reference
@@ -159,7 +161,7 @@ Templates use `{{PLACEHOLDER}}` syntax. Common variables:
 | Issue | Solution |
 |-------|----------|
 | Wrong auto-detection | Use explicit operations (`init-scaffold`, `specs-refine`, `impl-full`, `review`) |
-| Wrong placeholders | Check `.platonic.yml` paths match template values |
+| Wrong placeholders | Check `.platonic.yml` paths (if present) match template values; if absent, defaults apply |
 | Guide contradicts RFC | Run `impl-validate-guide`, then update guide or modify RFC |
 | Specs not in index | Check `RFC-NNN-<name>.md` naming, run `specs-generate-index` |
 | Missing terminology | Check term format in RFCs, run `specs-generate-namings` |

@@ -17,6 +17,8 @@ Set up the directory structure, configuration file, RFC infrastructure, and temp
 | Specs path | No | `docs/specs` | Path for RFC specifications |
 | Impl path | No | `docs/impl` | Path for implementation guides |
 | Drafts path | No | `docs/drafts` | Path for design drafts |
+| Custom stages | No | None | Custom spec stages (e.g. `["Core", "Storage", "API", "Infra"]`) |
+| Create `.platonic.yml` | No | No | Set to yes only if non-default paths or custom stages are needed |
 
 ## Steps
 
@@ -32,17 +34,19 @@ If not provided:
    - `pom.xml` / `build.gradle` → Java
    - `*.csproj` / `*.sln` → C#
 2. **Auto-detect framework** from dependencies in build files
-3. **Ask user** for project name if not provided
+3. **Ask user** for project name if not provided (or derive from directory name / package name)
+4. **Ask user** if they want non-default paths or custom spec stages — if not, skip Step 2 entirely
 
-### Step 2: Create .platonic.yml
+### Step 2: Create .platonic.yml (only if overrides are needed)
+
+**Skip this step by default.** Only create `.platonic.yml` when the user requested non-default paths or custom spec stages. If the user is happy with defaults (`docs/specs`, `docs/impl`, `docs/drafts`) and no custom stages, `.platonic.yml` is not created.
+
+If overrides are needed:
 
 1. Read `assets/templates/template-platonic.yml`
-2. Replace placeholders:
-   - `{{PROJECT_NAME}}` → project name
-   - `{{PROJECT_DESCRIPTION}}` → description (ask user or leave as placeholder)
-   - `{{LANGUAGE}}` → detected or provided language
-   - `{{FRAMEWORK}}` → detected or provided framework
-   - `{{DATE}}` → today's date
+2. Uncomment and fill the relevant sections:
+   - `paths:` — only if any path differs from defaults
+   - `specs.stages:` — only if custom stages are requested
 3. Write to `<project-root>/.platonic.yml`
 4. **Skip if file already exists** (read existing config instead)
 
@@ -88,7 +92,7 @@ If not provided:
 ### Step 7: Verify
 
 Confirm all expected files exist:
-- `.platonic.yml`
+- `.platonic.yml` — **only if overrides were requested**; absent is the normal case
 - `<specs-path>/rfc-history.md`
 - `<specs-path>/rfc-index.md`
 - `<specs-path>/rfc-namings.md`
@@ -96,7 +100,7 @@ Confirm all expected files exist:
 - `<impl-path>/README.md`
 - `<drafts-path>/README.md`
 
-Report any files that were skipped (already existed) vs. newly created.
+Report any files that were skipped (already existed) vs. newly created. Note whether `.platonic.yml` was created or skipped.
 
 ## Template Processing Rules
 
