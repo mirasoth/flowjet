@@ -52,13 +52,8 @@ _REGISTERED = False
 BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent / "builtin_skills"
 
 # fj-only additions on top of soothe-nano's DEFAULT_CORE_SKILL_NAMES.
-# Nano defaults (weather, github, clawhub, skill-creator) come from nano itself.
-FJ_CORE_SKILL_NAMES: tuple[str, ...] = (
-    "brainstorming",
-    "requesting-code-review",
-    "systematic-debugging",
-    "using-superpowers",
-)
+# Nano defaults (weather, github, clawhub) come from nano itself.
+FJ_CORE_SKILL_NAMES: tuple[str, ...] = ()
 
 
 def fj_core_skill_names() -> list[str]:
@@ -72,7 +67,7 @@ def register_fj_builtin_skills() -> None:
     """Register ``fj_ai/builtin_skills`` as a soothe-nano builtin skill root.
 
     Idempotent — safe to call from multiple entry points. Requires
-    ``soothe-nano>=0.9.9`` (``register_builtin_skill_root``).
+    ``soothe-nano>=1.1.11`` (``register_builtin_skill_root``).
     """
     global _REGISTERED
     if _REGISTERED:
@@ -201,10 +196,6 @@ def apply_fj_defaults(config: SootheConfig) -> SootheConfig:
     )
 
 
-# Backward-compatible alias used by older tests / imports.
-_sqlite_config = apply_fj_defaults
-
-
 @asynccontextmanager
 async def open_sqlite_checkpointer(
     config: SootheConfig,
@@ -254,7 +245,7 @@ async def build_agent(
 
     When ``ask_mode`` is true, the agent runs in native ask mode (read-only
     filesystem surface, no mutating tool groups, ask policy profile) via
-    ``create_nano_agent(interaction_mode="ask")`` — see soothe-nano 1.1.1's
+    ``create_nano_agent(interaction_mode="ask")`` — see soothe-nano's
     ``AgentBuilder.build`` / ``soothe_nano.agent.interaction_mode``.
     """
     configure_cli_logging(verbose=verbose)
