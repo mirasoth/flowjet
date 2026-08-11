@@ -31,7 +31,6 @@ def test_apply_fj_defaults_sets_core_skills_when_unset() -> None:
     assert forced.progressive_skills.core_skills == fj_core_skill_names()
     # Nano defaults are included via DEFAULT_CORE_SKILL_NAMES, not hard-coded in fj.
     assert "weather" in forced.progressive_skills.core_skills
-    assert "brainstorming" in forced.progressive_skills.core_skills
 
 
 def test_apply_fj_defaults_preserves_explicit_core_skills() -> None:

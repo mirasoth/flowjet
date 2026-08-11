@@ -13,21 +13,19 @@ def test_builtin_skills_dir_has_skill_md() -> None:
     skill_mds = list(BUILTIN_SKILLS_DIR.glob("*/SKILL.md"))
     assert skill_mds, f"expected skills under {BUILTIN_SKILLS_DIR}"
     names = {p.parent.name for p in skill_mds}
-    assert "brainstorming" in names
     assert "xlsx" in names
 
 
 def test_register_fj_builtin_skills_indexes_package_skills() -> None:
     register_fj_builtin_skills()
     assert BUILTIN_SKILLS_DIR.resolve() in [p for p, _ in iter_skill_roots()]
-    assert is_builtin_skill_directory(BUILTIN_SKILLS_DIR / "brainstorming")
+    assert is_builtin_skill_directory(BUILTIN_SKILLS_DIR / "xlsx")
 
     entries = SkillIndex().rebuild_if_stale()
     names = {e.name for e in entries}
-    assert "brainstorming" in names
     assert "xlsx" in names
-    brainstorming = next(e for e in entries if e.name == "brainstorming")
-    assert brainstorming.source == "builtin"
+    xlsx = next(e for e in entries if e.name == "xlsx")
+    assert xlsx.source == "builtin"
 
 
 def test_apply_fj_defaults_registers_skills() -> None:
