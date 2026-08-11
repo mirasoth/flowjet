@@ -93,13 +93,15 @@ fj [options] [--] <query...>
 | Flag | Meaning |
 |------|---------|
 | `-f` / `--follow` | Continue the latest active thread |
-| `-t ID` / `--thread` | Continue (or pin) a specific thread |
+| `-t ID` / `--thread` | Continue (or pin) a specific thread (overrides `-f`) |
 | `-l` / `--list` | List recent threads (newest first) |
 | `-n NUM` | How many threads `-l` shows (`0` = all) |
 | `-c PATH` / `--config` | Use an alternate `nano.yml` |
 | `-w DIR` / `--workspace` | Workspace root |
 | `--no-stream` | Wait for the full answer instead of streaming |
 | `-v` / `--verbose` | Mirror tool calls on stderr |
+
+> `-t` and `-f` may be used together; `-t` wins (explicit id overrides follow).
 
 Shell completion (AI-assisted, predicts natural-language intents, not just flags):
 

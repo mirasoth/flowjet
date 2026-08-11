@@ -269,7 +269,6 @@ async def test_arg_composition_conflicts(capsys) -> None:  # type: ignore[no-unt
         (["-l", "-t", "fj-x"], "-l/--list cannot be combined with -t/--thread"),
         (["-l", "-w", "/tmp"], "-l/--list cannot be combined with -w/--workspace"),
         (["-l", "--no-stream"], "-l/--list cannot be combined with --no-stream"),
-        (["-f", "-t", "fj-x"], "-f/--follow and -t/--thread are mutually exclusive"),
     ]
     for argv, needle in cases:
         assert await run_async(parse_args(argv)) == 2
@@ -394,6 +393,55 @@ async def test_run_async_follow_uses_latest_thread(monkeypatch) -> None:  # type
     assert await run_async(parse_args(["-f", "continue"])) == 0
     assert seen["follow"] is True
     assert seen["thread_id"] == "fj-active"
+
+
+@pytest.mark.asyncio
+async def test_run_async_thread_overrides_follow(monkeypatch) -> None:  # type: ignore[untyped-def]
+    """``-t`` overrides ``-f`` — both may be given together; explicit id wins."""
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import fj_ai.agent as agent_mod
+    import fj_ai.agent as config_mod
+    import fj_ai.stream as stream_mod
+    import fj_ai.threads as threads_mod
+    from fj_ai.cli import parse_args, run_async
+
+    seen: dict[str, object] = {}
+
+    @asynccontextmanager
+    async def fake_cp(_config: object):
+        yield object()
+
+    async def fake_resolve(
+        _cp: object,
+        *,
+        explicit: str | None = None,
+        follow: bool = False,
+    ) -> str:
+        seen["explicit"] = explicit
+        seen["follow"] = follow
+        return explicit.strip() if explicit else "fj-active"
+
+    async def fake_stream(_agent: object, query: str, *, thread_id: str, **_k: object) -> str:
+        seen["query"] = query
+        seen["thread_id"] = thread_id
+        return "ok"
+
+    async def fake_build(*_a: object, **_k: object) -> object:
+        return object()
+
+    monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
+    monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
+    monkeypatch.setattr(agent_mod, "build_agent", fake_build)
+    monkeypatch.setattr(threads_mod, "resolve_thread_id", fake_resolve)
+    monkeypatch.setattr(stream_mod, "stream_query", fake_stream)
+
+    assert await run_async(parse_args(["-f", "-t", "fj-explicit", "continue"])) == 0
+    assert seen["explicit"] == "fj-explicit"
+    assert seen["follow"] is True
+    assert seen["thread_id"] == "fj-explicit"
+    assert seen["query"] == "continue"
 
 
 def test_parse_args_empty_query() -> None:

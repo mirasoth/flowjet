@@ -89,6 +89,7 @@ def stub_agent_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         workspace: Path | None = None,
         checkpointer: object = None,
         verbose: bool = False,
+        ask_mode: bool = False,
     ) -> object:
         seen["build_calls"] += 1
         seen["workspace"] = workspace
