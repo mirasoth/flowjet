@@ -77,7 +77,7 @@ examples:
 
 notes:
   • Formal CLI: flowjet-agent · aliases: fj, fjf (= -f)
-  • -f and -t are mutually exclusive; -n requires -l; -l takes no query
+  • -t overrides -f when both are given; -n requires -l; -l takes no query
   • -a/--ask disables all tools — pure Q&A, no side effects
   • One query per thread at a time; different threads may run concurrently
   • With -v, prints thread <id> on stderr before the run
@@ -169,7 +169,7 @@ def validate_arg_composition(args: Any) -> str | None:
     Rules:
     - ``-n`` requires ``-l``/``--list``
     - ``-l`` is exclusive with a query, ``-f``, ``-t``, ``-w``, ``--no-stream``, ``--ask``
-    - ``-f``/``--follow`` and ``-t``/``--thread`` are mutually exclusive
+    - ``-t``/``--thread`` overrides ``-f``/``--follow`` when both are given
     """
     listing = bool(getattr(args, "list", False))
     list_limit = getattr(args, "list_limit", None)
@@ -196,9 +196,6 @@ def validate_arg_composition(args: Any) -> str | None:
             return "-l/--list cannot be combined with --no-stream"
         if ask:
             return "-l/--list cannot be combined with -a/--ask"
-
-    if follow and thread:
-        return "-f/--follow and -t/--thread are mutually exclusive"
 
     return None
 
@@ -237,7 +234,7 @@ def _build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "-t",
         "--thread",
         metavar="ID",
-        help="Thread id (-t alone: pin active; with query: continue it)",
+        help="Thread id (-t alone: pin active; with query: continue it; overrides -f)",
     )
     thread.add_argument(
         "-f",

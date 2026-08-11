@@ -16,7 +16,7 @@ pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# Conflicts — follow is implicit, so -l / -t are always invalid
+# Conflicts — follow is implicit, so -l is always invalid
 # ---------------------------------------------------------------------------
 
 
@@ -28,8 +28,6 @@ pytestmark = pytest.mark.integration
         (["-l", "hello"], "-l/--list does not take a query"),
         (["-lv"], "-l/--list cannot be combined with -f/--follow"),
         (["-lv", "hello"], "-l/--list does not take a query"),
-        (["-t", "fj-x"], "-f/--follow and -t/--thread are mutually exclusive"),
-        (["-t", "fj-x", "continue"], "-f/--follow and -t/--thread are mutually exclusive"),
         (["-n", "5"], "-n requires -l/--list"),
     ],
 )
@@ -94,6 +92,18 @@ def test_fjf_uses_active_thread(
     code, _out, err = run_fjf(["continue", "please"])
     assert code == 0, err
     assert stub_agent_runtime["stream"]["thread_id"] == "fj-active-stub"
+
+
+def test_fjf_thread_overrides_follow(
+    run_fjf: Any,
+    stub_agent_runtime: dict[str, Any],
+) -> None:
+    """``fjf`` always injects ``--follow``; an explicit ``-t`` overrides it."""
+    code, _out, err = run_fjf(["-t", "fj-explicit", "continue"])
+    assert code == 0, err
+    assert stub_agent_runtime["resolve"] == {"explicit": "fj-explicit", "follow": True}
+    assert stub_agent_runtime["stream"]["query"] == "continue"
+    assert stub_agent_runtime["stream"]["thread_id"] == "fj-explicit"
 
 
 def test_fjf_verbose_prints_thread_on_stderr(

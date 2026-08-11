@@ -31,7 +31,6 @@ pytestmark = pytest.mark.integration
         (["-l", "-f"], "-l/--list cannot be combined with -f/--follow"),
         (["-l", "-w", "/tmp"], "-l/--list cannot be combined with -w/--workspace"),
         (["-l", "--no-stream"], "-l/--list cannot be combined with --no-stream"),
-        (["-f", "-t", "fj-x"], "-f/--follow and -t/--thread are mutually exclusive"),
         (["-lv", "hello"], "-l/--list does not take a query"),
         (["-vl", "hello"], "-l/--list does not take a query"),
     ],
@@ -110,6 +109,18 @@ def test_main_thread_alone_pins_explicit_id(
     code, out, err = run_fj(["--thread", "fj-other"])
     assert code == 0
     assert out.strip() == "fj-other"
+
+
+def test_main_follow_with_thread_uses_explicit_id(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+) -> None:
+    """``-t`` overrides ``-f`` — both may appear together; explicit id wins."""
+    code, _out, err = run_fj(["-f", "-t", "fj-x", "continue"])
+    assert code == 0, err
+    assert stub_agent_runtime["resolve"] == {"explicit": "fj-x", "follow": True}
+    assert stub_agent_runtime["stream"]["query"] == "continue"
+    assert stub_agent_runtime["stream"]["thread_id"] == "fj-x"
 
 
 # ---------------------------------------------------------------------------
