@@ -1,25 +1,39 @@
-# Minimal FlowJet (fj) / soothe-nano config — local only.
+# FlowJet (fj) config — Muse-Glimmer profile on the oMLX OpenAI-compatible server.
 #
 # Usage:
-#   mkdir -p ~/.soothe/config && cp nano.yml ~/.soothe/config/nano.yml
-#   # or: fj -c ./nano.yml who are you
+#   fj -c ./nano.yml who are you
 #
-# Requires a local OpenAI-compatible server (Ollama default below).
-#   ollama serve && ollama pull llama3.2
+# Routes the default/fast/think roles to the Muse-Glimmer-30B-4bit model
+# served by the oMLX endpoint. The Muse-Glimmer model emits an internal
+# self-talk protocol (to=self<|message|>…<|eom|>) and embeds tool calls as
+# <atem:function_calls> XML in the content field; soothe-nano's
+# OpenAICompatModelWrapper (muse_glimmer adapter) translates that wire shape
+# into clean content + structured tool_calls automatically — model names
+# starting with "muse-glimmer" trigger the adapter in the LLMFactory.
 #
-# Persistence defaults to sqlite; tools/subagents use soothe-nano defaults.
+# Requires the oMLX server reachable at the api_base_url below.
 
 providers:
-  - name: local
+  - name: omlx
     provider_type: openai
-    api_base_url: "http://127.0.0.1:11434/v1"
-    api_key: "ollama"
+    api_base_url: "http://100.75.70.86:9642/v1"
+    api_key: "mirasoth"
     models:
-      - llama3.2
+      - Muse-Glimmer-30B-4bit
 
 router_profiles:
-  - name: default
+  - name: muse-glimmer
     router:
-      default: "local:llama3.2"
+      default: "omlx:Muse-Glimmer-30B-4bit"
+      fast: "omlx:Muse-Glimmer-30B-4bit"
+      think: "omlx:Muse-Glimmer-30B-4bit"
 
-active_router_profile: default
+active_router_profile: muse-glimmer
+
+# fj defaults to sqlite checkpointer via apply_fj_defaults(); keep persistence
+# explicit so the profile is self-contained for `fj -c ./nano.yml`.
+persistence:
+  default_backend: sqlite
+
+security:
+  allow_paths_outside_workspace: true
