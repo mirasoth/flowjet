@@ -251,3 +251,6 @@ Temporary Items
 # iCloud generated files
 *.icloud
 .soothe/
+
+# Claude Code session-local
+.claude/
