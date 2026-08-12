@@ -183,3 +183,39 @@ def test_accumulator_fallback_path() -> None:
     popped_name, popped_args = acc.pop("c1")
     assert popped_name == "grep"
     assert popped_args.get("pattern") == "x"
+
+
+def test_accumulator_consumes_muse_glimmer_adapter_output() -> None:
+    """A Muse-Glimmer tool-call message, adapter-transformed, must accumulate cleanly.
+
+    The soothe-nano muse_glimmer adapter converts the model's self-named XML
+    tool calls (e.g. ``<read_file file_path="…"/>``) into structured
+    ``tool_calls`` + ``tool_call_chunks``. flowjet's ToolCallArgAccumulator
+    must ingest those chunks the same way it ingests native OpenAI tool-call
+    deltas — extracting the tool name and args for the progress line.
+    """
+    from langchain_core.messages import AIMessage
+    from soothe_nano.utils.llm.muse_glimmer import transform_muse_glimmer_message
+
+    raw = (
+        "to=self<|message|>Read the file.<|eom|>"
+        "<|start|>assistant to=read_file<|message|>"
+        '<read_file file_path="/Users/xiaming/nano.yml"></read_file>'
+    )
+    msg = AIMessage(content=raw)
+    transform_muse_glimmer_message(msg)
+    # Adapter contract: clean content + structured tool_calls/chunks.
+    assert msg.content == ""
+    assert len(msg.tool_calls) == 1
+    assert msg.tool_calls[0]["name"] == "read_file"
+    assert len(msg.tool_call_chunks) == 1
+
+    acc = ToolCallArgAccumulator()
+    updates = acc.ingest_message(msg)
+    assert len(updates) == 1
+    tc_id, name, args = updates[0]
+    assert name == "read_file"
+    assert args.get("file_path") == "/Users/xiaming/nano.yml"
+    # No self-talk leaks into the tool display.
+    assert "to=self" not in str(args)
+    assert "<|eom|>" not in str(args)
