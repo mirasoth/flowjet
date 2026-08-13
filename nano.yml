@@ -1,34 +1,55 @@
-# FlowJet (fj) config — Muse-Glimmer profile on the oMLX OpenAI-compatible server.
+# FlowJet (fj) config — DeepSeek-V4 text + DeepSeek-OCR / PaddleOCR-VL on
+# the local Mac Studio inference stack.
 #
 # Usage:
 #   fj -c ./nano.yml who are you
 #
-# Routes the default/fast/think roles to the Muse-Glimmer-30B-4bit model
-# served by the oMLX endpoint. The Muse-Glimmer model emits an internal
-# self-talk protocol (to=self<|message|>…<|eom|>) and embeds tool calls as
-# <atem:function_calls> XML in the content field; soothe-nano's
-# OpenAICompatModelWrapper (muse_glimmer adapter) translates that wire shape
-# into clean content + structured tool_calls automatically — model names
-# starting with "muse-glimmer" trigger the adapter in the LLMFactory.
+# Two providers, one per stack:
+#   vllm  — vLLM-Metal on :9543, single-model, non-streaming
+#   omlx  — oMLX on :9642, multi-model with LRU eviction, streaming
 #
-# Requires the oMLX server reachable at the api_base_url below.
+# vLLM-Metal serves only one model per process (no multi-model serving),
+# so OCR/VLM models are routed to oMLX which can load/unload on demand.
+#
+# Router roles:
+#   default / fast / think → vLLM  : DeepSeek-V4-Flash-2bit-DQ
+#   ocr                    → omlx  : DeepSeek-OCR-4bit
+#   image                  → omlx  : PaddleOCR-VL-1.5-4bit
+#
+# vLLM `streaming: false` is required: vLLM-Metal ignores `stream: true` and
+# returns a non-SSE JSON body. oMLX supports streaming (default true).
+#
+# Requires vLLM-Metal (:9543) and oMLX (:9642) reachable at the URLs below.
+# See ../deploy-llm-inference/docs/vllm_deployment.md and
+#     ../deploy-llm-inference/docs/OMLX_QUICK_REFERENCE.md.
 
 providers:
+  - name: vllm
+    provider_type: openai
+    api_base_url: "http://localhost:9543/v1"
+    api_key: "mirasoth"
+    streaming: false
+    models:
+      - mlx-community/DeepSeek-V4-Flash-2bit-DQ
+
   - name: omlx
     provider_type: openai
-    api_base_url: "http://100.75.70.86:9642/v1"
+    api_base_url: "http://localhost:9642/v1"
     api_key: "mirasoth"
     models:
-      - Muse-Glimmer-30B-4bit
+      - DeepSeek-OCR-4bit
+      - PaddleOCR-VL-1.5-4bit
 
 router_profiles:
-  - name: muse-glimmer
+  - name: deepseek-v4
     router:
-      default: "omlx:Muse-Glimmer-30B-4bit"
-      fast: "omlx:Muse-Glimmer-30B-4bit"
-      think: "omlx:Muse-Glimmer-30B-4bit"
+      default: "vllm:mlx-community/DeepSeek-V4-Flash-2bit-DQ"
+      fast: "vllm:mlx-community/DeepSeek-V4-Flash-2bit-DQ"
+      think: "vllm:mlx-community/DeepSeek-V4-Flash-2bit-DQ"
+      ocr: "omlx:DeepSeek-OCR-4bit"
+      image: "omlx:PaddleOCR-VL-1.5-4bit"
 
-active_router_profile: muse-glimmer
+active_router_profile: deepseek-v4
 
 # fj defaults to sqlite checkpointer via apply_fj_defaults(); keep persistence
 # explicit so the profile is self-contained for `fj -c ./nano.yml`.
