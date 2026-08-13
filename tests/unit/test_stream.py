@@ -251,7 +251,7 @@ async def test_stream_query_cjk_narration_preview_uses_tail(
     )
     assert result == full
     assert full + "\n" in out.getvalue()
-    assert out.getvalue().endswith(", thread: t1)\n")
+    assert out.getvalue().endswith(" · t1\n")
     tail_updates = [msg for msg, used_tail in updates if used_tail]
     assert tail_updates
     assert any("现在创建" in msg for msg in tail_updates)
@@ -345,7 +345,7 @@ async def test_stream_query_live_answer_and_custom_event() -> None:
     )
     assert result == "Hi there"
     assert out.getvalue().startswith("Hi there\n")
-    assert out.getvalue().endswith(", thread: t1)\n")
+    assert out.getvalue().endswith(" · t1\n")
     assert "[event]" in err.getvalue()
 
 
@@ -399,7 +399,7 @@ async def test_stream_query_tool_call_and_error_result() -> None:
     )
     assert result == "Recovered."
     assert out.getvalue().startswith("Recovered.\n")
-    assert out.getvalue().endswith(", thread: t1)\n")
+    assert out.getvalue().endswith(" · t1\n")
     stderr = err.getvalue()
     assert "[interrupted]" in stderr
     assert "[tool]" in stderr
@@ -521,7 +521,7 @@ async def test_stream_query_drops_intermediate_ai_narration() -> None:
     assert result.startswith("## Latest Stock Market News")
     printed = out.getvalue()
     assert printed.startswith("## Latest Stock Market News\n1. Futures rise\n")
-    assert printed.endswith(", thread: t1)\n")
+    assert printed.endswith(" · t1\n")
     assert "I'll fetch" not in printed
     assert "rate-limiting" not in printed
 
@@ -551,7 +551,7 @@ async def test_stream_query_keeps_longer_chunk_buffer_at_end() -> None:
     )
     assert result == long_answer
     assert out.getvalue().startswith(long_answer + "\n")
-    assert out.getvalue().endswith(", thread: t1)\n")
+    assert out.getvalue().endswith(" · t1\n")
 
 
 @pytest.mark.asyncio
@@ -572,4 +572,4 @@ async def test_invoke_query_buffers_until_end() -> None:
     )
     assert result == "Final answer"
     assert out.getvalue().startswith("Final answer\n")
-    assert out.getvalue().endswith(", thread: t1)\n")
+    assert out.getvalue().endswith(" · t1\n")

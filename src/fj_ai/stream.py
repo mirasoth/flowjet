@@ -26,18 +26,26 @@ _STATUS_PREVIEW_MIN_INTERVAL = 0.12
 
 
 def _format_duration(seconds: float) -> str:
-    """Format an elapsed time as a short human-readable duration."""
+    """Format an elapsed time as a short human-readable duration.
+
+    Components are separated by spaces (e.g. ``1m 19s``, ``2h 5m``) so the
+    value reads cleanly when embedded in the final summary line.
+    """
     if seconds < 0 or not seconds:
         return "0s"
     days, rem = divmod(int(seconds), 86400)
     hours, rem = divmod(rem, 3600)
     minutes, secs = divmod(rem, 60)
+    parts: list[str] = []
     if days:
-        return f"{days}d{hours}h"
+        parts.append(f"{days}d")
     if hours:
-        return f"{hours}h{minutes}m"
+        parts.append(f"{hours}h")
     if minutes:
-        return f"{minutes}m{secs}s"
+        parts.append(f"{minutes}m")
+    if parts:
+        parts.append(f"{secs}s")
+        return " ".join(parts)
     if seconds >= 10:
         return f"{seconds:.0f}s"
     return f"{seconds:.1f}s"
@@ -453,7 +461,7 @@ async def stream_query(
 
     answer_text = answer.finish()
     duration = _format_duration(time.monotonic() - started_at)
-    stdout.write(f"\n(Finished in {duration}, thread: {thread_id})\n")
+    stdout.write(f"\n✓ Done · {duration} · {thread_id}\n")
     stdout.flush()
     return answer_text
 
