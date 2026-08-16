@@ -202,7 +202,7 @@ def _ai_text(message: AIMessage) -> str:
                     parts.append(text)
         return "".join(parts)
     try:
-        from soothe_nano.utils.llm.response_text import llm_response_text
+        from soothe_nano.llm.response_text import llm_response_text
 
         return llm_response_text(message) or ""
     except Exception:

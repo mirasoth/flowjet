@@ -43,7 +43,7 @@ def test_ai_text_fallback_str(monkeypatch: pytest.MonkeyPatch) -> None:
         raise RuntimeError("no helper")
 
     # Patch inside the function's try/import path.
-    import soothe_nano.utils.llm.response_text as rt
+    import soothe_nano.llm.response_text as rt
 
     monkeypatch.setattr(rt, "llm_response_text", boom)
     assert _ai_text(WeirdMessage()) == "12345"  # type: ignore[arg-type]
