@@ -3,7 +3,7 @@ UV_RUN ?= uv run
 UV_INDEX_URL ?= https://pypi.org/simple
 export UV_INDEX_URL
 
-.PHONY: sync sync-dev sync-local-nano format format-check lint lint-fix \
+.PHONY: sync sync-dev format format-check lint lint-fix \
 	test test-unit test-integration test-coverage build publish clean help
 
 help:
@@ -11,7 +11,6 @@ help:
 	@echo ""
 	@echo "  make sync            - Sync dependencies"
 	@echo "  make sync-dev        - Sync with dev extras"
-	@echo "  make sync-local-nano - Editable soothe-nano from ../soothe (diagnose API)"
 	@echo "  make format          - Format with ruff"
 	@echo "  make format-check    - Check formatting (CI)"
 	@echo "  make lint            - Lint with ruff"
@@ -29,10 +28,6 @@ sync:
 
 sync-dev:
 	uv sync --extra dev
-
-# Use sibling soothe monorepo nano (includes diagnose API before PyPI publish).
-sync-local-nano:
-	uv pip install -e ../soothe/packages/soothe-nano --python .venv/bin/python
 
 format:
 	$(UV_RUN) ruff format src/ tests/
