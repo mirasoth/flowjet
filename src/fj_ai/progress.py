@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import sys
+import time
 import unicodedata
 from typing import Any, TextIO
 
@@ -26,14 +27,16 @@ _COLORS = {
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _TICK_SECONDS = 0.08
+_STEP_TIMER_MIN_SECONDS = 1.0
+_DIM = "\033[2m"
 # Visible status text budget (spinner glyph + space excluded).
 _PROGRESS_MIN = 36
 _PROGRESS_DEFAULT = 72
 _PROGRESS_MAX = 200
 # Extra arg parts when the arg budget is generous enough.
 _ARGS_WIDE_BUDGET = 64
-_ARGS_DEFAULT_PARTS = 2
-_ARGS_WIDE_PARTS = 3
+_ARGS_DEFAULT_PARTS = 1
+_ARGS_WIDE_PARTS = 2
 # Columns reserved for a typical verb + space when building arg previews.
 _ARGS_VERB_RESERVE = 10
 _ELLIPSIS = "…"
@@ -230,6 +233,29 @@ def _truncate_path(text: str, limit: int | None = None) -> str:
     return tail
 
 
+def _short_path(path: str, limit: int) -> str:
+    """Compact path for the activity line: last two segments, else basename."""
+    text = re.sub(r"\s+", " ", _abbrev_path(path).strip())
+    if not text:
+        return ""
+    # Normalize separators for segment splitting.
+    norm = text.replace("\\", "/")
+    segments = [s for s in norm.split("/") if s and s != "~"]
+    if len(segments) >= 2:
+        candidate = f"{segments[-2]}/{segments[-1]}"
+    elif segments:
+        candidate = segments[-1]
+    else:
+        candidate = text
+    if _display_width(candidate) <= limit:
+        return candidate
+    # Fall back to basename, then truncate from the end.
+    base = segments[-1] if segments else text
+    if _display_width(base) <= limit:
+        return base
+    return _truncate_cols(base, limit, tail=True)
+
+
 def _fit(
     label: str,
     *,
@@ -291,15 +317,6 @@ def _tool_meta(name: str) -> Any | None:
         return get_tool_meta(name)
     except Exception:
         return None
-
-
-def _display_name(name: str) -> str:
-    try:
-        from soothe_sdk.utils import get_tool_display_name
-
-        return get_tool_display_name(name)
-    except Exception:
-        return name.replace("_", " ").title()
 
 
 def _normalize_args(args: Any) -> dict[str, Any]:
@@ -387,15 +404,12 @@ def _format_arg_value(tool_name: str, key: str, value: Any, *, budget: int) -> s
         "relative_path",
     }
     if is_path:
-        return _truncate_path(_abbrev_path(text), budget)
-    # Quote patterns / queries for readability; show head…tail for long text.
+        return _short_path(text, budget)
     if key in {"pattern", "query", "regex", "regexp", "old_string", "new_string", "skill"}:
-        inner = _truncate_middle(text, max(12, budget - 2))
-        return f"“{inner}”"
+        return _truncate_middle(text, max(12, budget))
     if key in {"command", "cmd", "script"}:
-        # Keep command start (program + first args); still show trailing flags.
-        inner = _truncate_middle(text, max(16, budget - 2))
-        return f"`{inner}`"
+        # Keep command start (program + first args).
+        return _truncate_cols(text, max(16, budget), middle=False)
     if key in {"content"}:
         return _truncate_middle(text, max(10, budget))
     return _truncate_middle(text, max(12, budget))
@@ -408,7 +422,7 @@ def format_args_preview(
     max_parts: int | None = None,
     prefix_width: int | None = None,
 ) -> str:
-    """Human-readable arg summary, e.g. ``src/cli.py`` or ``“TODO” in src/``."""
+    """Human-readable arg summary, e.g. ``fj_ai/cli.py`` or ``TODO in src/``."""
     clean = _normalize_args(args)
     if not clean:
         return ""
@@ -433,21 +447,55 @@ def format_args_preview(
         if not text:
             continue
         if not parts:
+            # grep/glob: fold path into the pattern part so max_parts=1 still shows both.
+            if canonical in {"grep", "glob"} and key in {"pattern", "query", "regex", "regexp"}:
+                path_key = next(
+                    (
+                        k
+                        for k in ("path", "file_path", "directory", "target_directory", "dir")
+                        if k in clean and clean[k] not in (None, "")
+                    ),
+                    None,
+                )
+                if path_key is not None:
+                    path_text = _format_arg_value(
+                        canonical, path_key, clean[path_key], budget=max(8, remaining // 2)
+                    )
+                    if path_text:
+                        text = f"{text} in {path_text}"
             parts.append(text)
         elif key in {"path", "file_path", "directory", "target_directory", "dir"} and parts:
-            if canonical in {"grep", "glob"} and " in " not in parts[0]:
+            if canonical in {"grep", "glob"}:
+                if " in " in parts[0]:
+                    continue
                 parts[0] = f"{parts[0]} in {text}"
             else:
-                parts.append(f"{key}={text}")
+                parts.append(text)
         elif key in {"old_string", "new_string"} and canonical == "edit_file":
-            if key == "old_string":
-                parts.append(f"replace {text}")
-            elif key == "new_string" and any(p.startswith("replace ") for p in parts):
-                parts = [p for p in parts if not p.startswith("replace ")] + [f"→ {text}"]
+            if any(" → " in p for p in parts):
+                continue
+            old_val = clean.get("old_string")
+            new_val = clean.get("new_string")
+            old_text = (
+                _format_arg_value(canonical, "old_string", old_val, budget=max(8, remaining // 2))
+                if old_val not in (None, "")
+                else ""
+            )
+            new_text = (
+                _format_arg_value(canonical, "new_string", new_val, budget=max(8, remaining // 2))
+                if new_val not in (None, "")
+                else ""
+            )
+            if old_text and new_text:
+                parts.append(f"{old_text} → {new_text}")
+            elif old_text:
+                parts.append(old_text)
+            elif new_text:
+                parts.append(f"→ {new_text}")
             else:
-                parts.append(f"{key}={text}")
+                continue
         else:
-            parts.append(f"{key}={text}")
+            parts.append(text)
         if len(parts) >= max_parts:
             break
 
@@ -455,7 +503,7 @@ def format_args_preview(
 
 
 def format_tool_activity(tool_name: str, args: Any | None = None) -> tuple[str, str]:
-    """Status line for an in-flight tool call: ``Reading ~/a.py``."""
+    """Status line for an in-flight tool call: ``Reading fj_ai/cli.py``."""
     name = (tool_name or "tool").strip() or "tool"
     verb, color = _TOOL_VERBS.get(name, ("Running", "yellow"))
     meta = _tool_meta(name)
@@ -463,21 +511,20 @@ def format_tool_activity(tool_name: str, args: Any | None = None) -> tuple[str, 
         verb, color = _TOOL_VERBS.get(meta.name, (verb, color))
         name = meta.name
 
-    display = _display_name(name)
     known = name in _TOOL_VERBS or (meta is not None and meta.name in _TOOL_VERBS)
-    # Reserve columns for the verb (or "Running DisplayName · ") before args.
+    # Reserve columns for the verb (or "Running tool_name ") before args.
     if known:
         prefix_width = _display_width(verb) + 1
     else:
-        prefix_width = _display_width(f"{verb} {display} · ")
+        prefix_width = _display_width(f"{verb} {name} ")
     preview = format_args_preview(name, args, prefix_width=prefix_width)
     if preview:
         if known:
             label = f"{verb} {preview}"
         else:
-            label = f"{verb} {display} · {preview}"
+            label = f"{verb} {name} {preview}"
     else:
-        label = f"{verb}…"
+        label = verb if known else f"{verb} {name}"
     return _fit(label), color
 
 
@@ -497,17 +544,21 @@ def format_tool_done(
 ) -> tuple[str, str]:
     """Status after a tool returns — keep context while model thinks."""
     name = (tool_name or "tool").strip() or "tool"
-    prefix = "Failed " if is_error else "Thinking… · after "
-    preview = format_args_preview(name, args, max_parts=1, prefix_width=_display_width(prefix))
-    display = _display_name(name)
-    summary = f"{display}({preview})" if preview else display
+    meta = _tool_meta(name)
+    if meta is not None:
+        name = meta.name
+    prefix = "Failed " if is_error else "Thinking · "
+    preview = format_args_preview(
+        name, args, max_parts=1, prefix_width=_display_width(prefix + name + " ")
+    )
+    summary = f"{name} {preview}" if preview else name
     if is_error:
         label = f"Failed {summary}"
         if detail:
             detail_limit = _detail_budget(prefix=f"{label} · ", fraction=0.45, floor=20)
             label = f"{label} · {_truncate_middle(_compact(detail), detail_limit)}"
         return _fit(label), "red"
-    return _fit(f"Thinking… · after {summary}"), "cyan"
+    return _fit(f"Thinking · {summary}"), "cyan"
 
 
 def _tool_name(data: dict[str, Any]) -> str | None:
@@ -605,7 +656,7 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
         elif isinstance(count, int) and count > 0:
             label = f"Recalled {count} memor{'y' if count == 1 else 'ies'}"
         else:
-            label = "Recalling memory…"
+            label = "Recalling memory"
         return _fit(label), "cyan"
 
     if event_type == "soothe.internal.memory.stored":
@@ -626,7 +677,7 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
         name = subagent or tool or "subagent"
         preview = format_args_preview(name, args) if args else ""
         if not preview:
-            prefix = f"{verb} {name} · " if action else f"Delegating to {name} · "
+            prefix = f"{verb} {name} · " if action else f"Delegating {name} · "
             detail = _fit(
                 _compact(data.get("action_preview") or data.get("query") or ""),
                 budget=_detail_budget(prefix=prefix, fraction=0.55, floor=20),
@@ -634,10 +685,10 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
         else:
             detail = preview
         if action in {"completed", "finished"}:
-            label = f"Thinking… · after {name}"
+            label = f"Thinking · {name}"
             color = "cyan"
         else:
-            label = f"Delegating to {name}" if not action else f"{verb} {name}"
+            label = f"Delegating {name}"
             if detail:
                 label = f"{label} · {detail}"
         return _fit(label), color
@@ -645,7 +696,7 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
     if domain == "skill" or "skill" in short:
         color = "blue"
         name = data.get("skill") or data.get("name") or "skill"
-        label = f"{verb} skill {name}"
+        label = f"Skill {name}"
         return _fit(label), color
 
     if domain in {"error"} or action in {"failed", "error"}:
@@ -658,24 +709,24 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
     if domain == "cognition":
         color = "cyan"
         if "plan" in short:
-            label = "Planning…"
+            label = "Planning"
         elif "goal" in short and action == "completed":
             color = "green"
             label = "Goal complete"
         elif "strange_loop" in short:
-            label = "Thinking…"
+            label = "Thinking"
         elif "intent" in short:
             intent = data.get("intent") or data.get("label") or data.get("message")
             if intent:
-                intent_limit = _detail_budget(prefix="Understanding… · ", fraction=0.5, floor=16)
-                label = f"Understanding… · {_truncate_middle(_compact(intent), intent_limit)}"
+                intent_limit = _detail_budget(prefix="Understanding · ", fraction=0.5, floor=16)
+                label = f"Understanding · {_truncate_middle(_compact(intent), intent_limit)}"
             else:
-                label = "Understanding…"
+                label = "Understanding"
         else:
-            label = f"{verb}…"
+            label = verb
         return _fit(label), color
 
-    label = f"{verb}…"
+    label = verb
     if tool:
         return format_tool_activity(tool, args)
     detail = format_args_preview("tool", args) if args else ""
@@ -705,10 +756,11 @@ class ProgressLine:
         self._color = _color_enabled(self._stream) if self._enabled else False
         self._active = False
         self._frame = 0
-        self._message = "Working…"
+        self._message = "Working"
         self._style = "cyan"
         self._tick_seconds = tick_seconds
         self._task: asyncio.Task[None] | None = None
+        self._step_started_at = time.monotonic()
 
     @property
     def enabled(self) -> bool:
@@ -726,6 +778,7 @@ class ProgressLine:
         if not self._enabled or self._task is not None:
             return
         self._active = True
+        self._step_started_at = time.monotonic()
         self._paint()
         self._task = asyncio.create_task(self._spin(), name="fj-progress-spinner")
 
@@ -753,7 +806,10 @@ class ProgressLine:
     def update(self, message: str, *, color: str = "cyan", tail: bool = False) -> None:
         if not self._enabled:
             return
-        self._message = _fit(message.strip() or "Working…", tail=tail)
+        fitted = _fit(message.strip() or "Working", tail=tail)
+        if fitted != self._message:
+            self._step_started_at = time.monotonic()
+        self._message = fitted
         self._style = color
         self._active = True
         self._paint()
@@ -768,17 +824,31 @@ class ProgressLine:
             return
         self._task = loop.create_task(self._spin(), name="fj-progress-spinner")
 
+    def _elapsed_suffix(self) -> str:
+        elapsed = time.monotonic() - self._step_started_at
+        if elapsed < _STEP_TIMER_MIN_SECONDS:
+            return ""
+        total = int(elapsed)
+        if total < 60:
+            return f" · {total}s"
+        minutes, secs = divmod(total, 60)
+        return f" · {minutes}m{secs:02d}s"
+
     def _paint(self) -> None:
         if not self._enabled:
             return
-        text = _fit(self._message)
+        suffix = self._elapsed_suffix()
+        budget = _line_budget()
+        suffix_w = _display_width(suffix)
+        text = _fit(self._message, budget=max(1, budget - suffix_w))
         frame = _SPINNER[self._frame % len(_SPINNER)]
         self._frame += 1
         if self._color:
             code = _COLORS.get(self._style, _COLORS["cyan"])
-            rendered = f"{code}{_BOLD}{frame}{_RESET}{code} {text}{_RESET}"
+            dim_suffix = f"{_DIM}{suffix}{_RESET}{code}" if suffix else ""
+            rendered = f"{code}{_BOLD}{frame}{_RESET}{code} {text}{dim_suffix}{_RESET}"
         else:
-            rendered = f"{frame} {text}"
+            rendered = f"{frame} {text}{suffix}"
         self._stream.write(f"\r\033[2K{rendered}")
         self._stream.flush()
 

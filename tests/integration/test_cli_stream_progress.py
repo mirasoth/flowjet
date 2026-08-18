@@ -102,7 +102,7 @@ def test_cli_stream_throttles_rapid_narration_chunks(
     run_fj_live_stream: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    times = iter([float(i) * 0.01 for i in range(300)])
+    times = iter([float(i) * 0.01 for i in range(2000)])
     monkeypatch.setattr("fj_ai.stream.time.monotonic", lambda: next(times))
 
     chunks = [_msg_chunk(AIMessageChunk(content="中" * (i + 1))) for i in range(50)]

@@ -3,7 +3,7 @@ UV_RUN ?= uv run
 UV_INDEX_URL ?= https://pypi.org/simple
 export UV_INDEX_URL
 
-.PHONY: sync sync-dev format format-check lint lint-fix \
+.PHONY: sync sync-dev format format-check lint lint-fix autofix \
 	test test-unit test-integration test-coverage build publish clean help
 
 help:
@@ -15,6 +15,7 @@ help:
 	@echo "  make format-check    - Check formatting (CI)"
 	@echo "  make lint            - Lint with ruff"
 	@echo "  make lint-fix        - Auto-fix lint issues"
+	@echo "  make autofix         - Format + auto-fix lint issues"
 	@echo "  make test            - Run unit + integration tests"
 	@echo "  make test-unit       - Run unit tests"
 	@echo "  make test-integration - Run integration tests"
@@ -40,6 +41,8 @@ lint:
 
 lint-fix:
 	$(UV_RUN) ruff check --fix src/ tests/
+
+autofix: format lint-fix
 
 test-unit:
 	$(UV_RUN) python -m pytest tests/unit/ -q

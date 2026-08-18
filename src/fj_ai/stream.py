@@ -354,7 +354,7 @@ async def stream_query(
             message=r".*Passing a callable \(factory\) as `backend`.*",
         )
         async with status:
-            status.update("Thinking…", color="cyan")
+            status.update("Thinking", color="cyan")
             async for chunk in agent.astream(
                 {"messages": messages},
                 config=config,
