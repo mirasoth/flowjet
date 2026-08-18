@@ -67,7 +67,7 @@ def test_format_grep_activity() -> None:
     label, _color = format_tool_activity("grep", {"pattern": "ProgressLine", "path": "src/fj_ai"})
     assert "Grepping" in label
     assert "ProgressLine" in label
-    assert "src/fj_ai" in label
+    assert "fj_ai" in label or "src/fj_ai" in label
 
 
 def test_format_args_preview_primary() -> None:
@@ -84,7 +84,10 @@ def test_format_tool_done_error_includes_detail() -> None:
     )
     assert color == "red"
     assert "Failed" in label
+    assert "wizsearch_search" in label
     assert "limit" in label
+    assert "“" not in label
+    assert "`" not in label
 
 
 def test_progress_respects_width_budget(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -219,7 +222,8 @@ def test_format_tool_done_keeps_context() -> None:
         "read_file", {"file_path": "src/fj_ai/progress.py"}, is_error=False
     )
     assert "Thinking" in label
-    assert "progress.py" in label or "ReadFile" in label
+    assert "read_file" in label
+    assert "progress.py" in label
     assert color == "cyan"
 
 
@@ -232,14 +236,15 @@ def test_friendly_tool_completed_keeps_context() -> None:
         }
     )
     assert "Thinking" in label
-    assert "Makefile" in label or "ReadFile" in label
+    assert "read_file" in label
+    assert "Makefile" in label
     assert color == "cyan"
 
 
 def test_progress_line_ephemeral_clear() -> None:
     buf = StringIO()
     line = ProgressLine(buf, enabled=True)
-    line.update("Thinking…", color="cyan")
+    line.update("Thinking", color="cyan")
     assert "\r" in buf.getvalue()
     assert "Thinking" in buf.getvalue()
     line.clear()
@@ -251,7 +256,7 @@ async def test_progress_line_blank_repaint_for_verbose() -> None:
     buf = StringIO()
     line = ProgressLine(buf, enabled=True, tick_seconds=0.05)
     async with line:
-        line.update("Thinking…", color="cyan")
+        line.update("Thinking", color="cyan")
         line.blank()
         assert buf.getvalue().endswith("\033[2K")
         line.repaint()
@@ -263,7 +268,7 @@ async def test_progress_line_spins_between_updates() -> None:
     buf = StringIO()
     line = ProgressLine(buf, enabled=True, tick_seconds=0.02)
     async with line:
-        line.update("Thinking…", color="cyan")
+        line.update("Thinking", color="cyan")
         await asyncio.sleep(0.07)
     frames = sum(1 for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" if ch in buf.getvalue())
     assert frames >= 2
@@ -282,7 +287,7 @@ def test_friendly_skill_and_error_events() -> None:
 
 
 def test_friendly_cognition_variants() -> None:
-    assert friendly_progress({"type": "soothe.cognition.plan.started"})[0] == "Planning…"
+    assert friendly_progress({"type": "soothe.cognition.plan.started"})[0] == "Planning"
     label, color = friendly_progress({"type": "soothe.cognition.goal.completed"})
     assert label == "Goal complete"
     assert color == "green"
@@ -291,6 +296,7 @@ def test_friendly_cognition_variants() -> None:
     )
     assert "Understanding" in label
     assert "refactor" in label
+    assert "…" not in label
 
 
 def test_friendly_tool_failed_event() -> None:
@@ -447,7 +453,7 @@ def test_args_preview_cjk_respects_display_width(monkeypatch: pytest.MonkeyPatch
     assert "中" in preview or "…" in preview
 
 
-def test_wide_budget_allows_three_arg_parts(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wide_budget_allows_two_arg_parts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FJ_PROGRESS_WIDTH", "120")
     preview = format_args_preview(
         "edit_file",
@@ -457,32 +463,85 @@ def test_wide_budget_allows_three_arg_parts(monkeypatch: pytest.MonkeyPatch) -> 
             "new_string": "new_value_here",
         },
     )
-    # Wide default max_parts=3 should surface path plus edit hint.
+    # Wide default max_parts=2 should surface path plus old → new.
     assert "progress.py" in preview
-    assert "replace" in preview or "→" in preview or "old_value" in preview
+    assert "→" in preview or "old_value" in preview
 
 
 def test_format_edit_file_preview() -> None:
     preview = format_args_preview(
         "edit_file",
         {"file_path": "a.py", "old_string": "foo", "new_string": "bar"},
-        max_parts=3,
+        max_parts=2,
     )
-    assert "a.py" in preview or "replace" in preview or "→" in preview
+    assert "a.py" in preview
+    assert "→" in preview or "foo" in preview
 
 
 def test_format_tool_activity_unknown_tool() -> None:
     label, color = format_tool_activity("custom_tool", {"query": "x"})
-    assert "Running" in label or "custom" in label.lower()
+    assert "Running custom_tool" in label
+    assert "x" in label
+    assert " · " not in label.split("custom_tool", 1)[0]
     assert color == "yellow"
     label, _ = format_tool_activity("read_file", None)
     assert label.startswith("Reading")
 
 
+def test_args_preview_strips_decoration() -> None:
+    preview = format_args_preview("grep", {"pattern": "TODO", "path": "src"})
+    assert "“" not in preview
+    assert "`" not in preview
+    assert "TODO" in preview
+    cmd = format_args_preview("run_command", {"command": "ruff check src/"})
+    assert "`" not in cmd
+    assert "ruff check" in cmd
+
+
+def test_short_path_keeps_two_segments() -> None:
+    from fj_ai.progress import _short_path
+
+    out = _short_path("/Users/me/Workspace/fj-ai/src/fj_ai/cli.py", 40)
+    assert out == "fj_ai/cli.py"
+
+
+def test_progress_line_timer_hidden_under_one_second(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    times = iter([100.0, 100.0, 100.4])
+    monkeypatch.setattr("fj_ai.progress.time.monotonic", lambda: next(times))
+    buf = StringIO()
+    line = ProgressLine(buf, enabled=True)
+    line.update("Reading cli.py", color="yellow")
+    plain = buf.getvalue().split("\r")[-1]
+    assert " · " not in plain or "s" not in plain.split("cli.py")[-1]
+
+
+def test_progress_line_timer_shows_after_one_second(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fj_ai.progress import _display_width, _line_budget
+
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "48")
+    clock = {"t": 100.0}
+    monkeypatch.setattr("fj_ai.progress.time.monotonic", lambda: clock["t"])
+    buf = StringIO()
+    line = ProgressLine(buf, enabled=True)
+    line.update("Reading cli.py", color="yellow")
+    clock["t"] = 103.2
+    line._paint()
+    plain = buf.getvalue().split("\r")[-1].replace("\033[2K", "")
+    for code in ("\033[0m", "\033[1m", "\033[2m", "\033[33m"):
+        plain = plain.replace(code, "")
+    plain = plain.lstrip("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ").strip()
+    assert " · 3s" in plain
+    assert _display_width(plain) <= _line_budget()
+
+
 def test_progress_line_clear_after_update() -> None:
     buf = StringIO()
     line = ProgressLine(buf, enabled=True)
-    line.update("Thinking…", color="cyan")
+    line.update("Thinking", color="cyan")
     line.clear()
     assert "\033[2K" in buf.getvalue()
     assert line._active is False

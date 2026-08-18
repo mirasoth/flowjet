@@ -172,13 +172,16 @@ def test_answer_writer_throttles_rapid_preview_updates(monkeypatch: pytest.Monke
     out = StringIO()
     status = ProgressLine(out, enabled=True)
     writer = AnswerWriter(out, status, live=True)
-    times = iter([0.0, 0.01, 0.02, 0.20])
-    monkeypatch.setattr("fj_ai.stream.time.monotonic", lambda: next(times))
+    clock = {"t": 0.0}
+    monkeypatch.setattr("fj_ai.stream.time.monotonic", lambda: clock["t"])
 
     writer.set("a")
+    clock["t"] = 0.01
     writer.set("ab")
+    clock["t"] = 0.02
     writer.set("abc")
     paints_before = out.getvalue().count("\r")
+    clock["t"] = 0.20
     writer.set("abcd")
     paints_after = out.getvalue().count("\r")
     assert paints_before == 1
@@ -189,12 +192,13 @@ def test_answer_writer_reset_clears_throttle_state(monkeypatch: pytest.MonkeyPat
     out = StringIO()
     status = ProgressLine(out, enabled=True)
     writer = AnswerWriter(out, status, live=True)
-    times = iter([0.0, 0.01, 0.02, 0.03, 0.04])
-    monkeypatch.setattr("fj_ai.stream.time.monotonic", lambda: next(times))
+    clock = {"t": 0.0}
+    monkeypatch.setattr("fj_ai.stream.time.monotonic", lambda: clock["t"])
 
     writer.set("before tools")
     paints_after_first = out.getvalue().count("\r")
     writer.reset_for_tools()
+    clock["t"] = 0.01
     writer.set("after tools")
     paints_after_reset = out.getvalue().count("\r")
     assert paints_after_reset == paints_after_first + 1
@@ -264,7 +268,7 @@ async def test_stream_query_many_chunks_throttles_narration_updates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     out = StringIO()
-    times = iter([float(i) * 0.01 for i in range(200)])
+    times = iter([float(i) * 0.01 for i in range(2000)])
     monkeypatch.setattr("fj_ai.stream.time.monotonic", lambda: next(times))
 
     chunks = [_msg_chunk(AIMessageChunk(content="x" * (i + 1))) for i in range(40)]

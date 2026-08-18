@@ -61,14 +61,6 @@ fj doctor --live-llm      # actually call the model
 fj doctor --format json   # machine-readable
 ```
 
-## Run
-
-```bash
-fj who are you
-fj list Python files in this directory
-fj refactor the parser to use dataclasses
-```
-
 ---
 
 ## Conversations
