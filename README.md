@@ -5,21 +5,19 @@
 [![CI](https://github.com/caesar0301/flowjet-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/caesar0301/flowjet-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-🎥 [Watch the demo video on Vimeo](https://vimeo.com/1211730182)
+🎥 [Watch the demo on Vimeo](https://vimeo.com/1211730182)
 
-**FlowJet** (`flowjet-agent`) is a one-shot coding-agent CLI for the terminal. Type a question, get an answer — no UI, no context-switching:
+**FlowJet** is a friendly one-shot coding agent for your terminal. Ask a question in plain English, get an answer — no UI, no context-switching.
 
 ```bash
-fj explain this repo                    # alias of flowjet-agent
-fj -f what did we decide last time
-fjf what did we decide last time       # alias of fj -f
+fj explain this repo                    # the short alias for flowjet-agent
+fj -f what did we decide last time       # continue the last conversation
+fjf what did we decide last time        # alias of fj -f
 ```
 
-It runs on [soothe-nano](https://github.com/mirasoth/soothe-nano) — tools, skills, MCP, subagents, and progressive loading — with SQLite persistence so every thread is resumable.
+It runs on [soothe-nano](https://github.com/mirasoth/soothe-nano) — tools, skills, MCP, subagents, and progressive loading — with SQLite persistence so every conversation is resumable.
 
-> Package / formal CLI: **flowjet-agent** · aliases: **fj**, **fjf** (= `-f`) · Runtime: **soothe-nano** · Repo: **[flowjet-agent](https://github.com/caesar0301/flowjet-agent)**
-
-See [docs/naming.md](docs/naming.md) for the formal naming model.
+> Package: **flowjet-agent** · aliases: `fj`, `fjf` (=`-f`) · Runtime: [soothe-nano](https://github.com/mirasoth/soothe-nano) · Naming details: [docs/naming.md](docs/naming.md)
 
 ---
 
@@ -35,33 +33,32 @@ Requires Python 3.11+.
 
 ## Configure
 
-**Option A — Local model (guided):**
+**Option A — Local model (guided setup):**
 
 ```bash
 fj setup
 ```
 
-Walks you through an OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, …) and writes the basics to `~/.soothe/config/nano.yml`.
+This walks you through an OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, …) and writes the basics to `~/.soothe/config/nano.yml`.
 
-**Option B — Cloud (no config file):**
+**Option B — Cloud (no config file needed):**
 
 ```bash
 export OPENAI_API_KEY=sk-...
 fj summarize README.md
 ```
 
-Missing `nano.yml` falls back to `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
+Without a `nano.yml`, FlowJet falls back to `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 
 ## Doctor
 
-Check whether this machine can run fj (tool binaries, providers, observability).
-Requires ``soothe-nano`` with the ``diagnose`` API (1.0.8+):
+Check whether your machine is ready to run `fj` (tool binaries, providers, observability):
 
 ```bash
-fj doctor
-fj doctor --deep
-fj doctor --live-llm
-fj doctor --format json
+fj doctor                 # quick check
+fj doctor --deep          # thorough check
+fj doctor --live-llm      # actually call the model
+fj doctor --format json   # machine-readable
 ```
 
 ## Run
@@ -74,9 +71,9 @@ fj refactor the parser to use dataclasses
 
 ---
 
-## Conversation
+## Conversations
 
-Threads persist across runs in SQLite. Continue the latest, jump to a specific one, or list them:
+Threads persist in SQLite, so you can pick up where you left off — continue the latest, jump to a specific one, or list them:
 
 ```bash
 fj -f and now add tests          # continue latest active thread
@@ -101,9 +98,9 @@ fj [options] [--] <query...>
 | `--no-stream` | Wait for the full answer instead of streaming |
 | `-v` / `--verbose` | Mirror tool calls on stderr |
 
-> `-t` and `-f` may be used together; `-t` wins (explicit id overrides follow).
+> `-t` and `-f` can be combined; `-t` wins (explicit id overrides follow).
 
-Shell completion (AI-assisted, predicts natural-language intents, not just flags):
+Shell completion is AI-assisted — it predicts natural-language intents, not just flags:
 
 ```bash
 eval "$(fj completion zsh)"     # or: fj completion bash
@@ -111,14 +108,11 @@ eval "$(fj completion zsh)"     # or: fj completion bash
 
 ---
 
-
----
-
 ## Extend
 
 ### Skills
 
-fj ships AgentSkills (planning, TDD, debugging, document tools, MCP builder, and more) and supports your own via `nano.yml`:
+FlowJet ships with AgentSkills (planning, TDD, debugging, document tools, MCP builder, and more). Add your own in `nano.yml`:
 
 ```yaml
 skills:
@@ -126,7 +120,7 @@ skills:
   - ./skills/deploy
 ```
 
-Each skill is a `SKILL.md` with frontmatter; progressive loading keeps the catalog compact and loads on demand.
+Each skill is a `SKILL.md` with frontmatter; progressive loading keeps the catalog compact and loads skills on demand.
 
 ### MCP servers
 
@@ -140,7 +134,7 @@ mcp_servers:
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
 ```
 
-With `defer: true` (default), MCP tools activate on demand.
+With `defer: true` (the default), MCP tools activate on demand.
 
 ---
 
