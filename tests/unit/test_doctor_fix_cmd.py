@@ -67,6 +67,7 @@ def test_resolve_chromedriver_version_fallback(monkeypatch) -> None:  # type: ig
 
 def test_run_doctor_fix_already_matching(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(dfc, "_fix_reference_skills", lambda use_color=False: 0)
+    monkeypatch.setattr(dfc, "_fix_anydoc", lambda use_color=False: 0)
     monkeypatch.setattr(dfc, "_resolve_chrome", lambda use_color=False: ("151.0.0.1", "151"))
     monkeypatch.setattr(dfc, "_resolve_chromedriver", lambda: ("151.0.0.1", "151"))
 
@@ -77,6 +78,7 @@ def test_run_doctor_fix_already_matching(monkeypatch, capsys) -> None:  # type: 
 
 def test_run_doctor_fix_downloads_mismatch(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(dfc, "_fix_reference_skills", lambda use_color=False: 0)
+    monkeypatch.setattr(dfc, "_fix_anydoc", lambda use_color=False: 0)
     monkeypatch.setattr(dfc, "_resolve_chrome", lambda use_color=False: ("151.0.0.1", "151"))
     state = {"calls": 0}
 
@@ -97,6 +99,7 @@ def test_run_doctor_fix_downloads_mismatch(monkeypatch, capsys) -> None:  # type
 
 def test_run_doctor_fix_chrome_missing_fails(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(dfc, "_fix_reference_skills", lambda use_color=False: 0)
+    monkeypatch.setattr(dfc, "_fix_anydoc", lambda use_color=False: 0)
     monkeypatch.setattr(dfc, "_resolve_chrome", lambda use_color=False: None)
 
     assert dfc.run_doctor_fix(["--no-color"]) == 1
@@ -109,6 +112,37 @@ def test_fix_reference_skills_all_present(monkeypatch) -> None:  # type: ignore[
         lambda: {"oh-my-research", "deep-research", "autoresearch"},
     )
     assert dfc._fix_reference_skills(use_color=False) == 0
+
+
+def test_fix_anydoc_already_present(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(dfc, "_find_anydoc", lambda: "/usr/local/bin/anydoc")
+    assert dfc._fix_anydoc(use_color=False) == 0
+    assert "anydoc installed" in capsys.readouterr().out
+
+
+def test_fix_anydoc_installs_missing(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    state = {"calls": 0}
+
+    def fake_find_anydoc():
+        state["calls"] += 1
+        return None if state["calls"] == 1 else "/usr/local/bin/anydoc"
+
+    monkeypatch.setattr(dfc, "_find_anydoc", fake_find_anydoc)
+    monkeypatch.setattr(dfc.shutil, "which", lambda name: "/usr/bin/npm")
+    monkeypatch.setattr(dfc.subprocess, "run", lambda *a, **k: None)
+
+    assert dfc._fix_anydoc(use_color=False) == 0
+    out = capsys.readouterr().out
+    assert "Installing @firecrawl/anydoc" in out
+    assert "anydoc installed" in out
+
+
+def test_fix_anydoc_no_npm(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(dfc, "_find_anydoc", lambda: None)
+    monkeypatch.setattr(dfc.shutil, "which", lambda name: None)
+
+    assert dfc._fix_anydoc(use_color=False) == 1
+    assert "npm not found" in capsys.readouterr().err
 
 
 def test_fix_reference_skills_installs_missing(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]

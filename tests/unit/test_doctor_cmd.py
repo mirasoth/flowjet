@@ -16,6 +16,10 @@ def _stub_reference_skills_ok() -> dict:
     return {"category": "reference_skills", "status": "ok", "checks": [], "message": None}
 
 
+def _stub_anydoc_ok() -> dict:
+    return {"category": "anydoc", "status": "ok", "checks": [], "message": None}
+
+
 def test_parse_args_doctor_command() -> None:
     args = parse_args(["doctor", "--deep", "--live-llm"])
     assert args.command == "doctor"
@@ -66,6 +70,7 @@ def test_run_doctor_json(monkeypatch, capsys) -> None:  # type: ignore[no-untype
     monkeypatch.setattr(
         "fj_ai.doctor_cmd._check_reference_skills", lambda **_k: _stub_reference_skills_ok()
     )
+    monkeypatch.setattr("fj_ai.doctor_cmd._check_anydoc", lambda: _stub_anydoc_ok())
     monkeypatch.setattr(
         "fj_ai.agent.load_config",
         lambda _path=None: SimpleNamespace(),
@@ -100,6 +105,7 @@ def test_run_doctor_progressive_text(monkeypatch, capsys) -> None:  # type: igno
     monkeypatch.setattr(
         "fj_ai.doctor_cmd._check_reference_skills", lambda **_k: _stub_reference_skills_ok()
     )
+    monkeypatch.setattr("fj_ai.doctor_cmd._check_anydoc", lambda: _stub_anydoc_ok())
     monkeypatch.setattr(
         "fj_ai.agent.load_config",
         lambda _path=None: SimpleNamespace(),
@@ -189,6 +195,29 @@ def test_check_reference_skills_installed(monkeypatch) -> None:  # type: ignore[
     assert all(c["status"] == "ok" for c in cat["checks"])
 
 
+def test_check_anydoc_missing(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import doctor_cmd
+
+    monkeypatch.setattr(doctor_cmd, "_find_anydoc", lambda: None)
+
+    cat = doctor_cmd._check_anydoc()
+    assert cat["category"] == "anydoc"
+    assert cat["status"] == "warning"
+    assert cat["checks"][0]["status"] == "warning"
+    assert "npm install -g @firecrawl/anydoc" in cat["checks"][0]["details"]["remediation"]
+
+
+def test_check_anydoc_present(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import doctor_cmd
+
+    monkeypatch.setattr(doctor_cmd, "_find_anydoc", lambda: "/usr/local/bin/anydoc")
+    monkeypatch.setattr(doctor_cmd, "_bin_version", lambda _path: None)
+
+    cat = doctor_cmd._check_anydoc()
+    assert cat["status"] == "ok"
+    assert cat["checks"][0]["status"] == "ok"
+
+
 def test_run_doctor_includes_browser_category(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
     from fj_ai import doctor_cmd
 
@@ -208,6 +237,7 @@ def test_run_doctor_includes_browser_category(monkeypatch, capsys) -> None:  # t
     monkeypatch.setattr(
         "fj_ai.doctor_cmd._check_reference_skills", lambda **_k: _stub_reference_skills_ok()
     )
+    monkeypatch.setattr("fj_ai.doctor_cmd._check_anydoc", lambda: _stub_anydoc_ok())
     monkeypatch.setattr(
         "fj_ai.agent.load_config",
         lambda _path=None: SimpleNamespace(),

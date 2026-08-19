@@ -29,6 +29,7 @@ from typing import Any
 from fj_ai.doctor_cmd import (
     REFERENCE_SKILLS,
     _bin_version,
+    _find_anydoc,
     _find_chrome_executable,
     _find_chromedriver,
     _install_skill,
@@ -252,6 +253,35 @@ def _fix_reference_skills(*, use_color: bool) -> int:
     return 0 if all_ok else 1
 
 
+def _fix_anydoc(*, use_color: bool) -> int:
+    """Install the global ``@firecrawl/anydoc`` CLI when the ``anydoc`` binary is missing.
+
+    Returns 0 when ``anydoc`` is present (or installed), 1 if it could not be
+    resolved after install.
+    """
+    if _find_anydoc():
+        _ok("anydoc installed", use_color=use_color)
+        return 0
+    npm = shutil.which("npm")
+    if npm is None:
+        _err(
+            "npm not found on PATH (install Node.js to auto-install anydoc)",
+            use_color=use_color,
+        )
+        return 1
+    _info("Installing @firecrawl/anydoc via 'npm install -g'...", use_color=use_color)
+    try:
+        subprocess.run([npm, "install", "-g", "@firecrawl/anydoc"], check=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        _err(f"npm install -g @firecrawl/anydoc failed: {exc}", use_color=use_color)
+        return 1
+    if _find_anydoc():
+        _ok("anydoc installed", use_color=use_color)
+        return 0
+    _err("Installed @firecrawl/anydoc but still cannot find it on PATH.", use_color=use_color)
+    return 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
     from fj_ai.cli import resolve_cli_prog
 
@@ -274,6 +304,7 @@ def run_doctor_fix(argv: list[str] | None = None) -> int:
     use_color = not args.no_color and sys.stdout.isatty()
 
     skills_code = _fix_reference_skills(use_color=use_color)
+    anydoc_code = _fix_anydoc(use_color=use_color)
 
     chrome = _resolve_chrome(use_color=use_color)
     if chrome is None:
@@ -344,7 +375,7 @@ def run_doctor_fix(argv: list[str] | None = None) -> int:
             f"Chrome and chromedriver major versions match ({chrome_major}).",
             use_color=use_color,
         )
-        return skills_code
+        return 1 if (skills_code or anydoc_code) else 0
     _err(
         f"chromedriver major {driver_major} still does not match Chrome major {chrome_major}.",
         use_color=use_color,

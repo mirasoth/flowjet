@@ -409,6 +409,44 @@ def _check_reference_skills() -> dict[str, Any]:
     }
 
 
+def _find_anydoc() -> str | None:
+    """Locate the ``anydoc`` CLI (global ``@firecrawl/anydoc`` install), or None."""
+    return shutil.which("anydoc")
+
+
+def _check_anydoc() -> dict[str, Any]:
+    """Build the ``anydoc`` diagnose category (document-to-markdown converter).
+
+    The ``anydoc`` builtin skill shells out to ``@firecrawl/anydoc`` to convert
+    office/PDF/ebook files to Markdown. The globally-installed ``anydoc`` CLI is
+    the fastest path (no per-run ``npx`` fetch); ``fj doctor-fix`` installs it
+    via ``npm install -g @firecrawl/anydoc``.
+    """
+    anydoc = _find_anydoc()
+    if anydoc:
+        version = _bin_version(anydoc)
+        details: dict[str, Any] = {"path": anydoc}
+        if version:
+            details["version"] = version
+        msg = f"anydoc available: {anydoc}"
+        if version:
+            msg += f" ({version})"
+        checks = [{"name": "anydoc", "status": "ok", "message": msg, "details": details}]
+    else:
+        checks = [
+            {
+                "name": "anydoc",
+                "status": "warning",
+                "message": "anydoc not found",
+                "details": {
+                    "impact": "document-to-markdown conversion (office/PDF/ebook) unavailable",
+                    "remediation": "npm install -g @firecrawl/anydoc",
+                },
+            }
+        ]
+    return {"category": "anydoc", "status": checks[0]["status"], "checks": checks, "message": None}
+
+
 def run_doctor(argv: list[str] | None = None) -> int:
     """Entry point for ``fj doctor`` (sync wrapper around async diagnose)."""
     import asyncio
@@ -447,6 +485,7 @@ async def _run_doctor_async(args: argparse.Namespace) -> int:
     categories = list(categories) + [
         _check_browser_deps(),
         _check_reference_skills(),
+        _check_anydoc(),
     ]
     overall = _worst_status(categories)
     use_color = not bool(args.no_color) and sys.stdout.isatty()
