@@ -115,7 +115,7 @@ async def test_resolve_thread_id_priority(tmp_path, monkeypatch) -> None:  # typ
     # Pinned active is ignored unless --follow.
     threads_mod.write_active_thread_id("fj-pinned")
     default_id = await threads_mod.resolve_thread_id(object())
-    assert default_id.startswith("fj-")
+    assert default_id
     assert default_id != "fj-pinned"
 
     # --follow uses pinned active.

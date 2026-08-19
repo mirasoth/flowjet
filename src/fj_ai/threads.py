@@ -55,8 +55,8 @@ def write_active_thread_id(thread_id: str, path: Path | None = None) -> None:
 
 
 def new_thread_id() -> str:
-    """Allocate a fresh ``fj-<uuid>`` thread id."""
-    return f"fj-{uuid.uuid4()}"
+    """Allocate a fresh ``<uuid>`` thread id."""
+    return str(uuid.uuid4())
 
 
 def _lock_holder_pid(lock_path: Path) -> int | None:
