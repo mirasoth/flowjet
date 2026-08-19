@@ -66,6 +66,7 @@ def test_resolve_chromedriver_version_fallback(monkeypatch) -> None:  # type: ig
 
 
 def test_run_doctor_fix_already_matching(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(dfc, "_fix_reference_skills", lambda use_color=False: 0)
     monkeypatch.setattr(dfc, "_resolve_chrome", lambda use_color=False: ("151.0.0.1", "151"))
     monkeypatch.setattr(dfc, "_resolve_chromedriver", lambda: ("151.0.0.1", "151"))
 
@@ -75,6 +76,7 @@ def test_run_doctor_fix_already_matching(monkeypatch, capsys) -> None:  # type: 
 
 
 def test_run_doctor_fix_downloads_mismatch(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(dfc, "_fix_reference_skills", lambda use_color=False: 0)
     monkeypatch.setattr(dfc, "_resolve_chrome", lambda use_color=False: ("151.0.0.1", "151"))
     state = {"calls": 0}
 
@@ -94,6 +96,47 @@ def test_run_doctor_fix_downloads_mismatch(monkeypatch, capsys) -> None:  # type
 
 
 def test_run_doctor_fix_chrome_missing_fails(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(dfc, "_fix_reference_skills", lambda use_color=False: 0)
     monkeypatch.setattr(dfc, "_resolve_chrome", lambda use_color=False: None)
 
     assert dfc.run_doctor_fix(["--no-color"]) == 1
+
+
+def test_fix_reference_skills_all_present(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(
+        dfc,
+        "_installed_skill_names",
+        lambda: {"oh-my-research", "deep-research", "autoresearch"},
+    )
+    assert dfc._fix_reference_skills(use_color=False) == 0
+
+
+def test_fix_reference_skills_installs_missing(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    state = {"installed": set(), "calls": []}
+
+    def fake_installed():
+        return set(state["installed"])
+
+    def fake_install(repo):
+        state["calls"].append(repo)
+        # Simulate the skill name landing after install for the first two.
+        if repo == "caesar0301/oh-my-research":
+            state["installed"].add("oh-my-research")
+        if repo == "uditgoenka/autoresearch":
+            state["installed"].add("autoresearch")
+        return True, f"installed {repo}"
+
+    monkeypatch.setattr(dfc, "_installed_skill_names", fake_installed)
+    monkeypatch.setattr(dfc, "_install_skill", fake_install)
+
+    # academic-research-skills (deep-research) is not added -> install "succeeds"
+    # but the name never appears, so it reports failure (verify name).
+    assert dfc._fix_reference_skills(use_color=False) == 1
+    captured = capsys.readouterr()
+    assert "oh-my-research" in captured.out
+    assert "verify installed skill name" in captured.err
+    assert state["calls"] == [
+        "caesar0301/oh-my-research",
+        "Imbad0202/academic-research-skills",
+        "uditgoenka/autoresearch",
+    ]

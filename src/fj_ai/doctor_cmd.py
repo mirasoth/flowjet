@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any, TextIO
 
 _STATUS_SYMBOLS = {
@@ -33,6 +34,15 @@ _SEVERITY = {
     "warning": 3,
     "error": 4,
 }
+
+# Reference skills required by the ``research-bootstrap`` builtin skill. Each
+# entry maps a ``npx skills add <repo>`` argument to the SKILL.md ``name:``
+# value(s) that indicate it is installed under ``~/.agents/skills/``.
+REFERENCE_SKILLS: tuple[dict[str, Any], ...] = (
+    {"repo": "caesar0301/oh-my-research", "skills": ("oh-my-research",)},
+    {"repo": "Imbad0202/academic-research-skills", "skills": ("deep-research",)},
+    {"repo": "uditgoenka/autoresearch", "skills": ("autoresearch",)},
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -293,6 +303,111 @@ def _check_browser_deps() -> dict[str, Any]:
     }
 
 
+def _agents_skills_dir() -> Path:
+    """Return the cross-tool Agent Skills directory (``~/.agents/skills``)."""
+    return Path(os.path.expanduser("~/.agents/skills"))
+
+
+def _installed_skill_names() -> set[str]:
+    """Collect ``name:`` frontmatter values from every ``SKILL.md`` under
+    ``~/.agents/skills/`` (one level deep — ``~/.agents/skills/<skill>/SKILL.md``).
+    """
+    root = _agents_skills_dir()
+    names: set[str] = set()
+    if not root.is_dir():
+        return names
+    for skill_md in root.glob("*/SKILL.md"):
+        try:
+            text = skill_md.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines()[:30]:
+            stripped = line.strip()
+            if stripped.lower().startswith("name:"):
+                value = stripped.split(":", 1)[1].strip().strip("\"'")
+                if value:
+                    names.add(value)
+                break
+    return names
+
+
+def _install_skill(repo: str) -> tuple[bool, str]:
+    """Install ``repo`` via ``npx skills add`` non-interactively.
+
+    Returns ``(ok, detail)``. Non-interactive: ``npx -y`` auto-confirms npx's
+    own package install; ``skills add --global --yes`` installs globally into
+    ``~/.agents/skills/`` (``--global``) and suppresses confirmation prompts
+    (``--yes``). Deliberately omits ``--all`` — that flag targets every
+    supported agent (dozens of symlinks, some of which reject global installs),
+    whereas we only need the universal ``~/.agents/skills/`` location.
+    """
+    npx = shutil.which("npx")
+    if npx is None:
+        return False, "npx not found on PATH (install Node.js to auto-install skills)"
+    try:
+        result = subprocess.run(  # noqa: S603
+            [npx, "-y", "skills", "add", repo, "--global", "--yes"],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=300,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"install failed: {exc}"
+    if result.returncode != 0:
+        tail = (result.stderr or result.stdout or "").strip().splitlines()
+        return False, f"npx skills add failed: {tail[-1] if tail else 'unknown error'}"
+    return True, f"installed {repo}"
+
+
+def _check_reference_skills() -> dict[str, Any]:
+    """Build the ``reference_skills`` diagnose category (read-only).
+
+    Verifies the research-bootstrap backends (oh-my-research, academic-research-skills,
+    autoresearch) are installed under ``~/.agents/skills``. Installation is handled by
+    ``fj doctor-fix``, not here.
+    """
+    installed = _installed_skill_names()
+    checks: list[dict[str, Any]] = []
+    for entry in REFERENCE_SKILLS:
+        repo = str(entry["repo"])
+        expected = tuple(entry["skills"])
+        present = any(name in installed for name in expected)
+        if present:
+            checks.append(
+                {
+                    "name": repo,
+                    "status": "ok",
+                    "message": f"{repo} installed ({', '.join(expected)})",
+                    "details": {"path": str(_agents_skills_dir())},
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "name": repo,
+                    "status": "warning",
+                    "message": f"{repo} not installed",
+                    "details": {
+                        "remediation": f"npx -y skills add {repo} --global --yes",
+                        "impact": "research-bootstrap backend unavailable",
+                    },
+                }
+            )
+
+    worst = "ok"
+    for check in checks:
+        if _SEVERITY.get(str(check["status"]), 0) > _SEVERITY.get(worst, 0):
+            worst = str(check["status"])
+    return {
+        "category": "reference_skills",
+        "status": worst,
+        "checks": checks,
+        "message": None,
+    }
+
+
 def run_doctor(argv: list[str] | None = None) -> int:
     """Entry point for ``fj doctor`` (sync wrapper around async diagnose)."""
     import asyncio
@@ -328,7 +443,10 @@ async def _run_doctor_async(args: argparse.Namespace) -> int:
         sys.stderr.write(f"error: diagnose failed: {exc}\n")
         return 1
 
-    categories = list(categories) + [_check_browser_deps()]
+    categories = list(categories) + [
+        _check_browser_deps(),
+        _check_reference_skills(),
+    ]
     overall = _worst_status(categories)
     use_color = not bool(args.no_color) and sys.stdout.isatty()
 
