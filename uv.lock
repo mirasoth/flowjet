@@ -1040,7 +1040,7 @@ wheels = [
 
 [[package]]
 name = "flowjet-agent"
-version = "1.0.37"
+version = "1.0.38"
 source = { editable = "." }
 dependencies = [
     { name = "soothe-nano" },
