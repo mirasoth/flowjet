@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
+import subprocess
 import sys
 from typing import Any, TextIO
 
@@ -143,6 +146,153 @@ async def _run_diagnose(
     return await diagnose(config, deep=deep, live_llm=live_llm)
 
 
+def _bin_version(bin_path: str) -> str | None:
+    """Return first line of ``--version`` output, or None on failure."""
+    try:
+        result = subprocess.run(  # noqa: S603
+            [bin_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        line = (result.stdout or result.stderr or "").strip().splitlines()
+        return line[0].strip() if line else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _find_chrome_executable() -> str | None:
+    """Locate a Chrome/Chromium-family browser executable, or None."""
+    if sys.platform == "darwin":
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+            os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        ]
+    elif sys.platform.startswith("win"):
+        candidates = [
+            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+        ]
+    else:
+        candidates = []
+
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+
+    # Fall back to PATH lookup (also covers Linux package installs).
+    for name in (
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium",
+        "chromium-browser",
+        "microsoft-edge",
+        "brave-browser",
+        "chrome",
+        "chrome.exe",
+    ):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def _find_chromedriver() -> str | None:
+    """Locate chromedriver on PATH or in common install locations, or None."""
+    found = shutil.which("chromedriver")
+    if found:
+        return found
+
+    candidates = [
+        os.path.expanduser("~/.local/bin/chromedriver"),
+        "/usr/local/bin/chromedriver",
+        "/usr/bin/chromedriver",
+        os.path.expanduser("~/chromedriver/chromedriver"),
+    ]
+    if sys.platform == "darwin":
+        candidates.append("/opt/homebrew/bin/chromedriver")
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _check_browser_deps() -> dict[str, Any]:
+    """Build the ``browser`` diagnose category (Chrome/Chromium + chromedriver).
+
+    ``soothe-nano`` pulls in ``tarzi`` (headless-browser crawl fallback) and a
+    ``browser_use`` subagent, both of which need a Chrome/Chromium binary that
+    upstream ``soothe_nano.diagnose`` does not check for.
+    """
+    checks: list[dict[str, Any]] = []
+
+    chrome = _find_chrome_executable()
+    if chrome:
+        version = _bin_version(chrome)
+        details: dict[str, Any] = {"path": chrome}
+        if version:
+            details["version"] = version
+        msg = f"chrome available: {chrome}"
+        if version:
+            msg += f" ({version})"
+        checks.append({"name": "chrome", "status": "ok", "message": msg, "details": details})
+    else:
+        checks.append(
+            {
+                "name": "chrome",
+                "status": "warning",
+                "message": "Chrome/Chromium not found",
+                "details": {
+                    "impact": (
+                        "browser_use subagent and tarzi headless crawl will fail at runtime"
+                    ),
+                    "remediation": "Install Google Chrome or Chromium",
+                },
+            }
+        )
+
+    chromedriver = _find_chromedriver()
+    if chromedriver:
+        version = _bin_version(chromedriver)
+        details = {"path": chromedriver}
+        if version:
+            details["version"] = version
+        msg = f"chromedriver available: {chromedriver}"
+        if version:
+            msg += f" ({version})"
+        checks.append({"name": "chromedriver", "status": "ok", "message": msg, "details": details})
+    else:
+        checks.append(
+            {
+                "name": "chromedriver",
+                "status": "warning",
+                "message": "chromedriver not found",
+                "details": {
+                    "impact": "browser automation via chromedriver will fail",
+                    "remediation": "Install chromedriver (e.g. brew install --cask chromedriver)",
+                },
+            }
+        )
+
+    worst = "ok"
+    for check in checks:
+        if _SEVERITY.get(str(check["status"]), 0) > _SEVERITY.get(worst, 0):
+            worst = str(check["status"])
+
+    return {
+        "category": "browser",
+        "status": worst,
+        "checks": checks,
+        "message": None,
+    }
+
+
 def run_doctor(argv: list[str] | None = None) -> int:
     """Entry point for ``fj doctor`` (sync wrapper around async diagnose)."""
     import asyncio
@@ -178,6 +328,7 @@ async def _run_doctor_async(args: argparse.Namespace) -> int:
         sys.stderr.write(f"error: diagnose failed: {exc}\n")
         return 1
 
+    categories = list(categories) + [_check_browser_deps()]
     overall = _worst_status(categories)
     use_color = not bool(args.no_color) and sys.stdout.isatty()
 

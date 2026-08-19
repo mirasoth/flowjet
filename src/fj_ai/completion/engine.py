@@ -119,6 +119,17 @@ def static_candidates(prefix: str) -> list[str]:
             return list(doctor_flags)
         return ["doctor"] if "doctor".startswith(first) else []
 
+    if first == "doctor-fix" or "doctor-fix".startswith(first):
+        doctor_fix_flags = ("--no-color",)
+        if first == "doctor-fix" and len(parts) >= 2:
+            flag_prefix = parts[-1]
+            if flag_prefix.startswith("-"):
+                return [f for f in doctor_fix_flags if f.startswith(flag_prefix)]
+            return []
+        if first == "doctor-fix":
+            return list(doctor_fix_flags)
+        return ["doctor-fix"] if "doctor-fix".startswith(first) else []
+
     return [cmd for cmd in SUBCOMMANDS if cmd.startswith(first)]
 
 

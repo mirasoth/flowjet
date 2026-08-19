@@ -8,6 +8,10 @@ from fj_ai.cli import parse_args
 from fj_ai.doctor_cmd import parse_doctor_args, run_doctor
 
 
+def _stub_browser_ok() -> dict:
+    return {"category": "browser", "status": "ok", "checks": [], "message": None}
+
+
 def test_parse_args_doctor_command() -> None:
     args = parse_args(["doctor", "--deep", "--live-llm"])
     assert args.command == "doctor"
@@ -54,6 +58,7 @@ def test_run_doctor_json(monkeypatch, capsys) -> None:  # type: ignore[no-untype
         ]
 
     monkeypatch.setattr("fj_ai.doctor_cmd._run_diagnose", fake_diagnose)
+    monkeypatch.setattr("fj_ai.doctor_cmd._check_browser_deps", _stub_browser_ok)
     monkeypatch.setattr(
         "fj_ai.agent.load_config",
         lambda _path=None: SimpleNamespace(),
@@ -62,6 +67,7 @@ def test_run_doctor_json(monkeypatch, capsys) -> None:  # type: ignore[no-untype
     out = capsys.readouterr().out
     assert '"overall_status": "ok"' in out
     assert "tool_deps" in out
+    assert "browser" in out
 
 
 def test_run_doctor_progressive_text(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
@@ -83,6 +89,7 @@ def test_run_doctor_progressive_text(monkeypatch, capsys) -> None:  # type: igno
         ]
 
     monkeypatch.setattr("fj_ai.doctor_cmd._run_diagnose", fake_diagnose)
+    monkeypatch.setattr("fj_ai.doctor_cmd._check_browser_deps", _stub_browser_ok)
     monkeypatch.setattr(
         "fj_ai.agent.load_config",
         lambda _path=None: SimpleNamespace(),
@@ -107,3 +114,66 @@ def test_run_doctor_missing_diagnose_api(monkeypatch, capsys) -> None:  # type: 
     )
     assert run_doctor(["--no-color"]) == 1
     assert "diagnose API unavailable" in capsys.readouterr().err
+
+
+def test_check_browser_deps_missing(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import doctor_cmd
+
+    monkeypatch.setattr(doctor_cmd, "_find_chrome_executable", lambda: None)
+    monkeypatch.setattr(doctor_cmd, "_find_chromedriver", lambda: None)
+
+    cat = doctor_cmd._check_browser_deps()
+    assert cat["category"] == "browser"
+    assert cat["status"] == "warning"
+    assert {c["name"] for c in cat["checks"]} == {"chrome", "chromedriver"}
+    assert all(c["status"] == "warning" for c in cat["checks"])
+
+
+def test_check_browser_deps_present(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import doctor_cmd
+
+    monkeypatch.setattr(doctor_cmd, "_find_chrome_executable", lambda: "/usr/bin/chrome")
+    monkeypatch.setattr(doctor_cmd, "_find_chromedriver", lambda: "/usr/bin/chromedriver")
+    monkeypatch.setattr(doctor_cmd, "_bin_version", lambda _path: None)
+
+    cat = doctor_cmd._check_browser_deps()
+    assert cat["status"] == "ok"
+    assert all(c["status"] == "ok" for c in cat["checks"])
+
+
+def test_find_chrome_executable_uses_path(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import doctor_cmd
+
+    monkeypatch.setattr(doctor_cmd.sys, "platform", "linux")
+    monkeypatch.setattr(doctor_cmd.os.path, "isfile", lambda _p: False)
+    monkeypatch.setattr(
+        doctor_cmd.shutil, "which", lambda name: "/usr/bin/chromium" if name == "chromium" else None
+    )
+
+    assert doctor_cmd._find_chrome_executable() == "/usr/bin/chromium"
+
+
+def test_run_doctor_includes_browser_category(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import doctor_cmd
+
+    async def fake_diagnose(_config=None, **_kwargs):
+        return []
+
+    monkeypatch.setattr("fj_ai.doctor_cmd._run_diagnose", fake_diagnose)
+    monkeypatch.setattr(
+        "fj_ai.doctor_cmd._check_browser_deps",
+        lambda: {
+            "category": "browser",
+            "status": "ok",
+            "checks": [{"name": "chrome", "status": "ok", "message": "chrome ok", "details": {}}],
+            "message": None,
+        },
+    )
+    monkeypatch.setattr(
+        "fj_ai.agent.load_config",
+        lambda _path=None: SimpleNamespace(),
+    )
+
+    assert doctor_cmd.run_doctor(["--format", "json", "--no-color"]) == 0
+    out = capsys.readouterr().out
+    assert '"category": "browser"' in out

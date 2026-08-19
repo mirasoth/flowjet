@@ -1,0 +1,99 @@
+"""Unit tests for ``fj doctor-fix``."""
+
+from __future__ import annotations
+
+from fj_ai import doctor_fix_cmd as dfc
+from fj_ai.cli import parse_args
+
+
+def test_parse_args_doctor_fix_command() -> None:
+    args = parse_args(["doctor-fix", "--no-color"])
+    assert args.command == "doctor-fix"
+    assert args.doctor_fix_argv == ["--no-color"]
+
+
+def test_extract_version() -> None:
+    assert dfc._extract_version("Google Chrome 151.0.7922.138") == "151.0.7922.138"
+    assert dfc._extract_version("ChromeDriver 150.0.7871.187 (30f6543...)") == "150.0.7871.187"
+    assert dfc._extract_version("no version here") is None
+
+
+def test_major() -> None:
+    assert dfc._major("151.0.7922.138") == "151"
+    assert dfc._major("150.0.7871.187") == "150"
+
+
+def test_chromedriver_platform_darwin_arm64(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import platform
+
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+    assert dfc._chromedriver_platform() == "mac-arm64"
+
+
+def test_chromedriver_platform_linux(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import platform
+
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    assert dfc._chromedriver_platform() == "linux64"
+
+
+def test_resolve_chromedriver_version_exact(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(dfc, "_url_exists", lambda _url: True)
+    assert dfc._resolve_chromedriver_version("151.0.0.1", "151", "mac-arm64") == "151.0.0.1"
+
+
+def test_resolve_chromedriver_version_fallback(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(dfc, "_url_exists", lambda _url: False)
+    monkeypatch.setattr(
+        dfc,
+        "_fetch_json",
+        lambda _url: {
+            "versions": [
+                {
+                    "version": "150.0.0.1",
+                    "downloads": {"chromedriver": [{"platform": "mac-x64"}]},
+                },
+                {
+                    "version": "151.0.0.2",
+                    "downloads": {"chromedriver": [{"platform": "mac-arm64"}]},
+                },
+            ]
+        },
+    )
+    assert dfc._resolve_chromedriver_version("151.0.0.1", "151", "mac-arm64") == "151.0.0.2"
+
+
+def test_run_doctor_fix_already_matching(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(dfc, "_resolve_chrome", lambda use_color=False: ("151.0.0.1", "151"))
+    monkeypatch.setattr(dfc, "_resolve_chromedriver", lambda: ("151.0.0.1", "151"))
+
+    assert dfc.run_doctor_fix(["--no-color"]) == 0
+    out = capsys.readouterr().out
+    assert "match exactly" in out
+
+
+def test_run_doctor_fix_downloads_mismatch(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(dfc, "_resolve_chrome", lambda use_color=False: ("151.0.0.1", "151"))
+    state = {"calls": 0}
+
+    def fake_resolve_chromedriver():
+        state["calls"] += 1
+        return None if state["calls"] == 1 else ("151.0.0.1", "151")
+
+    monkeypatch.setattr(dfc, "_resolve_chromedriver", fake_resolve_chromedriver)
+    monkeypatch.setattr(dfc, "_chromedriver_platform", lambda: "mac-arm64")
+    monkeypatch.setattr(dfc, "_resolve_chromedriver_version", lambda v, m, p: "151.0.0.1")
+    monkeypatch.setattr(dfc, "_download_chromedriver", lambda v, p, d: True)
+
+    assert dfc.run_doctor_fix(["--no-color"]) == 0
+    out = capsys.readouterr().out
+    assert "Downloading chromedriver" in out
+    assert "major versions match" in out
+
+
+def test_run_doctor_fix_chrome_missing_fails(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(dfc, "_resolve_chrome", lambda use_color=False: None)
+
+    assert dfc.run_doctor_fix(["--no-color"]) == 1
