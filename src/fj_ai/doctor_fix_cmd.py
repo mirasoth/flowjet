@@ -1,9 +1,13 @@
-"""``fj doctor-fix`` — repair Chrome/chromedriver availability and version match.
+"""``fj doctor-fix`` — repair runtime deps and install missing reference skills.
 
-Mirrors the logic of ``soothe/scripts/check_chrome.sh``: detect the installed
-Chrome/Chromium major version, then install Chrome (Homebrew) or download a
-matching chromedriver (Chrome-for-Testing) when either is missing or the major
-versions diverge.
+Two repairs:
+1. Reference skills — install missing research-bootstrap backends
+   (oh-my-research, academic-research-skills, autoresearch) under
+   ``~/.agents/skills`` via ``npx skills add`` non-interactively.
+2. Chrome/chromedriver — mirror ``soothe/scripts/check_chrome.sh``: detect the
+   installed Chrome/Chromium major version, then install Chrome (Homebrew) or
+   download a matching chromedriver (Chrome-for-Testing) when either is missing
+   or the major versions diverge.
 """
 
 from __future__ import annotations
@@ -22,7 +26,14 @@ import urllib.request
 import zipfile
 from typing import Any
 
-from fj_ai.doctor_cmd import _bin_version, _find_chrome_executable, _find_chromedriver
+from fj_ai.doctor_cmd import (
+    REFERENCE_SKILLS,
+    _bin_version,
+    _find_chrome_executable,
+    _find_chromedriver,
+    _install_skill,
+    _installed_skill_names,
+)
 
 CHROME_FOR_TESTING_BASE = "https://storage.googleapis.com/chrome-for-testing-public"
 KNOWN_GOOD_VERSIONS_JSON = (
@@ -213,12 +224,40 @@ def _resolve_chromedriver() -> tuple[str, str] | None:
     return version, _major(version)
 
 
+def _fix_reference_skills(*, use_color: bool) -> int:
+    """Install missing research-bootstrap reference skills under ``~/.agents/skills``.
+
+    Returns 0 when all three are present (or installed), 1 if any could not be
+    resolved after install.
+    """
+    installed = _installed_skill_names()
+    all_ok = True
+    for entry in REFERENCE_SKILLS:
+        repo = str(entry["repo"])
+        expected = tuple(entry["skills"])
+        if any(name in installed for name in expected):
+            _ok(f"{repo} installed ({', '.join(expected)})", use_color=use_color)
+            continue
+        _info(f"Installing {repo} via 'npx skills add'...", use_color=use_color)
+        _, detail = _install_skill(repo)
+        # Verify by actual landing under ~/.agents/skills, not the CLI exit code:
+        # a non-zero exit can result from unrelated agent-symlink failures even
+        # when the universal install succeeded.
+        installed = _installed_skill_names()
+        if any(name in installed for name in expected):
+            _ok(f"{repo} installed", use_color=use_color)
+        else:
+            _err(f"{repo}: {detail}", use_color=use_color)
+            all_ok = False
+    return 0 if all_ok else 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
     from fj_ai.cli import resolve_cli_prog
 
     parser = argparse.ArgumentParser(
         prog=f"{resolve_cli_prog()} doctor-fix",
-        description="Repair Chrome/chromedriver availability and version match",
+        description="Install missing reference skills + repair Chrome/chromedriver",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -233,6 +272,8 @@ def run_doctor_fix(argv: list[str] | None = None) -> int:
     """Entry point for ``fj doctor-fix``."""
     args = _build_parser().parse_args(list(argv or []))
     use_color = not args.no_color and sys.stdout.isatty()
+
+    skills_code = _fix_reference_skills(use_color=use_color)
 
     chrome = _resolve_chrome(use_color=use_color)
     if chrome is None:
@@ -303,7 +344,7 @@ def run_doctor_fix(argv: list[str] | None = None) -> int:
             f"Chrome and chromedriver major versions match ({chrome_major}).",
             use_color=use_color,
         )
-        return 0
+        return skills_code
     _err(
         f"chromedriver major {driver_major} still does not match Chrome major {chrome_major}.",
         use_color=use_color,

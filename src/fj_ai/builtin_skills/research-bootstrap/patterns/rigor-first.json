@@ -1,0 +1,42 @@
+{
+  "name": "Rigor-First",
+  "version": "0.1.0",
+  "description": "ARS leads research (question, verify, synthesize), OMR ingests and writes the long report. Requires the omr→ars adapter for ingest.",
+  "backends": {
+    "omr": "oh-my-research",
+    "ars": "academic-research-skills",
+    "auto": "autoresearch"
+  },
+  "graph": {
+    "entry_points": ["collect"],
+    "nodes": ["collect", "question", "verify", "synthesize", "synth", "review"],
+    "edges": [
+      "collect→question",
+      "question→verify",
+      "verify→synthesize",
+      "synthesize→synth",
+      "synth→review"
+    ],
+    "routes": {
+      "collect": "omr",
+      "question": "ars",
+      "verify": "ars",
+      "synthesize": "ars",
+      "synth": "omr",
+      "review": "ars"
+    }
+  },
+  "skill_gates": {
+    "question": "ars_rq_checkpoint",
+    "verify": "ars_source_verification",
+    "synthesize": "ars_devils_advocate_checkpoint",
+    "synth": "gate_d",
+    "review": "ars_editorial_ethics"
+  },
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "semi-automated",
+    "synthesis_mode": "survey",
+    "description": "ARS deep-research, then OMR long-form DOCX/PDF report. Best when the deliverable is a reader-facing report, not a manuscript."
+  }
+}

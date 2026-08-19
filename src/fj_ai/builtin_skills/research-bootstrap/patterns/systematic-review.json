@@ -1,0 +1,47 @@
+{
+  "name": "Systematic-Review",
+  "version": "0.1.0",
+  "description": "PRISMA 2020 systematic review with optional meta-analysis. ARS runs the protocol; OMR writes the report.",
+  "backends": {
+    "omr": "oh-my-research",
+    "ars": "academic-research-skills",
+    "auto": "autoresearch"
+  },
+  "graph": {
+    "entry_points": ["collect"],
+    "nodes": ["collect", "protocol", "search", "screen", "extract", "synthesize", "synth", "review"],
+    "edges": [
+      "collect→protocol",
+      "protocol→search",
+      "search→screen",
+      "screen→extract",
+      "extract→synthesize",
+      "synthesize→synth",
+      "synth→review"
+    ],
+    "routes": {
+      "collect": "omr",
+      "protocol": "ars",
+      "search": "ars",
+      "screen": "ars",
+      "extract": "ars",
+      "synthesize": "ars",
+      "synth": "omr",
+      "review": "ars"
+    }
+  },
+  "skill_gates": {
+    "protocol": "ars_prisma_registration",
+    "screen": "ars_prisma_flow",
+    "extract": "ars_rob_checkpoint",
+    "synthesize": "ars_compliance_checkpoint",
+    "synth": "gate_d",
+    "review": "ars_editorial_ethics"
+  },
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "semi-automated",
+    "synthesis_mode": "survey",
+    "description": "PRISMA systematic review + meta-analysis (RoB 2, ROBINS-I, GRADE). ARS runs the rigorous protocol; OMR assembles the report."
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "Paper-Pipeline",
+  "version": "0.1.0",
+  "description": "Full research-to-publication: ARS deep-research → academic-paper → academic-paper-reviewer. OMR only at ingest and export.",
+  "backends": {
+    "omr": "oh-my-research",
+    "ars": "academic-research-skills",
+    "auto": "autoresearch"
+  },
+  "graph": {
+    "entry_points": ["collect"],
+    "nodes": ["collect", "research", "paper", "review", "export"],
+    "edges": [
+      "collect→research",
+      "research→paper",
+      "paper→review",
+      "review→export"
+    ],
+    "routes": {
+      "collect": "omr",
+      "research": "ars",
+      "paper": "ars",
+      "review": "ars",
+      "export": "omr"
+    }
+  },
+  "skill_gates": {
+    "research": "ars_phase_checkpoints",
+    "paper": "ars_phase_checkpoints",
+    "review": "ars_reviewer_checkpoint"
+  },
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "semi-automated",
+    "synthesis_mode": "report",
+    "description": "Research → manuscript → peer review. Rides ARS's existing deep-research → academic-paper handoff; OMR only ingests sources and exports the final document."
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "name": "Loop",
+  "version": "0.1.0",
+  "description": "Ongoing monitoring: OMR collects/analyzes in cycles, ARS monitoring_agent detects gaps and contradictions, Gate L decides iterate vs advance.",
+  "backends": {
+    "omr": "oh-my-research",
+    "ars": "academic-research-skills",
+    "auto": "autoresearch"
+  },
+  "graph": {
+    "entry_points": ["collect"],
+    "nodes": ["collect", "analyze", "gap-detect", "synth"],
+    "edges": [
+      "collect→analyze",
+      "analyze→gap-detect",
+      "gap-detect→collect",
+      "gap-detect→synth"
+    ],
+    "routes": {
+      "collect": "omr",
+      "analyze": "omr",
+      "gap-detect": "ars",
+      "synth": "omr"
+    },
+    "cycles": [
+      {
+        "id": "deep-analyze",
+        "nodes": ["collect", "analyze"],
+        "gate": "gate_l",
+        "exit_to": "synth"
+      }
+    ]
+  },
+  "skill_gates": {
+    "gap-detect": "gate_l",
+    "synth": "gate_d"
+  },
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "semi-automated",
+    "synthesis_mode": "survey",
+    "description": "Ongoing literature monitoring and drift reconciliation. ARS monitoring_agent surfaces gaps; OMR re-collects and re-synthesizes."
+  }
+}

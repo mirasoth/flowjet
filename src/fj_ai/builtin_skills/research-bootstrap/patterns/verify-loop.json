@@ -1,0 +1,42 @@
+{
+  "name": "Verify-Loop",
+  "version": "0.1.0",
+  "description": "Convergent iteration: OMR produces, autoresearch+ARS verify adversarially, OMR revises, repeat until converge or plateau.",
+  "backends": {
+    "omr": "oh-my-research",
+    "ars": "academic-research-skills",
+    "auto": "autoresearch"
+  },
+  "graph": {
+    "entry_points": ["produce"],
+    "nodes": ["produce", "verify", "revise"],
+    "edges": [
+      "produce→verify",
+      "verify→revise",
+      "revise→verify"
+    ],
+    "routes": {
+      "produce": "omr",
+      "verify": "auto",
+      "revise": "omr"
+    },
+    "side_cycles": [
+      {
+        "id": "adversarial-verify",
+        "attach": "verify",
+        "ops": ["review"],
+        "route": "ars",
+        "when": "convergence_or_user_request"
+      }
+    ]
+  },
+  "skill_gates": {
+    "verify": "gate_l"
+  },
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "semi-automated",
+    "synthesis_mode": "survey",
+    "description": "Claims keep shifting; converge before shipping. autoresearch runs the modify→verify→keep/discard loop; ARS supplies the adversarial judge."
+  }
+}

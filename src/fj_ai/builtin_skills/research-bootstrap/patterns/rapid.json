@@ -1,0 +1,30 @@
+{
+  "name": "Rapid",
+  "version": "0.1.0",
+  "description": "Fastest path: OMR only, all gates off. No ARS, no auto.",
+  "backends": {
+    "omr": "oh-my-research",
+    "ars": "academic-research-skills",
+    "auto": "autoresearch"
+  },
+  "graph": {
+    "entry_points": ["collect"],
+    "nodes": ["collect", "analyze", "synth"],
+    "edges": [
+      "collect→analyze",
+      "analyze→synth"
+    ],
+    "routes": {
+      "collect": "omr",
+      "analyze": "omr",
+      "synth": "omr"
+    }
+  },
+  "skill_gates": {},
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "quick-pass",
+    "synthesis_mode": "brief",
+    "description": "Quick brief, no rigor, no confirmations."
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "Evidence-First",
+  "version": "0.1.0",
+  "description": "Lighter path: OMR collects/analyzes/synthesizes, ARS does a single review pass at the end. No verify node, no THINK side-cycle.",
+  "backends": {
+    "omr": "oh-my-research",
+    "ars": "academic-research-skills",
+    "auto": "autoresearch"
+  },
+  "graph": {
+    "entry_points": ["collect"],
+    "nodes": ["collect", "analyze", "synth", "review"],
+    "edges": [
+      "collect→analyze",
+      "analyze→synth",
+      "synth→review"
+    ],
+    "routes": {
+      "collect": "omr",
+      "analyze": "omr",
+      "synth": "omr",
+      "review": "ars"
+    }
+  },
+  "skill_gates": {
+    "analyze": "gate_a",
+    "synth": "gate_d",
+    "review": "ars_editorial_ethics"
+  },
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "semi-automated",
+    "synthesis_mode": "survey",
+    "description": "For when you trust the corpus and want one editorial pass, not a full adversarial pipeline."
+  }
+}

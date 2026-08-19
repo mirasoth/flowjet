@@ -12,6 +12,10 @@ def _stub_browser_ok() -> dict:
     return {"category": "browser", "status": "ok", "checks": [], "message": None}
 
 
+def _stub_reference_skills_ok() -> dict:
+    return {"category": "reference_skills", "status": "ok", "checks": [], "message": None}
+
+
 def test_parse_args_doctor_command() -> None:
     args = parse_args(["doctor", "--deep", "--live-llm"])
     assert args.command == "doctor"
@@ -60,6 +64,9 @@ def test_run_doctor_json(monkeypatch, capsys) -> None:  # type: ignore[no-untype
     monkeypatch.setattr("fj_ai.doctor_cmd._run_diagnose", fake_diagnose)
     monkeypatch.setattr("fj_ai.doctor_cmd._check_browser_deps", _stub_browser_ok)
     monkeypatch.setattr(
+        "fj_ai.doctor_cmd._check_reference_skills", lambda **_k: _stub_reference_skills_ok()
+    )
+    monkeypatch.setattr(
         "fj_ai.agent.load_config",
         lambda _path=None: SimpleNamespace(),
     )
@@ -90,6 +97,9 @@ def test_run_doctor_progressive_text(monkeypatch, capsys) -> None:  # type: igno
 
     monkeypatch.setattr("fj_ai.doctor_cmd._run_diagnose", fake_diagnose)
     monkeypatch.setattr("fj_ai.doctor_cmd._check_browser_deps", _stub_browser_ok)
+    monkeypatch.setattr(
+        "fj_ai.doctor_cmd._check_reference_skills", lambda **_k: _stub_reference_skills_ok()
+    )
     monkeypatch.setattr(
         "fj_ai.agent.load_config",
         lambda _path=None: SimpleNamespace(),
@@ -153,6 +163,32 @@ def test_find_chrome_executable_uses_path(monkeypatch) -> None:  # type: ignore[
     assert doctor_cmd._find_chrome_executable() == "/usr/bin/chromium"
 
 
+def test_check_reference_skills_missing(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import doctor_cmd
+
+    monkeypatch.setattr(doctor_cmd, "_installed_skill_names", lambda: set())
+
+    cat = doctor_cmd._check_reference_skills()
+    assert cat["category"] == "reference_skills"
+    assert cat["status"] == "warning"
+    assert len(cat["checks"]) == len(doctor_cmd.REFERENCE_SKILLS)
+    assert all(c["status"] == "warning" for c in cat["checks"])
+
+
+def test_check_reference_skills_installed(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import doctor_cmd
+
+    monkeypatch.setattr(
+        doctor_cmd,
+        "_installed_skill_names",
+        lambda: {"oh-my-research", "deep-research", "autoresearch"},
+    )
+
+    cat = doctor_cmd._check_reference_skills()
+    assert cat["status"] == "ok"
+    assert all(c["status"] == "ok" for c in cat["checks"])
+
+
 def test_run_doctor_includes_browser_category(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
     from fj_ai import doctor_cmd
 
@@ -168,6 +204,9 @@ def test_run_doctor_includes_browser_category(monkeypatch, capsys) -> None:  # t
             "checks": [{"name": "chrome", "status": "ok", "message": "chrome ok", "details": {}}],
             "message": None,
         },
+    )
+    monkeypatch.setattr(
+        "fj_ai.doctor_cmd._check_reference_skills", lambda **_k: _stub_reference_skills_ok()
     )
     monkeypatch.setattr(
         "fj_ai.agent.load_config",

@@ -1,0 +1,39 @@
+{
+  "name": "Stance-First",
+  "version": "0.1.0",
+  "description": "Stance/claim first: OMR decides (>=3 alternatives), collects, analyzes, writes a report, then ARS devil's advocate stress-tests the claim.",
+  "backends": {
+    "omr": "oh-my-research",
+    "ars": "academic-research-skills",
+    "auto": "autoresearch"
+  },
+  "graph": {
+    "entry_points": ["decide"],
+    "nodes": ["decide", "collect", "analyze", "synth", "adversarial"],
+    "edges": [
+      "decide→collect",
+      "collect→analyze",
+      "analyze→synth",
+      "synth→adversarial"
+    ],
+    "routes": {
+      "decide": "omr",
+      "collect": "omr",
+      "analyze": "omr",
+      "synth": "omr",
+      "adversarial": "ars"
+    }
+  },
+  "skill_gates": {
+    "decide": "gate_b",
+    "analyze": "gate_a",
+    "synth": "gate_d",
+    "adversarial": "ars_devils_advocate_checkpoint"
+  },
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "semi-automated",
+    "synthesis_mode": "report",
+    "description": "Position/claim paper with a devil's-advocate stress test. Use when the user has a stance and wants it argued and attacked."
+  }
+}

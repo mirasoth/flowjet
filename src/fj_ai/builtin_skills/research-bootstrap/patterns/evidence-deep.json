@@ -1,0 +1,41 @@
+{
+  "name": "Evidence-Deep",
+  "version": "0.1.0",
+  "description": "Default report-first path: OMR collects/analyzes/thinks/synthesizes, ARS verifies sources and reviews the draft. Flagship pattern.",
+  "backends": {
+    "omr": "oh-my-research",
+    "ars": "academic-research-skills",
+    "auto": "autoresearch"
+  },
+  "graph": {
+    "entry_points": ["collect"],
+    "nodes": ["collect", "analyze", "verify", "think", "synth", "review"],
+    "edges": [
+      "collect→analyze",
+      "analyze→verify",
+      "verify→think",
+      "think→synth",
+      "synth→review"
+    ],
+    "routes": {
+      "collect": "omr",
+      "analyze": "omr",
+      "verify": "ars",
+      "think": "omr",
+      "synth": "omr",
+      "review": "ars"
+    }
+  },
+  "skill_gates": {
+    "analyze": "gate_a",
+    "synth": "gate_d",
+    "verify": "ars_source_verification",
+    "review": "ars_editorial_ethics"
+  },
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "semi-automated",
+    "synthesis_mode": "survey",
+    "description": "Best for deep literature surveys and structured reports with real adversarial checkpoints."
+  }
+}

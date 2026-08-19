@@ -1,0 +1,40 @@
+{
+  "name": "Idea-First",
+  "version": "0.1.0",
+  "description": "Speculation first: OMR captures the idea, ARS socratic mentor guides RQ formulation, OMR analyzes and writes a brief.",
+  "backends": {
+    "omr": "oh-my-research",
+    "ars": "academic-research-skills",
+    "auto": "autoresearch"
+  },
+  "graph": {
+    "entry_points": ["idea"],
+    "nodes": ["idea", "question", "collect", "analyze", "think", "synth"],
+    "edges": [
+      "idea→question",
+      "question→collect",
+      "collect→analyze",
+      "analyze→think",
+      "think→synth"
+    ],
+    "routes": {
+      "idea": "omr",
+      "question": "ars",
+      "collect": "omr",
+      "analyze": "omr",
+      "think": "omr",
+      "synth": "omr"
+    }
+  },
+  "skill_gates": {
+    "question": "ars_socratic_rounds",
+    "analyze": "gate_a",
+    "synth": "gate_d"
+  },
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "semi-automated",
+    "synthesis_mode": "brief",
+    "description": "Vague idea → guided research question (ARS socratic) → brief. Use when the user does not yet have an answerable RQ."
+  }
+}
