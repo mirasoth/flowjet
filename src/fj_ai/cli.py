@@ -69,7 +69,7 @@ query modes:
 examples:
   {show} explain this repo
   {follow} what did we decide last time?
-  {show} -t fj-abc-123 continue here
+  {show} -t abc-123 continue here
   {show} -l -n 10
   {show} doctor
   {show} doctor --deep --live-llm
