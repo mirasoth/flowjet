@@ -57,6 +57,7 @@ def _cli_epilog(prog: str) -> str:
 commands:
   {show} setup                 Interactive nano.yml setup
   {show} doctor                Diagnose runtime readiness (tool deps, providers, …)
+  {show} doctor-fix            Repair Chrome/chromedriver (install/download if needed)
   {show} completion zsh|bash   Print shell completion script
 
 query modes:
@@ -328,6 +329,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if raw and raw[0] == "doctor":
         ns = argparse.Namespace(query_text="", doctor_argv=raw[1:])
         return _namespace_with_command(ns, "doctor")
+    if raw and raw[0] == "doctor-fix":
+        ns = argparse.Namespace(query_text="", doctor_fix_argv=raw[1:])
+        return _namespace_with_command(ns, "doctor-fix")
     if raw and raw[0] == "__complete":
         ns = argparse.Namespace(query_text="", complete_argv=raw[1:])
         return _namespace_with_command(ns, "__complete")
@@ -514,7 +518,7 @@ def run_one_shot(coro: Coroutine[Any, Any, int], *, grace: float = _TEARDOWN_GRA
         loop.close()
 
 
-_FOLLOW_SUBCOMMANDS = frozenset({"setup", "doctor", "completion", "__complete"})
+_FOLLOW_SUBCOMMANDS = frozenset({"setup", "doctor", "doctor-fix", "completion", "__complete"})
 
 
 def _inject_follow(argv: list[str]) -> list[str]:
@@ -548,6 +552,10 @@ def main(argv: list[str] | None = None) -> int:
             from fj_ai.doctor_cmd import run_doctor
 
             return run_doctor(getattr(args, "doctor_argv", []))
+        if args.command == "doctor-fix":
+            from fj_ai.doctor_fix_cmd import run_doctor_fix
+
+            return run_doctor_fix(getattr(args, "doctor_fix_argv", []))
         if args.command == "__complete":
             from fj_ai.completion import run_complete
 

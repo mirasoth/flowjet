@@ -19,7 +19,7 @@ DEFAULT_TASKS = (
     "generate README",
 )
 
-SUBCOMMANDS = ("setup", "doctor", "completion")
+SUBCOMMANDS = ("setup", "doctor", "doctor-fix", "completion")
 
 DEFAULT_MAX_ENTRIES = 200
 
