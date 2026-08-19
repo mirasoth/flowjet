@@ -129,12 +129,12 @@ def test_fix_reference_skills_installs_missing(monkeypatch, capsys) -> None:  # 
     monkeypatch.setattr(dfc, "_installed_skill_names", fake_installed)
     monkeypatch.setattr(dfc, "_install_skill", fake_install)
 
-    # academic-research-skills (deep-research) is not added -> install "succeeds"
-    # but the name never appears, so it reports failure (verify name).
+    # academic-research-skills (deep-research) never lands in the mock -> install
+    # "succeeds" but the re-scan finds nothing, so it is reported as a failure.
     assert dfc._fix_reference_skills(use_color=False) == 1
     captured = capsys.readouterr()
     assert "oh-my-research" in captured.out
-    assert "verify installed skill name" in captured.err
+    assert "Imbad0202/academic-research-skills" in captured.err
     assert state["calls"] == [
         "caesar0301/oh-my-research",
         "Imbad0202/academic-research-skills",

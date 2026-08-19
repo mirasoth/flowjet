@@ -335,18 +335,19 @@ def _install_skill(repo: str) -> tuple[bool, str]:
     """Install ``repo`` via ``npx skills add`` non-interactively.
 
     Returns ``(ok, detail)``. Non-interactive: ``npx -y`` auto-confirms npx's
-    own package install; ``skills add --global --yes`` installs globally into
-    ``~/.agents/skills/`` (``--global``) and suppresses confirmation prompts
-    (``--yes``). Deliberately omits ``--all`` — that flag targets every
-    supported agent (dozens of symlinks, some of which reject global installs),
-    whereas we only need the universal ``~/.agents/skills/`` location.
+    own package install; ``skills add --all --global --yes`` installs every
+    skill in the repo (``--all``, required for multi-skill repos like
+    academic-research-skills), into ``~/.agents/skills/`` (``--global``), with
+    prompts suppressed (``--yes``). ``--all`` also targets every supported agent
+    (some of which reject global installs and yield a non-zero exit); callers
+    must verify by actual landing under ``~/.agents/skills/``, not the exit code.
     """
     npx = shutil.which("npx")
     if npx is None:
         return False, "npx not found on PATH (install Node.js to auto-install skills)"
     try:
         result = subprocess.run(  # noqa: S603
-            [npx, "-y", "skills", "add", repo, "--global", "--yes"],
+            [npx, "-y", "skills", "add", repo, "--all", "--global", "--yes"],
             capture_output=True,
             text=True,
             stdin=subprocess.DEVNULL,
@@ -390,7 +391,7 @@ def _check_reference_skills() -> dict[str, Any]:
                     "status": "warning",
                     "message": f"{repo} not installed",
                     "details": {
-                        "remediation": f"npx -y skills add {repo} --global --yes",
+                        "remediation": f"npx -y skills add {repo} --all --global --yes",
                         "impact": "research-bootstrap backend unavailable",
                     },
                 }
