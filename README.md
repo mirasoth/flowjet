@@ -68,10 +68,12 @@ fj doctor --format json   # machine-readable
 Threads persist in SQLite, so you can pick up where you left off — continue the latest, jump to a specific one, or list them:
 
 ```bash
-fj -f and now add tests          # continue latest active thread
+fj -f and now add tests          # continue this project's latest active thread
 fj -t abc123 continue from here  # continue a specific thread
 fj -l                            # list recent threads
 ```
+
+`-f` is scoped to the project you are in — the git repo root, or the current directory when it is not a repo — so parallel work in other checkouts never hijacks your thread. `fj -l` still lists every thread; pick one up from anywhere with `-t ID`.
 
 ## Flags
 
@@ -81,7 +83,7 @@ fj [options] [--] <query...>
 
 | Flag | Meaning |
 |------|---------|
-| `-f` / `--follow` | Continue the latest active thread |
+| `-f` / `--follow` | Continue the latest active thread in this project directory |
 | `-t ID` / `--thread` | Continue (or pin) a specific thread (overrides `-f`) |
 | `-l` / `--list` | List recent threads (newest first) |
 | `-n NUM` | How many threads `-l` shows (`0` = all) |

@@ -38,7 +38,7 @@ def _cli_description(prog: str) -> str:
     alias_note = {
         FORMAL_CLI: "Aliases: fj (same), fjf (same as flowjet-agent -f).",
         "fj": "Alias of flowjet-agent. Also: fjf (= fj -f).",
-        "fjf": "Alias of flowjet-agent -f / fj -f (follow latest thread).",
+        "fjf": "Alias of flowjet-agent -f / fj -f (follow this project's latest thread).",
     }.get(prog, "Formal command: flowjet-agent. Aliases: fj, fjf (= -f).")
     return (
         "FlowJet — coding agent CLI (soothe-nano)\n"
@@ -62,7 +62,7 @@ commands:
 
 query modes:
   {show} QUERY...              Start a new thread (default)
-  {follow} QUERY...           Continue the latest active thread
+  {follow} QUERY...           Continue this project's latest active thread
   {show} -t ID QUERY...        Continue a specific thread
   {show} -t ID                 Pin thread as active (no query)
   {show} -a QUERY...           Ask mode: answer only, no tool calls
@@ -79,9 +79,10 @@ examples:
 notes:
   • Formal CLI: flowjet-agent · aliases: fj, fjf (= -f)
   • -t overrides -f when both are given; -n requires -l; -l takes no query
+  • -f is per project (git root, else cwd); resume elsewhere with -t ID
   • -a/--ask disables all tools — pure Q&A, no side effects
   • One query per thread at a time; different threads may run concurrently
-  • With -v, prints thread <id> on stderr before the run
+  • With -v, prints thread <id> and the project dir on stderr before the run
 """
 
 
@@ -241,7 +242,7 @@ def _build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "-f",
         "--follow",
         action="store_true",
-        help="Continue the latest active thread",
+        help="Continue the latest active thread in this project directory",
     )
     thread.add_argument(
         "-l",
@@ -421,7 +422,12 @@ async def run_async(args: argparse.Namespace) -> int:
     # Lazy: keep ``fj __complete`` / setup free of agent import cost.
     from fj_ai.agent import build_agent, open_sqlite_checkpointer
     from fj_ai.stream import invoke_query, stream_query
-    from fj_ai.threads import ConcurrentSessionError, hold_thread_lock, resolve_thread_id
+    from fj_ai.threads import (
+        ConcurrentSessionError,
+        hold_thread_lock,
+        resolve_thread_id,
+        resolve_workdir,
+    )
 
     config = _load_config_or_exit(args)
     if isinstance(config, int):
@@ -438,7 +444,7 @@ async def run_async(args: argparse.Namespace) -> int:
             )
             with hold_thread_lock(thread_id):
                 if args.verbose:
-                    sys.stderr.write(f"thread {thread_id}\n")
+                    sys.stderr.write(f"thread {thread_id} · {resolve_workdir()}\n")
                     sys.stderr.flush()
 
                 agent = await build_agent(
