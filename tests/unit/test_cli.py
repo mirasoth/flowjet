@@ -283,7 +283,7 @@ def test_run_pin_thread(monkeypatch, capsys, tmp_path) -> None:  # type: ignore[
     from fj_ai.cli import parse_args, run_async, run_pin_thread
 
     path = tmp_path / "fj_active_thread"
-    monkeypatch.setattr(threads_mod, "active_thread_path", lambda: path)
+    monkeypatch.setattr(threads_mod, "active_thread_path", lambda *_a, **_k: path)
 
     assert run_pin_thread("fj-pinned") == 0
     assert capsys.readouterr().out.strip() == "fj-pinned"

@@ -26,7 +26,10 @@ def soothe_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def active_thread_file(soothe_home: Path) -> Path:
-    return soothe_home / "data" / "fj_active_thread"
+    """Pointer file for the workdir the tests run in (pins are per-project)."""
+    from fj_ai.threads import active_thread_path
+
+    return active_thread_path()
 
 
 @pytest.fixture

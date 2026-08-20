@@ -111,6 +111,37 @@ def test_main_thread_alone_pins_explicit_id(
     assert out.strip() == "fj-other"
 
 
+def test_main_thread_pin_is_scoped_per_workdir(
+    run_fj: Any,
+    stub_agent_runtime: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Two projects keep independent pins, so parallel work never collides."""
+    from fj_ai.threads import active_thread_path
+
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    for repo in (repo_a, repo_b):
+        (repo / ".git").mkdir(parents=True)
+    nested_a = repo_a / "src" / "pkg"
+    nested_a.mkdir(parents=True)
+
+    # A subdirectory of repo-a shares repo-a's pin (git root is the key).
+    monkeypatch.chdir(nested_a)
+    assert run_fj(["-t", "fj-in-a"])[0] == 0
+    pin_a = active_thread_path()
+    assert pin_a == active_thread_path(repo_a)
+
+    monkeypatch.chdir(repo_b)
+    assert run_fj(["-t", "fj-in-b"])[0] == 0
+    pin_b = active_thread_path()
+
+    assert pin_a != pin_b
+    assert pin_a.read_text(encoding="utf-8").strip() == "fj-in-a"
+    assert pin_b.read_text(encoding="utf-8").strip() == "fj-in-b"
+
+
 def test_main_follow_with_thread_uses_explicit_id(
     run_fj: Any,
     stub_agent_runtime: dict[str, Any],

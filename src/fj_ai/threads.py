@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
+import re
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -12,6 +14,8 @@ from pathlib import Path
 from typing import Any, TextIO
 
 _PREVIEW_LIMIT = 72
+_SLUG_HASH_LEN = 12
+_UNSAFE_SLUG_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class ConcurrentSessionError(RuntimeError):
@@ -26,9 +30,33 @@ def _soothe_home() -> Path:
     return Path.home() / ".soothe"
 
 
-def active_thread_path() -> Path:
-    """Return ``~/.soothe/data/fj_active_thread`` (respects ``SOOTHE_HOME``)."""
-    return _soothe_home() / "data" / "fj_active_thread"
+def resolve_workdir(start: Path | None = None) -> Path:
+    """Return the project root for ``start``: nearest ancestor with ``.git``, else ``start``.
+
+    ``.git`` may be a directory (normal clone) or a file (worktree/submodule).
+    """
+    base = (start or Path.cwd()).expanduser()
+    try:
+        base = base.resolve()
+    except OSError:
+        base = base.absolute()
+    for candidate in (base, *base.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return base
+
+
+def workdir_slug(path: Path) -> str:
+    """Readable, collision-free file name for a workdir (``name-<hash>``)."""
+    digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:_SLUG_HASH_LEN]
+    name = _UNSAFE_SLUG_CHARS.sub("-", path.name).strip("-") or "root"
+    return f"{name}-{digest}"
+
+
+def active_thread_path(workdir: Path | None = None) -> Path:
+    """Return this workdir's active-thread pointer under ``~/.soothe/data/active_threads/``."""
+    root = resolve_workdir(workdir)
+    return _soothe_home() / "data" / "active_threads" / workdir_slug(root)
 
 
 def thread_lock_path(thread_id: str) -> Path:
@@ -37,9 +65,13 @@ def thread_lock_path(thread_id: str) -> Path:
     return _soothe_home() / "data" / "locks" / f"{safe}.lock"
 
 
-def read_active_thread_id(path: Path | None = None) -> str | None:
-    """Return the pinned active thread id, if any."""
-    file = path or active_thread_path()
+def read_active_thread_id(
+    path: Path | None = None,
+    *,
+    workdir: Path | None = None,
+) -> str | None:
+    """Return the thread id pinned for ``workdir`` (default: current project), if any."""
+    file = path or active_thread_path(workdir)
     try:
         text = file.read_text(encoding="utf-8").strip()
     except OSError:
@@ -47,9 +79,14 @@ def read_active_thread_id(path: Path | None = None) -> str | None:
     return text or None
 
 
-def write_active_thread_id(thread_id: str, path: Path | None = None) -> None:
-    """Pin ``thread_id`` as the active conversation for subsequent queries."""
-    file = path or active_thread_path()
+def write_active_thread_id(
+    thread_id: str,
+    path: Path | None = None,
+    *,
+    workdir: Path | None = None,
+) -> None:
+    """Pin ``thread_id`` as the active conversation for ``workdir``'s later queries."""
+    file = path or active_thread_path(workdir)
     file.parent.mkdir(parents=True, exist_ok=True)
     file.write_text(thread_id.strip() + "\n", encoding="utf-8")
 
@@ -239,39 +276,26 @@ async def _load_thread_activity(
     return rows
 
 
-async def latest_thread_id(checkpointer: Any) -> str | None:
-    """Return the latest-active thread id (same ordering as ``list_threads``).
-
-    Activity is the newest checkpoint ``ts``, not thread creation.
-    """
-    if checkpointer is None:
-        return None
-    rows = await _load_thread_activity(checkpointer)
-    return rows[0][0] if rows else None
-
-
 async def resolve_thread_id(
     checkpointer: Any,
     *,
     explicit: str | None = None,
     follow: bool = False,
+    workdir: Path | None = None,
 ) -> str:
-    """Choose the thread for a query and pin it as active.
+    """Choose the thread for a query and pin it as active for this workdir.
 
-    Priority: ``-t`` explicit id, else ``-f``/``--follow`` (pinned active id,
-    else latest activity, else new id), else a new id.
+    Priority: ``-t`` explicit id, else ``-f``/``--follow`` (the id pinned for this
+    workdir, else a new id), else a new id. Follow never crosses projects: a
+    thread pinned in another workdir is only reachable with an explicit ``-t``.
     """
     if explicit:
         tid = explicit.strip()
     elif follow:
-        tid = read_active_thread_id()
-        if not tid:
-            tid = await latest_thread_id(checkpointer)
-        if not tid:
-            tid = new_thread_id()
+        tid = read_active_thread_id(workdir=workdir) or new_thread_id()
     else:
         tid = new_thread_id()
-    write_active_thread_id(tid)
+    write_active_thread_id(tid, workdir=workdir)
     return tid
 
 

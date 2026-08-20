@@ -20,7 +20,7 @@
 
 1. **Brand in prose** — Prefer “FlowJet” for the product.
 2. **Formal CLI** — Document and prefer ``flowjet-agent`` in install guides and packaging.
-3. **Aliases** — ``fj`` is a short alias of ``flowjet-agent``; ``fjf`` is a short alias of ``flowjet-agent -f`` (follow latest thread).
+3. **Aliases** — ``fj`` is a short alias of ``flowjet-agent``; ``fjf`` is a short alias of ``flowjet-agent -f`` (follow this project's latest thread).
 4. **Install name** — Always ``pip install flowjet-agent`` / ``uv tool install flowjet-agent``.
 5. **Import path** — Keep ``from fj_ai…`` and ``src/fj_ai/`` unless a later RFC migrates the package directory.
 6. **One-liner** — Package / formal CLI / repo: **flowjet-agent** · aliases: **fj**, **fjf** · Runtime: **soothe-nano**.

@@ -8,7 +8,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 from fj_ai.threads import (
     ThreadInfo,
     format_thread_list,
-    latest_thread_id,
     list_threads,
     preview_user_request,
     simplify_timestamp,
@@ -105,12 +104,7 @@ async def test_resolve_thread_id_priority(tmp_path, monkeypatch) -> None:  # typ
     from fj_ai import threads as threads_mod
 
     path = tmp_path / "active"
-    monkeypatch.setattr(threads_mod, "active_thread_path", lambda: path)
-
-    async def fake_latest(_cp: object) -> str:
-        return "fj-from-db"
-
-    monkeypatch.setattr(threads_mod, "latest_thread_id", fake_latest)
+    monkeypatch.setattr(threads_mod, "active_thread_path", lambda *_a, **_k: path)
 
     # Pinned active is ignored unless --follow.
     threads_mod.write_active_thread_id("fj-pinned")
@@ -126,19 +120,86 @@ async def test_resolve_thread_id_priority(tmp_path, monkeypatch) -> None:  # typ
     assert await threads_mod.resolve_thread_id(object(), explicit="fj-explicit") == "fj-explicit"
     assert threads_mod.read_active_thread_id() == "fj-explicit"
 
-    # follow falls back to DB latest when no pin.
+    # No pin for this workdir: follow starts a fresh thread instead of borrowing
+    # the newest thread from another project.
     path.unlink()
-    assert await threads_mod.resolve_thread_id(object(), follow=True) == "fj-from-db"
+    fresh = await threads_mod.resolve_thread_id(object(), follow=True)
+    assert fresh not in {"fj-pinned", "fj-explicit"}
+    assert threads_mod.read_active_thread_id() == fresh
 
 
 def test_active_thread_roundtrip(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from fj_ai import threads as threads_mod
 
     path = tmp_path / "active"
-    monkeypatch.setattr(threads_mod, "active_thread_path", lambda: path)
+    monkeypatch.setattr(threads_mod, "active_thread_path", lambda *_a, **_k: path)
     assert threads_mod.read_active_thread_id() is None
     threads_mod.write_active_thread_id("fj-abc")
     assert threads_mod.read_active_thread_id() == "fj-abc"
+
+
+def test_resolve_workdir_finds_git_root(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai.threads import resolve_workdir
+
+    repo = tmp_path / "repo"
+    nested = repo / "src" / "pkg"
+    nested.mkdir(parents=True)
+    (repo / ".git").mkdir()
+
+    assert resolve_workdir(nested) == repo.resolve()
+    assert resolve_workdir(repo) == repo.resolve()
+
+    # Worktrees / submodules store ``.git`` as a file.
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
+    assert resolve_workdir(worktree) == worktree.resolve()
+
+
+def test_resolve_workdir_without_repo_uses_dir(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai.threads import resolve_workdir
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert resolve_workdir(plain) == plain.resolve()
+
+
+def test_active_thread_is_scoped_per_workdir(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import threads as threads_mod
+
+    monkeypatch.setattr(threads_mod, "_soothe_home", lambda: tmp_path / "home")
+    one = tmp_path / "one"
+    two = tmp_path / "two"
+    one.mkdir()
+    two.mkdir()
+
+    assert threads_mod.active_thread_path(one) != threads_mod.active_thread_path(two)
+
+    threads_mod.write_active_thread_id("fj-one", workdir=one)
+    assert threads_mod.read_active_thread_id(workdir=one) == "fj-one"
+    assert threads_mod.read_active_thread_id(workdir=two) is None
+
+    threads_mod.write_active_thread_id("fj-two", workdir=two)
+    assert threads_mod.read_active_thread_id(workdir=one) == "fj-one"
+    assert threads_mod.read_active_thread_id(workdir=two) == "fj-two"
+
+
+@pytest.mark.asyncio
+async def test_resolve_thread_id_follow_ignores_other_workdir(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from fj_ai import threads as threads_mod
+
+    monkeypatch.setattr(threads_mod, "_soothe_home", lambda: tmp_path / "home")
+    one = tmp_path / "one"
+    two = tmp_path / "two"
+    one.mkdir()
+    two.mkdir()
+
+    first = await threads_mod.resolve_thread_id(object(), follow=True, workdir=one)
+    assert await threads_mod.resolve_thread_id(object(), follow=True, workdir=one) == first
+
+    other = await threads_mod.resolve_thread_id(object(), follow=True, workdir=two)
+    assert other != first
+    assert threads_mod.read_active_thread_id(workdir=one) == first
 
 
 def test_hold_thread_lock_blocks_same_thread(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -165,36 +226,6 @@ def test_hold_thread_lock_blocks_same_thread(tmp_path, monkeypatch) -> None:  # 
 @pytest.mark.asyncio
 async def test_list_threads_none_checkpointer() -> None:
     assert await list_threads(None) == []
-
-
-@pytest.mark.asyncio
-async def test_latest_thread_id_none_checkpointer() -> None:
-    assert await latest_thread_id(None) is None
-
-
-@pytest.mark.asyncio
-async def test_latest_thread_id_returns_newest_by_activity_ts() -> None:
-    # Higher checkpoint_id on fj-stale, but fj-active has a newer checkpoint ts.
-    conn = _FakeConn(
-        activity_rows=[
-            ("fj-stale", "cp-z-late-id", "msgpack", b"stale"),
-            ("fj-active", "cp-a-early-id", "msgpack", b"active"),
-        ],
-        preview_rows=[],
-    )
-    serde = _FakeSerde(
-        {
-            b"stale": {"ts": "2026-07-20T12:00:00+00:00"},
-            b"active": {"ts": "2026-07-21T15:00:00+00:00"},
-        }
-    )
-    assert await latest_thread_id(_FakeCp(conn, serde)) == "fj-active"
-
-
-@pytest.mark.asyncio
-async def test_latest_thread_id_empty() -> None:
-    conn = _FakeConn(activity_rows=[], preview_rows=[])
-    assert await latest_thread_id(_FakeCp(conn, _FakeSerde({}))) is None
 
 
 @pytest.mark.asyncio
