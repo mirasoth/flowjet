@@ -33,11 +33,11 @@ jobs:
 
       - name: Guard — soothe-nano must be on PyPI
         run: |
-          if ! curl -sf "https://pypi.org/pypi/soothe-nano/1.2.12/json" >/dev/null; then
-            echo "soothe-nano 1.2.12 must be available on PyPI before releasing flowjet-agent"
+          if ! curl -sf "https://pypi.org/pypi/soothe-nano/1.2.13/json" >/dev/null; then
+            echo "soothe-nano 1.2.13 must be available on PyPI before releasing flowjet-agent"
             exit 1
           fi
-          echo "soothe-nano 1.2.12 is available on PyPI"
+          echo "soothe-nano 1.2.13 is available on PyPI"
 
       - name: Read version
         id: version
