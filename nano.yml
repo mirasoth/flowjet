@@ -1,4 +1,7 @@
 # FlowJet (fj) example config for the local Mac Studio inference stack.
+# Place and modify this file in ~/.soothe/config/nano.yml.
+#
+# Or use config argument to set session level configs:
 # Usage: fj -c ./nano.yml who are you
 
 providers:
@@ -21,7 +24,6 @@ router_profiles:
 
 active_router_profile: default
 
-# Keep persistence explicit so the profile is self-contained for `fj -c ./nano.yml`.
 persistence:
   default_backend: sqlite
 
