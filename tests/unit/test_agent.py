@@ -192,10 +192,14 @@ async def test_build_agent_ask_mode_forwards_interaction_mode(
 
 
 @pytest.mark.asyncio
-async def test_build_agent_default_mode_forwards_bypass_mode(
+async def test_build_agent_default_mode_auto_resolves(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ask_mode=False forwards interaction_mode="bypass" (fj's default)."""
+    """ask_mode=False forwards interaction_mode=None so the mode auto-resolves.
+
+    fj no longer forces a mode; passing ``None`` lets soothe-nano resolve from
+    the config (default ``agent``) instead of pinning to bypass.
+    """
     import fj_ai.agent as agent_mod
 
     captured: dict[str, object] = {}
@@ -218,7 +222,7 @@ async def test_build_agent_default_mode_forwards_bypass_mode(
 
     await agent_mod.build_agent(SootheConfig(), ask_mode=False)
     mode = captured.get("interaction_mode")
-    assert mode == "bypass"
+    assert mode is None
 
 
 # ---------------------------------------------------------------------------
