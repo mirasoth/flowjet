@@ -254,3 +254,4 @@ Temporary Items
 
 # Claude Code session-local
 .claude/
+uv.lock
