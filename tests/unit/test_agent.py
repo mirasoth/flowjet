@@ -192,10 +192,10 @@ async def test_build_agent_ask_mode_forwards_interaction_mode(
 
 
 @pytest.mark.asyncio
-async def test_build_agent_default_mode_forwards_agent_mode(
+async def test_build_agent_default_mode_forwards_bypass_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ask_mode=False must forward interaction_mode="agent" (or None) — not ask."""
+    """ask_mode=False forwards interaction_mode="bypass" (fj's default)."""
     import fj_ai.agent as agent_mod
 
     captured: dict[str, object] = {}
@@ -218,8 +218,7 @@ async def test_build_agent_default_mode_forwards_agent_mode(
 
     await agent_mod.build_agent(SootheConfig(), ask_mode=False)
     mode = captured.get("interaction_mode")
-    assert mode is None or mode == "agent"
-    assert mode != "ask"
+    assert mode == "bypass"
 
 
 # ---------------------------------------------------------------------------
