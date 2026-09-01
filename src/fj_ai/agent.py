@@ -241,18 +241,16 @@ async def build_agent(
     verbose: bool = False,
     ask_mode: bool = False,
 ) -> SootheNanoAgent:
-    """Build a full nano coding agent for the current workspace.
+    """Build a nano coding agent for the current workspace.
 
-    When ``ask_mode`` is true, the agent runs in native ask mode (read-only
-    filesystem surface, no mutating tool groups, ask policy profile) via
-    ``create_nano_agent(interaction_mode="ask")`` — see soothe-nano's
-    ``AgentBuilder.build`` / ``soothe_nano.agent.interaction_mode``.
+    Defaults to bypass mode (full tools, no approval prompts). ``ask_mode``
+    switches to read-only ask mode.
     """
     configure_cli_logging(verbose=verbose)
     ensure_workspace(workspace)
     agent = create_nano_agent(
         apply_fj_defaults(config),
-        interaction_mode="ask" if ask_mode else "agent",
+        interaction_mode="ask" if ask_mode else "bypass",
     )
     # Plugin imports (e.g. browser_use) may still attach root console handlers.
     silence_after_plugins(verbose=verbose)
