@@ -241,3 +241,71 @@ def test_apply_fj_defaults_preserves_sqlite_persistence_in_ask_context() -> None
     )
     forced = apply_fj_defaults(cfg)
     assert forced.resolve_checkpointer_backend() == "sqlite"
+
+
+# ---------------------------------------------------------------------------
+# Bypass mode
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_agent_bypass_mode_forwards_interaction_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bypass_mode=True must forward interaction_mode="bypass" to create_nano_agent.
+
+    Bypass mode skips all security enforcement layers; the nano builder handles
+    the policy profile and system prompt natively. fj only selects the mode.
+    """
+    import fj_ai.agent as agent_mod
+
+    captured: dict[str, object] = {}
+
+    class FakeGraph:
+        checkpointer = None
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self.graph = FakeGraph()
+
+    def fake_create(_cfg: object, **kwargs: object) -> FakeAgent:
+        captured.update(kwargs)
+        return FakeAgent()
+
+    monkeypatch.setattr(agent_mod, "configure_cli_logging", lambda **_k: None)
+    monkeypatch.setattr(agent_mod, "ensure_workspace", lambda _w=None: Path.cwd())
+    monkeypatch.setattr(agent_mod, "create_nano_agent", fake_create)
+    monkeypatch.setattr(agent_mod, "silence_after_plugins", lambda **_k: None)
+
+    await agent_mod.build_agent(SootheConfig(), bypass_mode=True)
+    assert captured.get("interaction_mode") == "bypass"
+    assert captured.get("policy") is None
+
+
+@pytest.mark.asyncio
+async def test_build_agent_bypass_overrides_ask(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When both ask_mode and bypass_mode are set, bypass takes precedence."""
+    import fj_ai.agent as agent_mod
+
+    captured: dict[str, object] = {}
+
+    class FakeGraph:
+        checkpointer = None
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self.graph = FakeGraph()
+
+    def fake_create(_cfg: object, **kwargs: object) -> FakeAgent:
+        captured.update(kwargs)
+        return FakeAgent()
+
+    monkeypatch.setattr(agent_mod, "configure_cli_logging", lambda **_k: None)
+    monkeypatch.setattr(agent_mod, "ensure_workspace", lambda _w=None: Path.cwd())
+    monkeypatch.setattr(agent_mod, "create_nano_agent", fake_create)
+    monkeypatch.setattr(agent_mod, "silence_after_plugins", lambda **_k: None)
+
+    await agent_mod.build_agent(SootheConfig(), ask_mode=True, bypass_mode=True)
+    assert captured.get("interaction_mode") == "bypass"
