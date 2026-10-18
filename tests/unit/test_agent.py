@@ -69,10 +69,11 @@ def test_ensure_workspace_sets_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 async def test_open_sqlite_checkpointer_yields_none_when_unresolved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import flowjet.core.bootstrap as bootstrap_mod
+    import flowjet.core.agent.workspace as workspace_mod
+    from flowjet.core.agent.workspace import Checkpointers
 
-    monkeypatch.setattr(bootstrap_mod, "resolve_checkpointer", lambda _cfg: None)
-    async with bootstrap_mod.open_sqlite_checkpointer(SootheConfig()) as cp:
+    monkeypatch.setattr(workspace_mod, "resolve_checkpointer", lambda _cfg: None)
+    async with Checkpointers.open_sqlite(SootheConfig()) as cp:
         assert cp is None
 
 
@@ -80,11 +81,12 @@ async def test_open_sqlite_checkpointer_yields_none_when_unresolved(
 async def test_open_sqlite_checkpointer_opens_db(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import flowjet.core.bootstrap as bootstrap_mod
+    import flowjet.core.agent.workspace as workspace_mod
+    from flowjet.core.agent.workspace import Checkpointers
 
     db_path = tmp_path / "checkpoints.db"
     monkeypatch.setattr(
-        bootstrap_mod, "resolve_checkpointer", lambda _cfg: (object(), str(db_path))
+        workspace_mod, "resolve_checkpointer", lambda _cfg: (object(), str(db_path))
     )
 
     class FakeSaver:
@@ -121,7 +123,7 @@ async def test_open_sqlite_checkpointer_opens_db(
     monkeypatch.setattr(aio_mod, "AsyncSqliteSaver", fake_saver)
     monkeypatch.setattr(serde_mod, "create_soothe_serde", lambda: object())
 
-    async with bootstrap_mod.open_sqlite_checkpointer(SootheConfig()) as cp:
+    async with Checkpointers.open_sqlite(SootheConfig()) as cp:
         assert cp is savers[0]
         assert savers[0].setup_called is True
     assert fake_conn.closed is True

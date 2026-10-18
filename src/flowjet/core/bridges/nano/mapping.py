@@ -1,4 +1,10 @@
-"""Map soothe-nano astream chunks to Agent Runtime events."""
+"""Map soothe-nano astream chunks to Agent Runtime events.
+
+This module owns the stream *semantics*: which chunk becomes which event,
+interrupt extraction and progress synthesis. Presentation concerns (one-line
+tool summaries, step labels, delta chunking, AI text extraction) live in
+:mod:`flowjet.core.streaming.presentation`.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +14,6 @@ from typing import Any
 from flowjet.core.events import (
     InterruptWaiting,
     Narration,
-    OutputTextDelta,
     Progress,
     RunCompleted,
     RunFailed,
@@ -17,12 +22,14 @@ from flowjet.core.events import (
     ToolCompleted,
     ToolStarted,
 )
-from flowjet.core.tool_results import (
-    preview_text,
-    simplify_tool_error,
-    tool_result_error_detail,
+from flowjet.core.streaming.presentation import (
+    AiTextExtractor,
+    OutputTextChunker,
+    StepProgressFormatter,
+    ToolCallSummarizer,
 )
-from flowjet.core.tool_stream import ToolCallArgAccumulator
+from flowjet.core.streaming.tool_results import ToolResultInspector
+from flowjet.core.streaming.tool_stream import ToolCallArgAccumulator
 
 _SKIP_CUSTOM_TYPES = frozenset(
     {
@@ -158,67 +165,6 @@ def update_progress(data: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
-# Arg keys worth echoing in a one-line tool summary (first match wins).
-_TOOL_SUMMARY_KEYS = (
-    "file_path",
-    "path",
-    "target_file",
-    "command",
-    "cmd",
-    "script",
-    "query",
-    "pattern",
-    "url",
-    "skill",
-)
-
-
-def tool_call_summary(name: str, args: dict[str, Any]) -> str:
-    """``write_file a.txt``-style summary for renderers without tool metadata."""
-    for key in _TOOL_SUMMARY_KEYS:
-        value = args.get(key)
-        if isinstance(value, (str, int, float)) and str(value).strip():
-            text = " ".join(str(value).split())
-            return f"{name} {text[:60]}"
-    return str(name)
-
-
-def step_message(payload: dict[str, Any]) -> str:
-    """Human-readable one-liner for a step payload (used by non-CLI renderers)."""
-    step = payload.get("step")
-    steps = payload.get("steps")
-    todo = str(payload.get("todo") or "").strip()
-    head = f"{step}/{steps}" if step and steps else "step"
-    if todo:
-        return f"Step {head} · {todo}"
-    if payload.get("status") == "completed":
-        return f"Steps complete · {head}"
-    return f"Step {head}"
-
-
-def resolve_interaction_mode(metadata: dict[str, Any] | None) -> str:
-    """Return ``agent`` or ``ask`` from request metadata (default ``agent``)."""
-    raw = (metadata or {}).get("interaction_mode", "agent")
-    return raw if raw in ("agent", "ask") else "agent"
-
-
-def ai_text(message: Any) -> str:
-    content = getattr(message, "content", None)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict) and block.get("type") == "text":
-                text = block.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-        return "".join(parts)
-    return ""
-
-
 def map_custom(data: dict[str, Any]) -> Progress | None:
     event_type = str(data.get("type") or "").strip()
     if not event_type or event_type in _SKIP_CUSTOM_TYPES:
@@ -285,7 +231,7 @@ def _wire_tool_call_update(
             return [
                 Progress(
                     stage="Tool",
-                    message=tool_call_summary(name or "tool", args),
+                    message=ToolCallSummarizer.summarize(name or "tool", args),
                     raw={
                         "type": "soothe.tool.started",
                         "tool": name,
@@ -298,7 +244,7 @@ def _wire_tool_call_update(
     return [ToolStarted(tool=name or "tool", call_id=tc_id, args=args or None)]
 
 
-def _extract_ask_user_interrupts(
+def extract_ask_user_interrupts(
     raw: Any,
 ) -> tuple[tuple[dict[str, Any], ...], tuple[str, ...]]:
     """Pull ``ask_user`` questions and interrupt ids from a ``__interrupt__`` payload.
@@ -338,34 +284,8 @@ def _extract_ask_user_interrupts(
     return tuple(questions), tuple(interrupt_ids)
 
 
-def _stream_deltas(text: str) -> list[OutputTextDelta]:
-    """Split committed text into word-boundary chunks for streaming.
-
-    Protocol projections (ACP ``agent_message_chunk``, OpenAI SSE
-    ``response.output_text.delta``) forward each delta as a separate
-    notification.  Splitting on word boundaries (keeping the trailing
-    space) gives the client a natural token-by-token feel without the
-    complexity of true incremental streaming (which would require a
-    discard/reset mechanism for narration text that tool calls
-    supersede).
-    """
-    if not text:
-        return []
-    if len(text) <= 1:
-        return [OutputTextDelta(delta=text)]
-    deltas: list[OutputTextDelta] = []
-    pos = 0
-    while pos < len(text):
-        # Find the next space after the current position.
-        end = text.find(" ", pos)
-        if end == -1:
-            deltas.append(OutputTextDelta(delta=text[pos:]))
-            break
-        # Include the space in this chunk.
-        end += 1
-        deltas.append(OutputTextDelta(delta=text[pos:end]))
-        pos = end
-    return deltas
+#: Historical private name — renderers/tests previously reached for it.
+_extract_ask_user_interrupts = extract_ask_user_interrupts
 
 
 async def iter_nano_runtime_events(
@@ -453,7 +373,7 @@ async def iter_nano_runtime_events(
 
             if mode == "updates" and isinstance(data, dict):
                 if "__interrupt__" in data:
-                    questions, interrupt_ids = _extract_ask_user_interrupts(data["__interrupt__"])
+                    questions, interrupt_ids = extract_ask_user_interrupts(data["__interrupt__"])
                     yield InterruptWaiting(
                         message="Waiting for input…",
                         questions=questions,
@@ -470,7 +390,7 @@ async def iter_nano_runtime_events(
                         last_step_key = key
                         yield Progress(
                             stage="Step",
-                            message=step_message(payload),
+                            message=StepProgressFormatter.message(payload),
                             raw=payload,
                         )
                 continue
@@ -501,7 +421,7 @@ async def iter_nano_runtime_events(
                                 refreshed_calls.add(tc_id)
                                 yield Progress(
                                     stage="Tool",
-                                    message=tool_call_summary(str(name), args),
+                                    message=ToolCallSummarizer.summarize(str(name), args),
                                     raw={
                                         "type": "soothe.tool.started",
                                         "tool": name,
@@ -518,7 +438,7 @@ async def iter_nano_runtime_events(
                     message_obj, "tool_call_chunks", None
                 ):
                     continue
-                text = ai_text(message_obj)
+                text = AiTextExtractor.text(message_obj)
                 if text:
                     if text.startswith(answer):
                         delta = text[len(answer) :]
@@ -549,9 +469,9 @@ async def iter_nano_runtime_events(
                     or "tool"
                 )
                 status = getattr(message_obj, "status", None)
-                err_detail = tool_result_error_detail(message_obj.content)
+                err_detail = ToolResultInspector.error_detail(message_obj.content)
                 ok = status != "error" and err_detail is None
-                detail = simplify_tool_error(err_detail) if err_detail else None
+                detail = ToolResultInspector.simplify_error(err_detail) if err_detail else None
                 if str(name) in _QUIET_TOOLS and ok:
                     # Plan bookkeeping already surfaced as a step event.
                     continue
@@ -561,7 +481,7 @@ async def iter_nano_runtime_events(
                     call_id=call,
                     args=tc_args or None,
                     detail=detail,
-                    preview=detail or preview_text(message_obj.content),
+                    preview=detail or ToolResultInspector.preview(message_obj.content),
                 )
 
         if answer:
@@ -569,7 +489,7 @@ async def iter_nano_runtime_events(
             # projections (ACP, OpenAI SSE) can forward multiple
             # agent_message_chunk / response.output_text.delta events instead
             # of a single monolithic one.
-            for delta in _stream_deltas(answer):
+            for delta in OutputTextChunker.word_deltas(answer):
                 yield delta
         yield RunCompleted(output_text=answer)
     except Exception as exc:  # noqa: BLE001

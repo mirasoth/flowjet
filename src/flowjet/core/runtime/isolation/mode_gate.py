@@ -5,12 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from flowjet.core.backends.isolation.errors import IsolationError
-
-
-def _requested_mode(metadata: dict[str, Any] | None) -> str:
-    raw = (metadata or {}).get("interaction_mode", "agent")
-    return raw if raw in ("agent", "ask") else "agent"
+from flowjet.core.modes import InteractionMode
+from flowjet.core.runtime.isolation.errors import IsolationError
 
 
 class InteractionModeGate:
@@ -21,7 +17,7 @@ class InteractionModeGate:
         self._pinned: dict[str, str] = {}
 
     async def resolve(self, session: str, metadata: dict[str, Any] | None) -> str:
-        requested = _requested_mode(metadata)
+        requested = InteractionMode.from_metadata(metadata)
         async with self._lock:
             pinned = self._pinned.get(session)
             if pinned is None:

@@ -5,18 +5,19 @@ from __future__ import annotations
 import asyncio
 import sys
 import types
-from pathlib import Path
-from typing import Any
+from collections.abc import AsyncIterator, Callable
+from pathlib import Path, PurePosixPath
+from typing import ClassVar, cast
 
 import pytest
 
-from flowjet.core.backends.tool_sandbox import (
+from flowjet.core.sandbox import (
     ArcBoxToolSandboxManager,
     SandboxAwareWorkspaceResolver,
+    SandboxSettingsLoader,
     ToolSandboxSettings,
-    load_tool_sandbox_settings,
-    parse_sandbox_section,
 )
+from flowjet.server.config import Settings
 
 # ---------------------------------------------------------------------------
 # Fake arcbox SDK
@@ -25,23 +26,23 @@ from flowjet.core.backends.tool_sandbox import (
 
 class FakeEntry:
     def __init__(self, name: str, kind: str) -> None:
-        self.name = name
-        self.kind = kind
+        self.name: str = name
+        self.kind: str = kind
 
 
 class FakeFiles:
     def __init__(self, tree: dict[str, bytes]) -> None:
-        self.tree = tree
+        self.tree: dict[str, bytes] = tree
         self.write_calls: list[str] = []
 
-    async def mkdir(self, path: Any) -> None:
-        self.tree.setdefault(str(path) + "/.dir", b"")
+    async def mkdir(self, path: PurePosixPath | str) -> None:
+        _ = self.tree.setdefault(str(path) + "/.dir", b"")
 
-    async def write_bytes(self, path: Any, data: bytes) -> None:
+    async def write_bytes(self, path: PurePosixPath | str, data: bytes) -> None:
         self.tree[str(path)] = bytes(data)
         self.write_calls.append(str(path))
 
-    async def list(self, path: Any) -> list[FakeEntry]:
+    async def list(self, path: PurePosixPath | str) -> list[FakeEntry]:
         prefix = str(path).rstrip("/") + "/"
         children: dict[str, str] = {}
         for name in self.tree:
@@ -52,28 +53,33 @@ class FakeFiles:
             children[prefix + head] = "directory" if "/" in rest else "file"
         return [FakeEntry(name, kind) for name, kind in children.items()]
 
-    async def read_bytes(self, path: Any) -> bytes:
+    async def read_bytes(self, path: PurePosixPath | str) -> bytes:
         return self.tree[str(path)]
 
 
 class FakeSandbox:
     def __init__(self, sandbox_id: str) -> None:
-        self.id = sandbox_id
-        self.files = FakeFiles({})
-        self.killed = False
+        self.id: str = sandbox_id
+        self.files: FakeFiles = FakeFiles({})
+        self.killed: bool = False
 
     async def kill(self) -> None:
         self.killed = True
 
 
-class FakeAsyncArcBox:
-    instances: list[FakeAsyncArcBox] = []
+class FakeConnection:
+    def __init__(self, **kwargs: str) -> None:
+        self.kwargs: dict[str, str] = kwargs
 
-    def __init__(self, connection: Any = None) -> None:
-        self.connection = connection
-        self.create_calls: list[dict[str, Any]] = []
+
+class FakeAsyncArcBox:
+    instances: ClassVar[list[FakeAsyncArcBox]] = []
+
+    def __init__(self, connection: FakeConnection | None = None) -> None:
+        self.connection: FakeConnection | None = connection
+        self.create_calls: list[dict[str, str | int | bool]] = []
         self.sandboxes: list[FakeSandbox] = []
-        self.closed = False
+        self.closed: bool = False
         FakeAsyncArcBox.instances.append(self)
 
     async def create(
@@ -106,12 +112,7 @@ class FakeAsyncArcBox:
 def fake_arcbox(monkeypatch: pytest.MonkeyPatch) -> type[FakeAsyncArcBox]:
     FakeAsyncArcBox.instances = []
     module = types.ModuleType("arcbox")
-
-    class Connection:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
-
-    setattr(module, "Connection", Connection)
+    setattr(module, "Connection", FakeConnection)
     setattr(module, "AsyncArcBox", FakeAsyncArcBox)
     monkeypatch.setitem(sys.modules, "arcbox", module)
     return FakeAsyncArcBox
@@ -120,10 +121,10 @@ def fake_arcbox(monkeypatch: pytest.MonkeyPatch) -> type[FakeAsyncArcBox]:
 def make_workspace(tmp_path: Path) -> Path:
     ws = tmp_path / "ws"
     (ws / "sub").mkdir(parents=True)
-    (ws / "a.txt").write_text("alpha")
-    (ws / "sub" / "b.txt").write_text("beta")
+    _ = (ws / "a.txt").write_text("alpha")
+    _ = (ws / "sub" / "b.txt").write_text("beta")
     (ws / "__pycache__").mkdir()
-    (ws / "__pycache__" / "junk.pyc").write_text("junk")
+    _ = (ws / "__pycache__" / "junk.pyc").write_text("junk")
     return ws
 
 
@@ -133,13 +134,13 @@ def make_workspace(tmp_path: Path) -> Path:
 
 
 def test_parse_defaults_to_disabled() -> None:
-    assert parse_sandbox_section(None).enabled is False
-    assert parse_sandbox_section("nonsense").enabled is False
-    assert parse_sandbox_section({}).enabled is False
+    assert SandboxSettingsLoader.parse_section(None).enabled is False
+    assert SandboxSettingsLoader.parse_section("nonsense").enabled is False
+    assert SandboxSettingsLoader.parse_section({}).enabled is False
 
 
 def test_parse_reads_flowjet_keys_and_ignores_nano_keys() -> None:
-    settings = parse_sandbox_section(
+    settings = SandboxSettingsLoader.parse_section(
         {
             "enabled": True,
             "image": "flowjet-server:latest",
@@ -168,32 +169,32 @@ def test_parse_reads_flowjet_keys_and_ignores_nano_keys() -> None:
 
 
 @pytest.mark.parametrize(
-    "overrides",
+    "factory",
     [
-        {"enabled": True},  # no image
-        {"enabled": True, "image": "   "},
-        {"vcpus": 0},
-        {"mem_mib": 64},
-        {"max_sandboxes": 0},
+        lambda: ToolSandboxSettings(enabled=True),  # no image
+        lambda: ToolSandboxSettings(enabled=True, image="   "),
+        lambda: ToolSandboxSettings(vcpus=0),
+        lambda: ToolSandboxSettings(mem_mib=64),
+        lambda: ToolSandboxSettings(max_sandboxes=0),
     ],
 )
-def test_parse_rejects_invalid_settings(overrides: dict[str, Any]) -> None:
+def test_parse_rejects_invalid_settings(factory: Callable[[], ToolSandboxSettings]) -> None:
     with pytest.raises(ValueError):
-        ToolSandboxSettings(**overrides)
+        _ = factory()
 
 
 def test_load_settings_requires_existing_explicit_path(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
-        load_tool_sandbox_settings(tmp_path / "missing.yml")
+        _ = SandboxSettingsLoader.load(tmp_path / "missing.yml")
 
 
 def test_load_settings_from_explicit_path(tmp_path: Path) -> None:
     path = tmp_path / "nano.yml"
-    path.write_text(
+    _ = path.write_text(
         "models:\n  default: gpt-x\nsandbox:\n  enabled: true\n  image: img:1\n  vcpus: 3\n",
         encoding="utf-8",
     )
-    settings = load_tool_sandbox_settings(path)
+    settings = SandboxSettingsLoader.load(path)
     assert settings.enabled is True
     assert settings.image == "img:1"
     assert settings.vcpus == 3
@@ -205,18 +206,18 @@ def test_load_settings_from_default_path(tmp_path: Path, monkeypatch: pytest.Mon
     default = tmp_path / "nano.yml"
     monkeypatch.setattr(flowjet.home, "default_config_path", lambda: default)
 
-    assert load_tool_sandbox_settings(None).enabled is False  # no file at all
+    assert SandboxSettingsLoader.load(None).enabled is False  # no file at all
 
-    default.write_text("sandbox:\n  enabled: true\n  image: img\n", encoding="utf-8")
-    settings = load_tool_sandbox_settings(None)
+    _ = default.write_text("sandbox:\n  enabled: true\n  image: img\n", encoding="utf-8")
+    settings = SandboxSettingsLoader.load(None)
     assert settings.enabled is True and settings.image == "img"
 
 
 def test_load_settings_rejects_invalid_yaml(tmp_path: Path) -> None:
     path = tmp_path / "nano.yml"
-    path.write_text("sandbox: [unclosed", encoding="utf-8")
+    _ = path.write_text("sandbox: [unclosed", encoding="utf-8")
     with pytest.raises(ValueError):
-        load_tool_sandbox_settings(path)
+        _ = SandboxSettingsLoader.load(path)
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +272,7 @@ async def test_reopen_without_changes_skips_push(
 
         # Host-side change between sessions (e.g. new material synced in):
         # the next open pushes exactly the changed file.
-        (ws / "a.txt").write_text("alpha-2")
+        _ = (ws / "a.txt").write_text("alpha-2")
         await manager.open_workspace(str(ws))
         assert files.write_calls == ["/workspace/a.txt"]
         assert files.tree["/workspace/a.txt"] == b"alpha-2"
@@ -289,7 +290,7 @@ async def test_second_concurrent_open_skips_push(
         await manager.open_workspace(str(ws))
         files = fake_arcbox.instances[0].sandboxes[0].files
         files.write_calls.clear()
-        (ws / "a.txt").write_text("peer-active")
+        _ = (ws / "a.txt").write_text("peer-active")
 
         # A peer session is mid-run: the push must not clobber live guest state.
         await manager.open_workspace(str(ws))
@@ -340,21 +341,20 @@ async def test_close_pulls_only_when_last_run_ends(
         await manager.shutdown()
 
 
+@pytest.mark.usefixtures("fake_arcbox")
 @pytest.mark.asyncio
 async def test_backend_for_binds_and_caches(
-    fake_arcbox: type[FakeAsyncArcBox],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pytest.importorskip("soothe_nano")
     import importlib
 
     sandbox_module = importlib.import_module("soothe_nano.sandbox")
 
-    captured: list[dict[str, Any]] = []
+    captured: list[dict[str, object]] = []
 
     class FakeArcBoxBackend:
-        def __init__(self, **kwargs: Any) -> None:
+        def __init__(self, **kwargs: object) -> None:
             captured.append(kwargs)
 
     monkeypatch.setattr(sandbox_module, "ArcBoxBackend", FakeArcBoxBackend)
@@ -368,7 +368,7 @@ async def test_backend_for_binds_and_caches(
             manager.backend_for(str(ws))  # not opened yet
 
         await manager.open_workspace(str(ws))
-        backend = manager.backend_for(str(ws))
+        backend = cast(object, manager.backend_for(str(ws)))
         assert captured == [
             {
                 "sandbox_id": "sbx-0",
@@ -379,7 +379,7 @@ async def test_backend_for_binds_and_caches(
                 "connect_timeout": 60.0,
             }
         ]
-        assert manager.backend_for(str(ws)) is backend  # cached per lease
+        assert cast(object, manager.backend_for(str(ws))) is backend  # cached per lease
         assert manager.guest_workspace == "/data"
     finally:
         await manager.shutdown()
@@ -413,9 +413,9 @@ async def test_idle_reaper_kills_stale_sandboxes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import flowjet.core.backends.tool_sandbox as ts
+    import flowjet.core.sandbox.arbox as arbox_mod
 
-    monkeypatch.setattr(ts, "_REAPER_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(arbox_mod, "_REAPER_INTERVAL_SECONDS", 0.05)
     ws = make_workspace(tmp_path)
     manager = ArcBoxToolSandboxManager(
         ToolSandboxSettings(enabled=True, image="img:1", idle_timeout_seconds=0.01)
@@ -461,28 +461,29 @@ class RecordingResolver:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def resolve(self, session: str, metadata: dict[str, Any] | None = None) -> Path:
+    def resolve(self, _session: str, _metadata: dict[str, object] | None = None) -> Path:
         return Path("/tmp/rec-ws")
 
-    async def open_session(self, session: str, workspace: Path) -> None:
+    async def open_session(self, _session: str, _workspace: Path) -> None:
         self.calls.append("inner-open")
 
-    async def close_session(self, session: str, workspace: Path) -> None:
+    async def close_session(self, _session: str, _workspace: Path) -> None:
         self.calls.append("inner-close")
 
     async def shutdown(self) -> None:
         self.calls.append("inner-shutdown")
 
 
-class RecordingManager(ArcBoxToolSandboxManager):
+class RecordingManager:
+    """Duck-typed stand-in that only records lifecycle calls."""
+
     def __init__(self) -> None:
-        super().__init__(ToolSandboxSettings(enabled=True, image="img"))
         self.calls: list[str] = []
 
-    async def open_workspace(self, workspace: str) -> None:
+    async def open_workspace(self, _workspace: str) -> None:
         self.calls.append("manager-open")
 
-    async def close_workspace(self, workspace: str) -> None:
+    async def close_workspace(self, _workspace: str) -> None:
         self.calls.append("manager-close")
 
     async def shutdown(self) -> None:
@@ -492,7 +493,8 @@ class RecordingManager(ArcBoxToolSandboxManager):
 @pytest.mark.asyncio
 async def test_resolver_orders_staging_around_sync_lifecycle() -> None:
     inner = RecordingResolver()
-    manager = RecordingManager()
+    fake_manager = RecordingManager()
+    manager = cast(ArcBoxToolSandboxManager, cast(object, fake_manager))
     resolver = SandboxAwareWorkspaceResolver(inner, manager)
 
     assert resolver.resolve("s") == Path("/tmp/rec-ws")
@@ -503,16 +505,22 @@ async def test_resolver_orders_staging_around_sync_lifecycle() -> None:
     # Open: sync materializes first, then push into the guest.
     # Close: guest pull first, then the sync checkpoint sees the outputs.
     assert inner.calls == ["inner-open", "inner-close", "inner-shutdown"]
-    assert manager.calls == ["manager-open", "manager-close", "manager-shutdown"]
+    assert fake_manager.calls == [
+        "manager-open",
+        "manager-close",
+        "manager-shutdown",
+    ]
 
 
-@pytest.mark.asyncio
-async def test_resolver_delegates_unknown_attributes() -> None:
+def test_resolver_delegates_unknown_attributes() -> None:
     class Inner:
-        marker = "delegated"
+        marker: str = "delegated"
 
-    resolver = SandboxAwareWorkspaceResolver(Inner(), RecordingManager())
-    assert resolver.marker == "delegated"
+    resolver = SandboxAwareWorkspaceResolver(
+        Inner(),
+        cast(ArcBoxToolSandboxManager, cast(object, RecordingManager())),
+    )
+    assert cast(str, resolver.marker) == "delegated"
 
 
 # ---------------------------------------------------------------------------
@@ -527,36 +535,43 @@ async def test_nano_adapter_binds_sandbox_and_uses_guest_workspace(
     pytest.importorskip("langchain_core", reason="nano extra not installed")
     from langchain_core.messages import AIMessage
 
-    from flowjet.core.backends.isolation.request import IsolatedRunRequest
-    from flowjet.core.bridges.nano import adapter as nano_adapter_module
+    from flowjet.core.bridges import base as bridge_base
     from flowjet.core.bridges.nano.adapter import NanoAgentAdapter
+    from flowjet.core.events import RunCompleted
+    from flowjet.core.runtime.isolation.request import IsolatedRunRequest
 
     class StubAgent:
         def __init__(self) -> None:
-            self.last_config: dict[str, Any] | None = None
+            self.last_config: dict[str, object] | None = None
 
-        async def astream(self, _input: Any, **kwargs: Any):
-            self.last_config = kwargs.get("config")
+        async def astream(
+            self, _input: object, **kwargs: object
+        ) -> AsyncIterator[tuple[str, str, tuple[AIMessage, dict[str, object]]]]:
+            self.last_config = cast("dict[str, object] | None", kwargs.get("config"))
             yield ("ns", "messages", (AIMessage(content="ok"), {}))
 
-    built: list[dict[str, Any]] = []
+    built: list[dict[str, object | None]] = []
+    agents: list[StubAgent] = []
 
-    def fake_create(config_path: Any, *, sandbox: Any = None) -> StubAgent:
+    def fake_create(_config_path: str | Path | None, *, sandbox: object | None = None) -> StubAgent:
         built.append({"sandbox": sandbox})
-        return StubAgent()
+        agent = StubAgent()
+        agents.append(agent)
+        return agent
 
-    monkeypatch.setattr(nano_adapter_module, "create_nano_agent_instance", fake_create)
+    monkeypatch.setattr(bridge_base, "create_server_agent_instance", fake_create)
 
     class FakeManager:
-        guest_workspace = "/workspace"
+        guest_workspace: str = "/workspace"
 
         def __init__(self) -> None:
-            self.backends: dict[str, Any] = {str(tmp_path): object()}
+            self.backends: dict[str, object] = {str(tmp_path): object()}
 
-        def backend_for(self, workspace: str) -> Any:
+        def backend_for(self, workspace: str) -> object:
             return self.backends[workspace]
 
-    manager: Any = FakeManager()
+    fake_manager = FakeManager()
+    manager = cast(ArcBoxToolSandboxManager, cast(object, fake_manager))
     adapter = NanoAgentAdapter(sandbox_manager=manager)
 
     req = IsolatedRunRequest(
@@ -567,15 +582,15 @@ async def test_nano_adapter_binds_sandbox_and_uses_guest_workspace(
         workspace=tmp_path,
     )
     events = [event async for event in adapter.astream(req)]
-    from flowjet.core.events import RunCompleted
-
     completed = [e for e in events if isinstance(e, RunCompleted)]
     assert any(e.output_text == "ok" for e in completed)
-    assert built == [{"sandbox": manager.backends[str(tmp_path)]}]
+    assert built == [{"sandbox": fake_manager.backends[str(tmp_path)]}]
 
-    agent = adapter._ensure(workspace=str(tmp_path))
+    agent = agents[0]
     assert agent.last_config is not None
-    assert agent.last_config["configurable"]["workspace"] == "/workspace"
+    config = agent.last_config
+    configurable = cast("dict[str, object]", config["configurable"])
+    assert configurable["workspace"] == "/workspace"
 
     # Same workspace reuses the agent; a different one rebuilds.
     req2 = IsolatedRunRequest(
@@ -585,7 +600,7 @@ async def test_nano_adapter_binds_sandbox_and_uses_guest_workspace(
         model="default",
         workspace=tmp_path / "other",
     )
-    manager.backends[str(tmp_path / "other")] = object()
+    fake_manager.backends[str(tmp_path / "other")] = object()
     events = [event async for event in adapter.astream(req2)]
     assert len(events) >= 1
     assert len(built) == 2
@@ -597,37 +612,36 @@ async def test_nano_adapter_binds_sandbox_and_uses_guest_workspace(
 # ---------------------------------------------------------------------------
 
 
-def _settings_for(tmp_path: Path, nano_yml: str) -> Any:
-    from flowjet.server.config import Settings
-
+def _settings_for(tmp_path: Path, nano_yml: str) -> Settings:
     path = tmp_path / "nano.yml"
-    path.write_text(nano_yml, encoding="utf-8")
+    _ = path.write_text(nano_yml, encoding="utf-8")
     return Settings(home=str(tmp_path / "home"), models="default", nano_config=str(path))
 
 
 def test_build_sandbox_manager_disabled_by_default(tmp_path: Path) -> None:
-    from flowjet.server.http.app import _build_sandbox_manager
+    from flowjet.server.http.app import build_sandbox_manager
 
     settings = _settings_for(tmp_path, "models:\n  default: gpt-x\n")
-    assert _build_sandbox_manager(settings) is None
+    assert build_sandbox_manager(settings) is None
 
 
-def test_build_sandbox_manager_enabled(tmp_path: Path, fake_arcbox: type[FakeAsyncArcBox]) -> None:
-    from flowjet.server.http.app import _build_sandbox_manager, _build_workspace_resolver
+@pytest.mark.usefixtures("fake_arcbox")
+def test_build_sandbox_manager_enabled(tmp_path: Path) -> None:
+    from flowjet.server.http.app import build_sandbox_manager, build_workspace_resolver
 
     settings = _settings_for(
         tmp_path,
         "sandbox:\n  enabled: true\n  image: flowjet-server:latest\n",
     )
-    manager = _build_sandbox_manager(settings)
+    manager = build_sandbox_manager(settings)
     assert manager is not None
     assert manager.settings.image == "flowjet-server:latest"
 
     # Without workspace sync the local resolver is wrapped for staging.
-    resolver = _build_workspace_resolver(settings, manager)
+    resolver = build_workspace_resolver(settings, manager)
     assert isinstance(resolver, SandboxAwareWorkspaceResolver)
 
     # Sandbox config missing an image fails loud at startup.
     bad = _settings_for(tmp_path, "sandbox:\n  enabled: true\n")
     with pytest.raises(ValueError, match="sandbox.image"):
-        _build_sandbox_manager(bad)
+        _ = build_sandbox_manager(bad)

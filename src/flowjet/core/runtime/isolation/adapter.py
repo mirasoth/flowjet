@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable
 from typing import Protocol
 
-from flowjet.core.backends.isolation.request import IsolatedRunRequest
 from flowjet.core.events import (
     OutputTextDelta,
     Progress,
@@ -16,6 +15,7 @@ from flowjet.core.events import (
     ToolStarted,
     UsageInfo,
 )
+from flowjet.core.runtime.isolation.request import IsolatedRunRequest
 
 AdapterFactory = Callable[[], "AgentAdapter"]
 

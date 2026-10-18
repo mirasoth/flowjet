@@ -16,9 +16,9 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from flowjet.core.backends.isolation.adapter import AdapterFactory, AgentAdapter
-from flowjet.core.backends.isolation.request import IsolatedRunRequest
 from flowjet.core.events import RunFailed, RuntimeEvent
+from flowjet.core.runtime.isolation.adapter import AdapterFactory, AgentAdapter
+from flowjet.core.runtime.isolation.request import IsolatedRunRequest
 
 logger = logging.getLogger(__name__)
 

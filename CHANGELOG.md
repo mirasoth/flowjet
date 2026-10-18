@@ -10,6 +10,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`flowjet.core` layout restructure.** The runtime-protocol package is
+  regrouped by responsibility; behavior is unchanged:
+  - `core/backends/` → **`core/runtime/`** (the `RuntimeBackend`
+    implementations: `direct` / `isolation` / `fake`); `runtime/isolation`
+    keeps its module structure.
+  - `core/backends/tool_sandbox.py` → **`core/sandbox/`** split into
+    `settings` (`ToolSandboxSettings` + `SandboxSettingsLoader`),
+    `arbox` (`ArcBoxToolSandboxManager` + the new `WorkspaceStager` host↔guest
+    transfer class) and `resolver` (`SandboxAwareWorkspaceResolver`).
+  - `core/bootstrap.py` → **`core/agent/`** split into `config`
+    (`FlowJetConfigLoader`), `skills` (`BuiltinSkills`), `workspace`
+    (`Workspaces` / `Checkpointers`), `factory` (`AgentFactory`,
+    `ModeRoutedSootheAgent`) and `wiring` (`ServerRuntimeBuilder`, absorbing
+    the server-assembly helpers from `server/http/app.py`).
+  - `core/tool_stream.py` + `core/tool_results.py` → **`core/streaming/`**
+    (`ToolCallArgAccumulator`, `PartialArgsParser`, `ToolResultInspector`) plus
+    `streaming/presentation.py` (`ToolCallSummarizer`,
+    `StepProgressFormatter`, `OutputTextChunker`, `AiTextExtractor` — moved out
+    of the stream mapper).
+  - `core/backend.py` → **`core/backend_config.py`** (backend *selection*; the
+    implementations live in `core/runtime/`).
+  - The duplicated nano/soothe adapter lifecycle and the two identical
+    isolating-backend factories are collapsed into
+    `core/bridges/base.py` (`AgentAdapterBase`, `create_server_agent_instance`,
+    `IsolatingBackendBuilder`); `NanoAgentAdapter` / `SootheAgentAdapter` are
+    now thin subclasses. `InteractionMode.from_metadata()` is the single
+    request-mode parser (previously duplicated in the stream mapper and the
+    server mode gate); `mapping.extract_ask_user_interrupts` is public API.
+  - Standalone helper functions across these modules were regrouped into
+    classes; import paths for `FlowJetConfigLoader.load`,
+    `SandboxSettingsLoader.load`, `ToolResultInspector.*`,
+    `PartialArgsParser.parse` and `InteractionMode.from_metadata` replace the
+    old free functions. `core/__init__.py` now also exports `Backend` and
+    `resolve_backend`.
+
 ### Added
 
 - **ArcBox tool sandbox (RFC-005).** Tool calls — shell commands and workspace

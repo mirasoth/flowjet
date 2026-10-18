@@ -7,21 +7,31 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from flowjet.core.backends.isolation.adapter import AdapterFactory
-from flowjet.core.backends.isolation.admission import SessionAdmission
-from flowjet.core.backends.isolation.mode_gate import InteractionModeGate
-from flowjet.core.backends.isolation.pool import PoolSettings, ThreadPool
-from flowjet.core.backends.isolation.request import IsolatedRunRequest
-from flowjet.core.backends.isolation.workspace import WorkspaceResolver
 from flowjet.core.events import ModelInfo, RunRequest, RuntimeEvent
+from flowjet.core.runtime.isolation.adapter import AdapterFactory
+from flowjet.core.runtime.isolation.admission import SessionAdmission
+from flowjet.core.runtime.isolation.mode_gate import InteractionModeGate
+from flowjet.core.runtime.isolation.pool import PoolSettings, ThreadPool
+from flowjet.core.runtime.isolation.request import IsolatedRunRequest
+from flowjet.core.runtime.isolation.workspace import WorkspaceResolver
 
 
 class IsolatingRuntimeBackend:
     """Pool-backed RuntimeBackend for the soothe/nano AgentAdapter.
 
-    The workspace resolver is injectable (Phase 2): callers can pass a
+    Concurrency layering (two gates, each load-bearing at its layer):
+
+    * :class:`SessionAdmission` serializes the whole session *lifecycle*
+      (workspace open → run → close) in :meth:`stream_run` — concurrent turns
+      of one session never interleave workspace materialization or
+      checkpointing.
+    * :class:`ThreadPool` independently serializes same-session submits for
+      direct pool users; under this backend the pool gate never fires because
+      admission already holds.
+
+    The workspace resolver is injectable: callers can pass a
     :class:`SyncAwareWorkspaceResolver` to enable fsspec workspace sync.
-    The default is the local-only :class:`WorkspaceResolver` (Phase 1).
+    The default is the local-only :class:`WorkspaceResolver`.
     """
 
     def __init__(

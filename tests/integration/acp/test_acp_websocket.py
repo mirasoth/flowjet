@@ -12,7 +12,7 @@ import json
 import pytest
 from starlette.testclient import TestClient
 
-from flowjet.core.backends.fake import FakeRuntimeBackend
+from flowjet.core.runtime.fake import FakeRuntimeBackend
 from flowjet.server.config import Settings
 from flowjet.server.http.app import create_app
 

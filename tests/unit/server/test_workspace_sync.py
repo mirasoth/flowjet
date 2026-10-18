@@ -14,7 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from flowjet.core.backends.isolation import (
+from flowjet.core.events import RunCompleted, RunRequest, RunStarted
+from flowjet.core.runtime.isolation import (
     FakeAgentAdapter,
     IsolatedRunRequest,
     IsolatingRuntimeBackend,
@@ -22,7 +23,6 @@ from flowjet.core.backends.isolation import (
     SyncAwareWorkspaceResolver,
     WorkspaceResolver,
 )
-from flowjet.core.events import RunCompleted, RunRequest, RunStarted
 
 # ---------------------------------------------------------------------------
 # WorkspaceResolver lifecycle hooks (base class — Phase 1 no-ops)
@@ -624,23 +624,23 @@ def test_settings_workspace_sync_from_env(monkeypatch):
 def test_build_backend_returns_none_resolver_when_no_sync(tmp_path: Path):
     """build_backend without sync_source passes workspace_resolver=None."""
     from flowjet.server.config import Settings
-    from flowjet.server.http.app import _build_workspace_resolver
+    from flowjet.server.http.app import build_workspace_resolver
 
     s = Settings(home=str(tmp_path))
-    resolver = _build_workspace_resolver(s)
+    resolver = build_workspace_resolver(s)
     assert resolver is None
 
 
 def test_build_backend_builds_sync_resolver_when_configured(tmp_path: Path, monkeypatch):
     """build_backend with sync_source constructs a SyncAwareWorkspaceResolver."""
     from flowjet.server.config import Settings
-    from flowjet.server.http.app import _build_workspace_resolver
+    from flowjet.server.http.app import build_workspace_resolver
 
     monkeypatch.setenv("FLOWJET_HOME", str(tmp_path))
     monkeypatch.setenv("FLOWJET_WORKSPACE_SYNC_SOURCE", "s3://bucket/flowjet")
     monkeypatch.setenv("FLOWJET_WORKSPACE_CAS_ROOT", str(tmp_path / "cas"))
     s = Settings()
-    resolver = _build_workspace_resolver(s)
+    resolver = build_workspace_resolver(s)
     assert resolver is not None
     assert isinstance(resolver, SyncAwareWorkspaceResolver)
     assert resolver._sync_source == "s3://bucket/flowjet"

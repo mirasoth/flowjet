@@ -26,6 +26,11 @@ dual-mode routing on the soothe backend. Hence both surfaces default to
 Both accept ``soothe`` or ``nano`` (case-insensitive); anything else is a hard
 error rather than a silent fallback, so a typo can never quietly run the wrong
 runtime. Set ``FLOWJET_SERVER_BACKEND=nano`` to fall back to the nano runtime.
+
+Module note: this module is named ``backend_config`` (not ``backend``) because
+it selects the backend — the ``RuntimeBackend`` implementations live in
+:mod:`flowjet.core.runtime` and the execution-backend seam of the agent
+builders is a separate concept again (see :mod:`flowjet.core.sandbox`).
 """
 
 from __future__ import annotations

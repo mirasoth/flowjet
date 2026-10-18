@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from flowjet.core.backends.isolation import (
+from flowjet.core.runtime.isolation import (
     FakeAgentAdapter,
     IsolatingRuntimeBackend,
     PoolSettings,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from flowjet.core.backends.fake import FakeRuntimeBackend
 from flowjet.core.events import (
     OutputTextDelta,
     Progress,
@@ -12,6 +11,7 @@ from flowjet.core.events import (
     ToolCompleted,
     ToolStarted,
 )
+from flowjet.core.runtime.fake import FakeRuntimeBackend
 
 
 async def test_fake_stream_order() -> None:

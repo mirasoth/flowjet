@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from flowjet.core.backend import Backend
-from flowjet.core.bootstrap import load_config
+from flowjet.core.agent.config import FlowJetConfigLoader
+from flowjet.core.backend_config import Backend
 from flowjet.home import (
     DEFAULT_FLOWJET_HOME,
     default_config_path,
@@ -16,6 +16,8 @@ from flowjet.home import (
     legacy_soothe_home,
     migrate_legacy_config,
 )
+
+load_config = FlowJetConfigLoader.load
 
 _NANO_YML = """
 providers:

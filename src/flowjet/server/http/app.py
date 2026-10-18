@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from flowjet import __version__
-from flowjet.core.backend import Backend, resolve_backend
-from flowjet.core.bridges.nano import build_isolating_nano_backend
-from flowjet.core.bridges.soothe import build_isolating_soothe_backend
-from flowjet.core.modes import Surface
+from flowjet.core.agent.wiring import ServerRuntimeBuilder
 from flowjet.core.protocol import RuntimeBackend
 from flowjet.server.acp import build_acp_agent_factory, create_acp_router
 from flowjet.server.config import Settings
@@ -23,43 +20,38 @@ from flowjet.server.openai_compat.routes import create_router
 from flowjet.server.openai_compat.service import ResponseService
 from flowjet.server.openai_compat.store import InMemoryRunStore
 
+if TYPE_CHECKING:
+    from flowjet.core.runtime.isolation.workspace import (
+        SyncAwareWorkspaceResolver,
+        WorkspaceResolver,
+    )
+    from flowjet.core.sandbox.arbox import ArcBoxToolSandboxManager
+    from flowjet.core.sandbox.resolver import SandboxAwareWorkspaceResolver
+
 
 def build_backend(settings: Settings) -> RuntimeBackend:
     """Build the runtime backend based on the resolved server backend.
 
-    Defaults to ``soothe`` (host runtime via ``ModeRoutedSootheAgent``);
-    falls back to ``nano`` when ``FLOWJET_SERVER_BACKEND=nano`` is set.
-
-    When ``settings.workspace_sync_source`` is set, a
-    :class:`SyncAwareWorkspaceResolver` is constructed and injected —
-    enabling fsspec workspace sync (Phase 2). Otherwise the default
-    local-only :class:`WorkspaceResolver` is used (Phase 1).
-
-    When the nano.yml enables the ``sandbox:`` section, tool calls run in a
-    per-workspace ArcBox microVM: a
-    :class:`~flowjet.core.backends.tool_sandbox.ArcBoxToolSandboxManager`
-    stages the workspace host↔guest and the adapters bind soothe-nano's
-    sandbox backend at agent build time. The AgentRuntime isolation is
-    unchanged (in-process thread pool).
+    Assembly (sandbox manager, workspace resolver, isolating runtime) lives in
+    :class:`~flowjet.core.agent.wiring.ServerRuntimeBuilder`; this is the
+    Settings → primitives translation shim.
     """
-    backend = resolve_backend(Surface.SERVER)
-    sandbox_manager = _build_sandbox_manager(settings)
-    workspace_resolver = _build_workspace_resolver(settings, sandbox_manager)
-    common = dict(
+    return ServerRuntimeBuilder.build(
         models=settings.model_ids(),
         config_path=settings.nano_config,
         home=settings.home_path(),
-        pool_settings=settings.pool_settings(),
+        cas_root=settings.workspace_cas_root,
+        sync_source=settings.workspace_sync_source,
+        sync_config_path=settings.workspace_sync_config,
+        content_source=settings.workspace_content_source,
         allow_external_workspace=settings.allow_external_workspace,
-        workspace_resolver=workspace_resolver,
-        sandbox_manager=sandbox_manager,
+        pool_settings=settings.pool_settings(),
     )
-    if backend is Backend.SOOTHE:
-        return build_isolating_soothe_backend(**common)
-    return build_isolating_nano_backend(**common)
 
 
-def _build_sandbox_manager(settings: Settings) -> Any:
+def build_sandbox_manager(
+    settings: Settings,
+) -> ArcBoxToolSandboxManager | None:
     """Build the ArcBox tool-sandbox manager from the nano.yml ``sandbox:`` section.
 
     Returns ``None`` when the sandbox is disabled (the default) — behavior is
@@ -67,61 +59,32 @@ def _build_sandbox_manager(settings: Settings) -> Any:
     the section is enabled but misconfigured (missing image) or the arcbox SDK
     is not installed.
     """
-    from flowjet.core.backends.tool_sandbox import (
-        ArcBoxToolSandboxManager,
-        load_tool_sandbox_settings,
-    )
-
-    sandbox_settings = load_tool_sandbox_settings(settings.nano_config)
-    if not sandbox_settings.enabled:
-        return None
-    manager = ArcBoxToolSandboxManager(sandbox_settings)
-    manager.validate_runtime()
-    return manager
+    return ServerRuntimeBuilder.sandbox_manager(settings.nano_config)
 
 
-def _build_workspace_resolver(settings: Settings, sandbox_manager: Any = None) -> Any:
+def build_workspace_resolver(
+    settings: Settings,
+    sandbox_manager: ArcBoxToolSandboxManager | None = None,
+) -> WorkspaceResolver | SyncAwareWorkspaceResolver | SandboxAwareWorkspaceResolver | None:
     """Construct the workspace resolver based on sync and sandbox settings.
 
-    When ``workspace_sync_source`` is set, build a
-    :class:`SyncAwareWorkspaceResolver` backed by an fsspec sync backend.
-    Otherwise the resolver is the default local-only
-    :class:`WorkspaceResolver` (Phase 1 behavior).
-
-    When the tool sandbox is enabled, the resolver is wrapped in a
-    :class:`~flowjet.core.backends.tool_sandbox.SandboxAwareWorkspaceResolver`
+    When ``workspace_sync_source`` is set, a
+    :class:`SyncAwareWorkspaceResolver` backed by an fsspec sync backend is
+    built; otherwise the resolver is the default local-only
+    :class:`WorkspaceResolver`. When the tool sandbox is enabled, the resolver
+    is wrapped in a :class:`~flowjet.core.sandbox.resolver.SandboxAwareWorkspaceResolver`
     so the host↔guest workspace staging runs inside the session lifecycle
     (guest pull before the sync checkpoint).
     """
-    sync_source = settings.workspace_sync_source
-    if sync_source and sync_source.strip():
-        from flowjet.core.backends.isolation.workspace import (
-            SyncAwareWorkspaceResolver,
-        )
-
-        inner: Any = SyncAwareWorkspaceResolver.from_settings(
-            home=settings.home_path(),
-            cas_root=settings.workspace_cas_root,
-            sync_source=sync_source,
-            sync_config_path=settings.workspace_sync_config,
-            allow_external_workspace=settings.allow_external_workspace,
-            content_source=settings.workspace_content_source,
-        )
-    elif sandbox_manager is not None:
-        from flowjet.core.backends.isolation.workspace import WorkspaceResolver
-
-        inner = WorkspaceResolver(
-            settings.home_path(),
-            allow_external_workspace=settings.allow_external_workspace,
-        )
-    else:
-        return None
-
-    if sandbox_manager is None:
-        return inner
-    from flowjet.core.backends.tool_sandbox import SandboxAwareWorkspaceResolver
-
-    return SandboxAwareWorkspaceResolver(inner, sandbox_manager)
+    return ServerRuntimeBuilder.workspace_resolver(
+        home=settings.home_path(),
+        cas_root=settings.workspace_cas_root,
+        sync_source=settings.workspace_sync_source,
+        sync_config_path=settings.workspace_sync_config,
+        content_source=settings.workspace_content_source,
+        allow_external_workspace=settings.allow_external_workspace,
+        sandbox_manager=sandbox_manager,
+    )
 
 
 def create_app(
