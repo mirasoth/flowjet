@@ -24,7 +24,7 @@ CLI_ALIASES = frozenset({"fj", "fjf", FORMAL_CLI})
 
 # ---------------------------------------------------------------------------
 # CLI logging — stdlib only, kept here so ``fj -V`` / ``fj -h`` never pay the
-# heavy ``soothe_nano`` / ``flowjet.core.bootstrap`` import cost.
+# heavy ``soothe_nano`` / ``flowjet.core.agent`` import cost.
 # ---------------------------------------------------------------------------
 
 _BROWSER_USE_SETUP_LOGGING = "BROWSER_USE_SETUP_LOGGING"

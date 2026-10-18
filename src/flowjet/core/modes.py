@@ -33,6 +33,18 @@ class InteractionMode(StrEnum):
     ASK = "ask"
     BYPASS = "bypass"
 
+    @classmethod
+    def from_metadata(cls, metadata: dict[str, Any] | None) -> str:
+        """Return ``agent`` or ``ask`` from request metadata (default ``agent``).
+
+        The single parser for request-carried interaction modes — used by the
+        stream mapper and the server's per-session mode gate alike. Unknown
+        values fall back to ``agent``; ``bypass`` is never derived from
+        request metadata (it is a CLI-only escape hatch).
+        """
+        raw = (metadata or {}).get("interaction_mode", cls.AGENT.value)
+        return raw if raw in (cls.AGENT.value, cls.ASK.value) else cls.AGENT.value
+
 
 @dataclass(frozen=True, slots=True)
 class SurfaceProfile:
@@ -91,16 +103,13 @@ def apply_profile(
 ) -> Any:
     """Return a copy of ``config`` with ``profile``'s invariants applied.
 
-    ``backend`` is a :class:`~flowjet.core.backend.Backend` (resolved from the
+    ``backend`` is a :class:`~flowjet.core.backend_config.Backend` (resolved from the
     environment when omitted). It only decides *how* the persona is owned: on
     ``soothe`` the host config's ``agent.assistant_identity`` becomes the single
     source of truth instead of FlowJet's fragment override.
     """
-    from flowjet.core.backend import Backend, resolve_backend
-    from flowjet.core.bootstrap import (
-        default_core_skill_names,
-        register_flowjet_builtin_skills,
-    )
+    from flowjet.core.agent.skills import BuiltinSkills
+    from flowjet.core.backend_config import Backend, resolve_backend
     from flowjet.core.identity import (
         FLOWJET_ASSISTANT_NAME,
         configure_soothe_identity,
@@ -108,7 +117,7 @@ def apply_profile(
     )
 
     if profile.register_builtin_skills:
-        register_flowjet_builtin_skills()
+        BuiltinSkills.register()
 
     install_flowjet_identity()
 
@@ -141,7 +150,7 @@ def apply_profile(
 
     if profile.seed_core_skills and config.progressive_skills.core_skills is None:
         updates["progressive_skills"] = config.progressive_skills.model_copy(
-            update={"core_skills": default_core_skill_names()}
+            update={"core_skills": BuiltinSkills.core_skill_names()}
         )
 
     return config.model_copy(update=updates)

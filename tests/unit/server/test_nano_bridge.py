@@ -23,12 +23,12 @@ pytest.importorskip("langchain_core", reason="nano extra not installed")
 
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage  # noqa: E402
 
-from flowjet.core.backends.isolation.request import IsolatedRunRequest  # noqa: E402
 from flowjet.core.bridges.nano.adapter import (  # noqa: E402
     NanoAgentAdapter,
     create_nano_agent_instance,
 )
 from flowjet.core.bridges.nano.backend import NanoRuntimeBackend  # noqa: E402
+from flowjet.core.runtime.isolation.request import IsolatedRunRequest  # noqa: E402
 
 
 class StubAgent:

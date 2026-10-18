@@ -10,7 +10,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from flowjet.core.backends.isolation.errors import IsolationError
+from flowjet.core.runtime.isolation.errors import IsolationError
 
 logger = logging.getLogger(__name__)
 

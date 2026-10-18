@@ -14,7 +14,13 @@ from pathlib import Path
 
 import pytest
 
-from flowjet.core.backends.isolation import (
+from flowjet.core.events import (
+    OutputTextDelta,
+    RunCompleted,
+    RunFailed,
+    RunStarted,
+)
+from flowjet.core.runtime.isolation import (
     FakeAgentAdapter,
     IsolatedRunRequest,
     IsolationError,
@@ -22,14 +28,8 @@ from flowjet.core.backends.isolation import (
     ThreadPool,
     WorkspaceResolver,
 )
-from flowjet.core.backends.isolation.mode_gate import InteractionModeGate
-from flowjet.core.backends.isolation.pool import _POISON
-from flowjet.core.events import (
-    OutputTextDelta,
-    RunCompleted,
-    RunFailed,
-    RunStarted,
-)
+from flowjet.core.runtime.isolation.mode_gate import InteractionModeGate
+from flowjet.core.runtime.isolation.pool import _POISON
 from flowjet.server.config import Settings
 
 

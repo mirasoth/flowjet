@@ -11,9 +11,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from flowjet.core.bridges.nano.adapter import NanoAgentAdapter, create_nano_agent_instance
-from flowjet.core.bridges.nano.mapping import iter_nano_runtime_events, resolve_interaction_mode
+from flowjet.core.bridges.base import IsolatingBackendBuilder
+from flowjet.core.bridges.nano.adapter import NanoAgentAdapter
+from flowjet.core.bridges.nano.mapping import iter_nano_runtime_events
 from flowjet.core.events import ModelInfo, RunRequest, RuntimeEvent
+from flowjet.core.modes import InteractionMode
 
 
 class NanoRuntimeBackend:
@@ -32,6 +34,8 @@ class NanoRuntimeBackend:
     def _ensure_agent(self) -> Any:
         if self._agent is not None:
             return self._agent
+        from flowjet.core.bridges.nano.adapter import create_nano_agent_instance
+
         self._agent = create_nano_agent_instance(self._config_path)
         return self._agent
 
@@ -56,7 +60,7 @@ class NanoRuntimeBackend:
             input_text=request.input_text,
             workspace=workspace,
             thread_id=session,
-            interaction_mode=resolve_interaction_mode(request.metadata),
+            interaction_mode=InteractionMode.from_metadata(request.metadata),
             resume_value=request.resume_value,
         ):
             yield event
@@ -72,23 +76,17 @@ def build_isolating_nano_backend(
     workspace_resolver: Any = None,
     sandbox_manager: Any | None = None,
 ) -> Any:
-    """Construct IsolatingRuntimeBackend with NanoAgentAdapter factory.
-
-    ``sandbox_manager`` (nano.yml ``sandbox:`` section) runs tool calls in a
-    per-workspace ArcBox microVM via soothe-nano's sandbox backend.
-    """
-    from flowjet.core.backends.isolation import IsolatingRuntimeBackend, PoolSettings
-
-    settings = pool_settings if pool_settings is not None else PoolSettings()
-
-    def factory() -> NanoAgentAdapter:
-        return NanoAgentAdapter(config_path=config_path, sandbox_manager=sandbox_manager)
-
-    return IsolatingRuntimeBackend(
+    """Construct IsolatingRuntimeBackend with a NanoAgentAdapter factory."""
+    return IsolatingBackendBuilder.build(
+        NanoAgentAdapter,
         models=models,
-        adapter_factory=factory,
-        pool_settings=settings,
+        config_path=config_path,
         home=home,
+        pool_settings=pool_settings,
         allow_external_workspace=allow_external_workspace,
         workspace_resolver=workspace_resolver,
+        sandbox_manager=sandbox_manager,
     )
+
+
+__all__ = ["NanoRuntimeBackend", "build_isolating_nano_backend"]

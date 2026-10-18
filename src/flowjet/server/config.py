@@ -7,7 +7,7 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from flowjet.core.backends.isolation.pool import PoolSettings
+from flowjet.core.runtime.isolation.pool import PoolSettings
 
 
 class Settings(BaseSettings):

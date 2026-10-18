@@ -1,8 +1,8 @@
 """CLI agent bootstrap and logging — thin surface over ``flowjet.core``.
 
-Nano bootstrap, config loading and the builtin-skill root now live in
-``flowjet.core.bootstrap``; this module keeps the CLI's historical names so
-``fj``, the completion engine and the test-suite keep working unchanged.
+Config loading, skill registration and agent construction live in the
+``flowjet.core.agent`` package; this module keeps the CLI's historical names
+so ``fj``, the completion engine and the test-suite keep working unchanged.
 """
 
 from __future__ import annotations
@@ -14,20 +14,27 @@ from typing import Any
 from soothe_nano.config import SootheConfig
 
 from flowjet.cli.cli import _CompactConsoleFormatter
-from flowjet.core.bootstrap import (
+from flowjet.core.agent import (
     BUILTIN_SKILLS_DIR,
     FJ_CORE_SKILL_NAMES,
-    create_agent,
-    default_config_path,
-    default_core_skill_names,
-    ensure_workspace,
-    load_config,
-    open_sqlite_checkpointer,
-    register_flowjet_builtin_skills,
+    AgentFactory,
+    BuiltinSkills,
+    Checkpointers,
+    FlowJetConfigLoader,
+    Workspaces,
 )
 from flowjet.core.modes import CLI_PROFILE, apply_profile
 
 logger = logging.getLogger(__name__)
+
+# Historical module-level names (kept for the completion engine and tests):
+load_config = FlowJetConfigLoader.load
+default_config_path = FlowJetConfigLoader.default_path
+default_core_skill_names = BuiltinSkills.core_skill_names
+register_flowjet_builtin_skills = BuiltinSkills.register
+ensure_workspace = Workspaces.ensure
+open_sqlite_checkpointer = Checkpointers.open_sqlite
+create_agent = AgentFactory.create
 
 # ---------------------------------------------------------------------------
 # CLI logging (delegated to ``flowjet.cli.cli`` at call time)
@@ -51,7 +58,7 @@ def silence_after_plugins(*, verbose: bool = False) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Builtin skills (re-exported; owned by flowjet.core.bootstrap)
+# Builtin skills (re-exported; owned by flowjet.core.agent)
 # ---------------------------------------------------------------------------
 
 

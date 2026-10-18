@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from flowjet.core.backends.fake import FakeRuntimeBackend
+from flowjet.core.runtime.fake import FakeRuntimeBackend
 from flowjet.server.config import Settings
 from flowjet.server.http.app import create_app
 

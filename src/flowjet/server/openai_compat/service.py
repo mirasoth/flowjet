@@ -8,9 +8,9 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
-from flowjet.core.backends.isolation.errors import IsolationError
 from flowjet.core.events import RunFailed, RunRequest
 from flowjet.core.protocol import RuntimeBackend
+from flowjet.core.runtime.isolation.errors import IsolationError
 from flowjet.server.openai_compat.errors import OpenAIError
 from flowjet.server.openai_compat.projection import ProjectionEngine
 from flowjet.server.openai_compat.schemas import (

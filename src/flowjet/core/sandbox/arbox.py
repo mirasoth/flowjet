@@ -1,38 +1,4 @@
-"""ArcBox tool sandbox — run agent tool calls in a microVM via soothe-nano 2.0.
-
-Enabled by a ``sandbox:`` section in the flowjet nano.yml. The AgentRuntime
-isolation is unchanged (thread-pool workers in the server process); only the
-*execution surface* moves: shell commands and workspace file operations run
-inside a per-workspace ArcBox Linux microVM through soothe-nano's
-:class:`~soothe_nano.sandbox.ArcBoxBackend`, injected at agent build time.
-The agent loop, LLM calls and credentials stay on the host.
-
-nano.yml keys owned by flowjet (unknown keys are ignored by ``SootheConfig``)::
-
-    sandbox:
-      enabled: true            # flowjet: run tool calls in an arcbox container
-      image: <image ref>       # guest image; must ship python3 + POSIX coreutils
-      vcpus: 2
-      mem_mib: 2048
-      network: true
-      workspace_root: /workspace
-      default_timeout: 120
-      connect_timeout: 60
-      idle_timeout_seconds: 300
-      max_sandboxes: 4
-      api_url: null            # daemon connection; env fallback ARCBOX_API_URL
-      api_key: null            # daemon credential; env fallback ARCBOX_API_KEY
-
-The remaining ``sandbox:`` keys (``on_deny`` / ``placement_overrides`` /
-``max_shuttle_bytes``) belong to soothe-nano's placement policy and are
-consumed by the agent build itself.
-
-Workspace staging: the host workspace directory stays the integration point
-(fsspec sync, backend materials). At session open the host tree is pushed
-into the guest ``workspace_root``; at close the guest tree is pulled back so
-the sync checkpoint and external readers still see agent outputs. Transfers
-skip files whose (size, mtime) match the last snapshot for the sandbox.
-"""
+"""ArcBox microVM lease lifecycle and host↔guest workspace staging."""
 
 from __future__ import annotations
 
@@ -42,6 +8,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+from flowjet.core.sandbox.settings import ToolSandboxSettings
 
 logger = logging.getLogger(__name__)
 
@@ -68,86 +36,6 @@ def _import_arcbox() -> Any:
     return arcbox
 
 
-@dataclass(slots=True)
-class ToolSandboxSettings:
-    """Flowjet-owned ``sandbox:`` keys parsed from the nano.yml."""
-
-    enabled: bool = False
-    # Guest image reference; must ship python3 + POSIX coreutils (the nano
-    # sandbox derives file ops from guest-side execute).
-    image: str | None = None
-    vcpus: int = 2
-    mem_mib: int = 2048
-    network: bool = True
-    workspace_root: str = "/workspace"
-    default_timeout: int = 120
-    connect_timeout: float = 60.0
-    idle_timeout_seconds: float = 300.0
-    max_sandboxes: int = 4
-    api_url: str | None = None
-    api_key: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.enabled and not (self.image and self.image.strip()):
-            raise ValueError(
-                "sandbox.enabled=true in nano.yml requires sandbox.image "
-                "(the guest image reference, e.g. the flowjet-server image)."
-            )
-        if self.max_sandboxes < 1:
-            raise ValueError("sandbox.max_sandboxes must be >= 1")
-        if self.vcpus < 1:
-            raise ValueError("sandbox.vcpus must be >= 1")
-        if self.mem_mib < 128:
-            raise ValueError("sandbox.mem_mib must be >= 128")
-
-
-def parse_sandbox_section(section: Any) -> ToolSandboxSettings:
-    """Parse the raw ``sandbox:`` mapping from nano.yml.
-
-    Keys flowjet does not own (``on_deny``, ``placement_overrides``,
-    ``max_shuttle_bytes``) are ignored here — they stay in the loaded
-    ``SootheConfig`` and reach the agent build unchanged.
-    """
-    if not isinstance(section, dict):
-        return ToolSandboxSettings()
-    known = {
-        f
-        for f in ToolSandboxSettings.__dataclass_fields__  # type: ignore[attr-defined]
-    }
-    values = {k: section[k] for k in section if k in known}
-    return ToolSandboxSettings(**values)
-
-
-def load_tool_sandbox_settings(config_path: str | Path | None) -> ToolSandboxSettings:
-    """Load the tool-sandbox settings from the nano config file.
-
-    Resolution mirrors :func:`flowjet.core.bootstrap.load_config`: an explicit
-    path must exist; without one the default ``$FLOWJET_HOME/config/nano.yml``
-    is used when present. No config file at all means the sandbox is disabled.
-    """
-    if config_path is not None:
-        path = Path(config_path).expanduser()
-        if not path.is_file():
-            raise FileNotFoundError(f"Config not found: {path}")
-    else:
-        from flowjet.home import default_config_path
-
-        path = default_config_path()
-        if not path.is_file():
-            return ToolSandboxSettings()
-
-    import yaml
-
-    try:
-        with path.open() as f:
-            raw = yaml.safe_load(f)
-    except yaml.YAMLError as exc:
-        raise ValueError(f"Invalid YAML in {path}: {exc}") from exc
-    if not isinstance(raw, dict):
-        return ToolSandboxSettings()
-    return parse_sandbox_section(raw.get("sandbox"))
-
-
 @dataclass
 class _SandboxLease:
     """One live guest VM bound to a host workspace path."""
@@ -161,6 +49,121 @@ class _SandboxLease:
     last_used: float = field(default_factory=time.monotonic)
 
 
+class WorkspaceStager:
+    """Host↔guest workspace file staging with (size, mtime) skip manifests.
+
+    The host workspace directory stays the integration point (fsspec sync,
+    backend materials). At session open the host tree is pushed into the
+    guest ``workspace_root``; at close the guest tree is pulled back so the
+    sync checkpoint and external readers still see agent outputs. Transfers
+    skip files whose (size, mtime) match the manifest of the last transfer.
+    """
+
+    def __init__(self, settings: ToolSandboxSettings) -> None:
+        self._settings = settings
+
+    def guest_path(self, rel: Path) -> PurePosixPath:
+        return PurePosixPath(self._settings.workspace_root) / PurePosixPath(*rel.parts)
+
+    async def push(
+        self,
+        workspace: str,
+        sandbox: Any,
+        manifest: dict[str, tuple[int, int]],
+    ) -> dict[str, tuple[int, int]]:
+        """Upload the host workspace tree into the guest (skip unchanged).
+
+        Returns the manifest for the next push.
+        """
+        root = Path(workspace)
+        if not root.is_dir():
+            logger.warning("Workspace %s does not exist; skipping sandbox push", workspace)
+            return manifest
+        pushed = 0
+        next_manifest: dict[str, tuple[int, int]] = {}
+        for item in sorted(root.rglob("*")):
+            rel = item.relative_to(root)
+            if any(part in _PUSH_SKIP_DIRS for part in rel.parts):
+                continue
+            if item.is_symlink():
+                continue
+            if item.is_dir():
+                try:
+                    await sandbox.files.mkdir(self.guest_path(rel))
+                except Exception:  # noqa: BLE001
+                    logger.debug("Sandbox mkdir failed for %s", rel, exc_info=True)
+                continue
+            if not item.is_file():
+                continue
+            stat = item.stat()
+            snapshot = (stat.st_size, stat.st_mtime_ns)
+            next_manifest[str(rel)] = snapshot
+            if manifest.get(str(rel)) == snapshot:
+                continue
+            try:
+                data = await asyncio.to_thread(item.read_bytes)
+                await sandbox.files.write_bytes(self.guest_path(rel), data)
+                pushed += 1
+            except Exception:  # noqa: BLE001
+                logger.warning("Sandbox push failed for %s", rel, exc_info=True)
+        if pushed:
+            logger.info("Sandbox push for %s: %d files", workspace, pushed)
+        return next_manifest
+
+    async def pull(
+        self,
+        workspace: str,
+        sandbox: Any,
+        manifest: dict[str, tuple[int, int]],
+    ) -> dict[str, tuple[int, int]]:
+        """Download the guest workspace tree back to the host (skip identical).
+
+        Returns the manifest for the next push.
+        """
+        root = Path(workspace)
+        guest_root = PurePosixPath(self._settings.workspace_root)
+        pulled = 0
+        next_manifest: dict[str, tuple[int, int]] = {}
+
+        async def walk(guest_dir: PurePosixPath, rel_dir: PurePosixPath) -> None:
+            nonlocal pulled
+            entries = await sandbox.files.list(guest_dir)
+            for entry in entries:
+                raw = PurePosixPath(entry.name)
+                try:
+                    # SDK entries carry the full guest path.
+                    rel_entry = raw.relative_to(guest_root)
+                except ValueError:
+                    # Basename-only entries (defensive).
+                    rel_entry = rel_dir / raw
+                if any(part in _PULL_SKIP_DIRS for part in rel_entry.parts):
+                    continue
+                guest_path = guest_root / rel_entry
+                if entry.kind == "directory":
+                    await walk(guest_path, rel_entry)
+                    continue
+                if entry.kind != "file":
+                    continue
+                data = await sandbox.files.read_bytes(guest_path)
+                dest = root / Path(*rel_entry.parts)
+                if dest.is_file():
+                    existing = await asyncio.to_thread(dest.read_bytes)
+                    if existing == data:
+                        stat = dest.stat()
+                        next_manifest[str(rel_entry)] = (stat.st_size, stat.st_mtime_ns)
+                        continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(dest.write_bytes, data)
+                stat = dest.stat()
+                next_manifest[str(rel_entry)] = (stat.st_size, stat.st_mtime_ns)
+                pulled += 1
+
+        await walk(guest_root, PurePosixPath("."))
+        if pulled:
+            logger.info("Sandbox pull for %s: %d files", workspace, pulled)
+        return next_manifest
+
+
 class ArcBoxToolSandboxManager:
     """Per-workspace ArcBox sandboxes for sandboxed tool execution.
 
@@ -171,6 +174,7 @@ class ArcBoxToolSandboxManager:
 
     def __init__(self, settings: ToolSandboxSettings) -> None:
         self._settings = settings
+        self._stager = WorkspaceStager(settings)
         self._client: Any | None = None
         self._leases: dict[str, _SandboxLease] = {}
         self._locks_lock = asyncio.Lock()
@@ -317,7 +321,7 @@ class ArcBoxToolSandboxManager:
                     lease.active_runs,
                 )
                 return
-            await self._push_workspace(workspace, lease)
+            lease.manifest = await self._stager.push(workspace, lease.sandbox, lease.manifest)
 
     async def close_workspace(self, workspace: str) -> None:
         """Pull guest files back to the host workspace when the last run ends."""
@@ -334,7 +338,7 @@ class ArcBoxToolSandboxManager:
             if lease.active_runs > 0:
                 return
             try:
-                await self._pull_workspace(workspace, lease)
+                lease.manifest = await self._stager.pull(workspace, lease.sandbox, lease.manifest)
             except Exception:  # noqa: BLE001
                 # Best-effort: a failed pull must not fail the response, but
                 # the sync checkpoint will miss guest-side outputs.
@@ -389,143 +393,5 @@ class ArcBoxToolSandboxManager:
         """Guest-side workspace path — what the agent sees as its workspace."""
         return self._settings.workspace_root
 
-    # ------------------------------------------------------------------
-    # Staging
-    # ------------------------------------------------------------------
 
-    def _guest_path(self, rel: Path) -> PurePosixPath:
-        return PurePosixPath(self._settings.workspace_root) / PurePosixPath(*rel.parts)
-
-    async def _push_workspace(self, workspace: str, lease: _SandboxLease) -> None:
-        """Upload the host workspace tree into the guest (skip unchanged)."""
-        root = Path(workspace)
-        if not root.is_dir():
-            logger.warning("Workspace %s does not exist; skipping sandbox push", workspace)
-            return
-        sandbox = lease.sandbox
-        pushed = 0
-        next_manifest: dict[str, tuple[int, int]] = {}
-        for item in sorted(root.rglob("*")):
-            rel = item.relative_to(root)
-            if any(part in _PUSH_SKIP_DIRS for part in rel.parts):
-                continue
-            if item.is_symlink():
-                continue
-            if item.is_dir():
-                try:
-                    await sandbox.files.mkdir(self._guest_path(rel))
-                except Exception:  # noqa: BLE001
-                    logger.debug("Sandbox mkdir failed for %s", rel, exc_info=True)
-                continue
-            if not item.is_file():
-                continue
-            stat = item.stat()
-            snapshot = (stat.st_size, stat.st_mtime_ns)
-            next_manifest[str(rel)] = snapshot
-            if lease.manifest.get(str(rel)) == snapshot:
-                continue
-            try:
-                data = await asyncio.to_thread(item.read_bytes)
-                await sandbox.files.write_bytes(self._guest_path(rel), data)
-                pushed += 1
-            except Exception:  # noqa: BLE001
-                logger.warning("Sandbox push failed for %s", rel, exc_info=True)
-        lease.manifest = next_manifest
-        if pushed:
-            logger.info("Sandbox push for %s: %d files", workspace, pushed)
-
-    async def _pull_workspace(self, workspace: str, lease: _SandboxLease) -> None:
-        """Download the guest workspace tree back to the host (skip identical)."""
-        root = Path(workspace)
-        sandbox = lease.sandbox
-        guest_root = PurePosixPath(self._settings.workspace_root)
-        pulled = 0
-        next_manifest: dict[str, tuple[int, int]] = {}
-
-        async def walk(guest_dir: PurePosixPath, rel_dir: PurePosixPath) -> None:
-            nonlocal pulled
-            entries = await sandbox.files.list(guest_dir)
-            for entry in entries:
-                raw = PurePosixPath(entry.name)
-                try:
-                    # SDK entries carry the full guest path.
-                    rel_entry = raw.relative_to(guest_root)
-                except ValueError:
-                    # Basename-only entries (defensive).
-                    rel_entry = rel_dir / raw
-                if any(part in _PULL_SKIP_DIRS for part in rel_entry.parts):
-                    continue
-                guest_path = guest_root / rel_entry
-                if entry.kind == "directory":
-                    await walk(guest_path, rel_entry)
-                    continue
-                if entry.kind != "file":
-                    continue
-                data = await sandbox.files.read_bytes(guest_path)
-                dest = root / Path(*rel_entry.parts)
-                if dest.is_file():
-                    existing = await asyncio.to_thread(dest.read_bytes)
-                    if existing == data:
-                        stat = dest.stat()
-                        next_manifest[str(rel_entry)] = (stat.st_size, stat.st_mtime_ns)
-                        continue
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                await asyncio.to_thread(dest.write_bytes, data)
-                stat = dest.stat()
-                next_manifest[str(rel_entry)] = (stat.st_size, stat.st_mtime_ns)
-                pulled += 1
-
-        await walk(guest_root, PurePosixPath("."))
-        lease.manifest = next_manifest
-        if pulled:
-            logger.info("Sandbox pull for %s: %d files", workspace, pulled)
-
-
-class SandboxAwareWorkspaceResolver:
-    """Resolver decorator that stages the workspace through the sandbox.
-
-    Wraps the existing resolver (local-only or sync-backed): the inner
-    resolver's lifecycle runs first on open (S3 materialization) and last on
-    close (S3 checkpoint), with the host↔guest transfer sandwiched between —
-    the guest pull must land before the sync checkpoint sees the workspace.
-    """
-
-    def __init__(self, inner: Any, manager: ArcBoxToolSandboxManager) -> None:
-        self._inner = inner
-        self._manager = manager
-
-    @property
-    def manager(self) -> ArcBoxToolSandboxManager:
-        return self._manager
-
-    def resolve(self, session: str, metadata: dict[str, Any] | None = None) -> Path:
-        return self._inner.resolve(session, metadata)
-
-    async def open_session(self, session: str, workspace: Path) -> None:
-        await self._inner.open_session(session, workspace)
-        await self._manager.open_workspace(str(workspace))
-
-    async def close_session(self, session: str, workspace: Path) -> None:
-        await self._manager.close_workspace(str(workspace))
-        await self._inner.close_session(session, workspace)
-
-    async def shutdown(self) -> None:
-        await self._manager.shutdown()
-        shutdown_inner = getattr(self._inner, "shutdown", None)
-        if shutdown_inner is not None:
-            result = shutdown_inner()
-            if hasattr(result, "__await__"):
-                await result
-
-    def __getattr__(self, name: str) -> Any:
-        # Transparent delegation for anything else (e.g. is_sync_enabled).
-        return getattr(self._inner, name)
-
-
-__all__ = [
-    "ArcBoxToolSandboxManager",
-    "SandboxAwareWorkspaceResolver",
-    "ToolSandboxSettings",
-    "load_tool_sandbox_settings",
-    "parse_sandbox_section",
-]
+__all__ = ["ArcBoxToolSandboxManager", "WorkspaceStager"]

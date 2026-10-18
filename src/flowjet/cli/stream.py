@@ -18,7 +18,6 @@ from flowjet.cli.progress import (
     format_tool_done,
     friendly_progress,
 )
-from flowjet.core.backends.direct import DirectRuntimeBackend
 from flowjet.core.events import (
     InterruptWaiting,
     Narration,
@@ -29,9 +28,8 @@ from flowjet.core.events import (
     ToolCompleted,
     ToolStarted,
 )
-from flowjet.core.tool_results import (
-    preview_text,
-)
+from flowjet.core.runtime.direct import DirectRuntimeBackend
+from flowjet.core.streaming.tool_results import ToolResultInspector
 
 # Min interval between live narration previews on the progress line (seconds).
 _STATUS_PREVIEW_MIN_INTERVAL = 0.12
@@ -124,7 +122,7 @@ def write_cli_error(
 
 def _verbose_preview(content: Any, *, limit: int = 200) -> str:
     """Single-line preview for ``-v`` tool results (no mid-line newlines)."""
-    return preview_text(content, limit=limit)
+    return ToolResultInspector.preview(content, limit=limit)
 
 
 def _write_verbose(status: ProgressLine, stderr: TextIO, text: str) -> None:

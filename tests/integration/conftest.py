@@ -310,7 +310,7 @@ class LiveServer:
 
 @pytest.fixture
 def live_server() -> Iterator[LiveServer]:
-    from flowjet.core.backends.fake import FakeRuntimeBackend
+    from flowjet.core.runtime.fake import FakeRuntimeBackend
     from flowjet.server.config import Settings
     from flowjet.server.http.app import create_app
 
@@ -335,7 +335,7 @@ def openai_client(live_server: LiveServer) -> Any:
 
 @pytest.fixture
 def authed_live_server() -> Iterator[tuple[LiveServer, str]]:
-    from flowjet.core.backends.fake import FakeRuntimeBackend
+    from flowjet.core.runtime.fake import FakeRuntimeBackend
     from flowjet.server.config import Settings
     from flowjet.server.http.app import create_app
 

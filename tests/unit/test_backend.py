@@ -14,8 +14,9 @@ import pytest
 import soothe_nano
 from soothe_nano.config import SootheConfig
 
-from flowjet.core import bootstrap
-from flowjet.core.backend import (
+from flowjet.core.agent.config import FlowJetConfigLoader
+from flowjet.core.agent.factory import AgentFactory, ModeRoutedSootheAgent
+from flowjet.core.backend_config import (
     CLI_BACKEND_ENV,
     SERVER_BACKEND_ENV,
     Backend,
@@ -97,7 +98,7 @@ def test_empty_value_falls_back_to_the_default() -> None:
 
 
 def test_profile_backend_follows_the_surface(monkeypatch: pytest.MonkeyPatch) -> None:
-    from flowjet.core.backend import backend_for_profile
+    from flowjet.core.backend_config import backend_for_profile
 
     monkeypatch.setenv(CLI_BACKEND_ENV, "nano")
     monkeypatch.setenv(SERVER_BACKEND_ENV, "nano")
@@ -114,7 +115,7 @@ def test_load_config_nano_backend_returns_nano_config(tmp_path: Path) -> None:
     path = tmp_path / "nano.yml"
     path.write_text(_NANO_YAML)
 
-    cfg = bootstrap.load_config(path, backend=Backend.NANO)
+    cfg = FlowJetConfigLoader.load(path, backend=Backend.NANO)
 
     assert isinstance(cfg, SootheConfig)
     assert cfg.active_router_profile == "default"
@@ -127,7 +128,7 @@ def test_load_config_soothe_backend_returns_host_config(tmp_path: Path) -> None:
     path = tmp_path / "nano.yml"
     path.write_text(_NANO_YAML)
 
-    cfg = bootstrap.load_config(path, backend=Backend.SOOTHE)
+    cfg = FlowJetConfigLoader.load(path, backend=Backend.SOOTHE)
 
     # Host config is a superset of nano's (adds agent.loop / clarification / ...).
     assert isinstance(cfg, HostSootheConfig)
@@ -141,7 +142,7 @@ def test_load_config_soothe_composes_sibling_soothe_yml(tmp_path: Path) -> None:
     (tmp_path / "nano.yml").write_text(_NANO_YAML)
     (tmp_path / "soothe.yml").write_text("agent:\n  loop:\n    max_step_retries: 7\n")
 
-    cfg = bootstrap.load_config(tmp_path / "nano.yml", backend=Backend.SOOTHE)
+    cfg = FlowJetConfigLoader.load(tmp_path / "nano.yml", backend=Backend.SOOTHE)
 
     assert cfg.agent.loop.max_step_retries == 7
 
@@ -150,8 +151,8 @@ def test_default_config_follows_backend() -> None:
     pytest.importorskip("soothe")
     from soothe.config import SootheConfig as HostSootheConfig
 
-    assert isinstance(bootstrap.default_config(Backend.NANO), SootheConfig)
-    assert isinstance(bootstrap.default_config(Backend.SOOTHE), HostSootheConfig)
+    assert isinstance(FlowJetConfigLoader.default(Backend.NANO), SootheConfig)
+    assert isinstance(FlowJetConfigLoader.default(Backend.SOOTHE), HostSootheConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +169,7 @@ def test_cli_nano_backend_uses_nano_factory(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(soothe_nano, "create_nano_agent", fake_create)
 
-    agent = bootstrap.create_agent(SootheConfig(), CLI_PROFILE, backend=Backend.NANO)
+    agent = AgentFactory.create(SootheConfig(), CLI_PROFILE, backend=Backend.NANO)
 
     assert agent == "nano-agent"
     assert captured == {"interaction_mode": None, "backend": None}
@@ -187,9 +188,9 @@ def test_cli_soothe_backend_disables_hitl_interrupts(monkeypatch: pytest.MonkeyP
         captured.update(kwargs)
         return "soothe-agent"
 
-    monkeypatch.setattr(bootstrap, "soothe_agent_factory", lambda: factory)
+    monkeypatch.setattr(AgentFactory, "soothe_builder", staticmethod(lambda: factory))
 
-    agent = bootstrap.create_agent(
+    agent = AgentFactory.create(
         SootheConfig(), CLI_PROFILE, backend=Backend.SOOTHE, interaction_mode="ask"
     )
 
@@ -207,7 +208,7 @@ def test_server_nano_backend_uses_dual_mode_factory(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(soothe_nano, "create_dual_mode_nano_agent", fake_create)
 
-    agent = bootstrap.create_agent(SootheConfig(), SERVER_PROFILE, backend=Backend.NANO)
+    agent = AgentFactory.create(SootheConfig(), SERVER_PROFILE, backend=Backend.NANO)
 
     assert agent == "dual-agent"
     assert called == ["dual"]
@@ -221,12 +222,12 @@ def test_server_soothe_backend_returns_mode_router(monkeypatch: pytest.MonkeyPat
         built[mode] = _FakeAgent(mode)
         return built[mode]
 
-    monkeypatch.setattr(bootstrap, "soothe_agent_factory", lambda: factory)
+    monkeypatch.setattr(AgentFactory, "soothe_builder", staticmethod(lambda: factory))
 
-    routed = bootstrap.create_agent(SootheConfig(), SERVER_PROFILE, backend=Backend.SOOTHE)
+    routed = AgentFactory.create(SootheConfig(), SERVER_PROFILE, backend=Backend.SOOTHE)
 
     # Lazy: nothing is built until a request arrives.
-    assert isinstance(routed, bootstrap.ModeRoutedSootheAgent)
+    assert isinstance(routed, ModeRoutedSootheAgent)
     assert built == {}
 
 
@@ -241,8 +242,8 @@ async def test_server_soothe_routes_ask_to_the_ask_graph(
         built[mode] = _FakeAgent(mode)
         return built[mode]
 
-    monkeypatch.setattr(bootstrap, "soothe_agent_factory", lambda: factory)
-    routed = bootstrap.create_agent(SootheConfig(), SERVER_PROFILE, backend=Backend.SOOTHE)
+    monkeypatch.setattr(AgentFactory, "soothe_builder", staticmethod(lambda: factory))
+    routed = AgentFactory.create(SootheConfig(), SERVER_PROFILE, backend=Backend.SOOTHE)
 
     await _drain(routed, interaction_mode="ask")
 
@@ -263,8 +264,8 @@ async def test_server_soothe_unknown_mode_falls_back_to_agent(
         built[mode] = _FakeAgent(mode)
         return built[mode]
 
-    monkeypatch.setattr(bootstrap, "soothe_agent_factory", lambda: factory)
-    routed = bootstrap.create_agent(SootheConfig(), SERVER_PROFILE, backend=Backend.SOOTHE)
+    monkeypatch.setattr(AgentFactory, "soothe_builder", staticmethod(lambda: factory))
+    routed = AgentFactory.create(SootheConfig(), SERVER_PROFILE, backend=Backend.SOOTHE)
 
     await _drain(routed, interaction_mode="bypass")
 

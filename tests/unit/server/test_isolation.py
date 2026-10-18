@@ -9,7 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from flowjet.core.backends.isolation import (
+from flowjet.core.events import (
+    OutputTextDelta,
+    RunCompleted,
+    RunFailed,
+    RunRequest,
+    RunStarted,
+)
+from flowjet.core.runtime.isolation import (
     FakeAgentAdapter,
     IsolatedRunRequest,
     IsolatingRuntimeBackend,
@@ -17,13 +24,6 @@ from flowjet.core.backends.isolation import (
     SessionAdmission,
     ThreadPool,
     WorkspaceResolver,
-)
-from flowjet.core.events import (
-    OutputTextDelta,
-    RunCompleted,
-    RunFailed,
-    RunRequest,
-    RunStarted,
 )
 
 

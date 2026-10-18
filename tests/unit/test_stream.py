@@ -706,57 +706,57 @@ def test_format_questions_block_empty_shows_generic_hint() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _extract_ask_user_interrupts — pulls questions from __interrupt__ payloads
+# extract_ask_user_interrupts — pulls questions from __interrupt__ payloads
 # ---------------------------------------------------------------------------
 
 
-def test_extract_ask_user_interrupts_from_interrupt_objects() -> None:
+def testextract_ask_user_interrupts_from_interrupt_objects() -> None:
     from langgraph.types import Interrupt
 
-    from flowjet.core.bridges.nano.mapping import _extract_ask_user_interrupts
+    from flowjet.core.bridges.nano.mapping import extract_ask_user_interrupts
 
     value = {"type": "ask_user", "questions": _QUESTIONS}
     raw = (Interrupt(value=value, id="int-1"),)
-    questions, ids = _extract_ask_user_interrupts(raw)
+    questions, ids = extract_ask_user_interrupts(raw)
     assert len(questions) == 1
     assert questions[0]["header"] == "Auth method"
     assert ids == ("int-1",)
 
 
-def test_extract_ask_user_interrupts_from_dicts() -> None:
-    from flowjet.core.bridges.nano.mapping import _extract_ask_user_interrupts
+def testextract_ask_user_interrupts_from_dicts() -> None:
+    from flowjet.core.bridges.nano.mapping import extract_ask_user_interrupts
 
     value = {"type": "ask_user", "questions": _QUESTIONS}
     raw = ({"value": value, "id": "int-2"},)
-    questions, ids = _extract_ask_user_interrupts(raw)
+    questions, ids = extract_ask_user_interrupts(raw)
     assert len(questions) == 1
     assert ids == ("int-2",)
 
 
-def test_extract_ask_user_interrupts_skips_non_ask_user() -> None:
+def testextract_ask_user_interrupts_skips_non_ask_user() -> None:
     from langgraph.types import Interrupt
 
-    from flowjet.core.bridges.nano.mapping import _extract_ask_user_interrupts
+    from flowjet.core.bridges.nano.mapping import extract_ask_user_interrupts
 
     # A tool-approval interrupt (no ask_user type) — no questions, but id kept.
     raw = (Interrupt(value={"action_requests": []}, id="int-3"),)
-    questions, ids = _extract_ask_user_interrupts(raw)
+    questions, ids = extract_ask_user_interrupts(raw)
     assert questions == ()
     assert ids == ("int-3",)
 
 
-def test_extract_ask_user_interrupts_empty() -> None:
-    from flowjet.core.bridges.nano.mapping import _extract_ask_user_interrupts
+def testextract_ask_user_interrupts_empty() -> None:
+    from flowjet.core.bridges.nano.mapping import extract_ask_user_interrupts
 
-    questions, ids = _extract_ask_user_interrupts(())
+    questions, ids = extract_ask_user_interrupts(())
     assert questions == ()
     assert ids == ()
 
 
-def test_extract_ask_user_interrupts_multiple_questions() -> None:
+def testextract_ask_user_interrupts_multiple_questions() -> None:
     from langgraph.types import Interrupt
 
-    from flowjet.core.bridges.nano.mapping import _extract_ask_user_interrupts
+    from flowjet.core.bridges.nano.mapping import extract_ask_user_interrupts
 
     qs = [
         {"question": "Q1?", "header": "H1", "options": []},
@@ -764,7 +764,7 @@ def test_extract_ask_user_interrupts_multiple_questions() -> None:
     ]
     value = {"type": "ask_user", "questions": qs}
     raw = (Interrupt(value=value, id="int-4"),)
-    questions, ids = _extract_ask_user_interrupts(raw)
+    questions, ids = extract_ask_user_interrupts(raw)
     assert len(questions) == 2
     assert questions[0]["header"] == "H1"
     assert questions[1]["header"] == "H2"

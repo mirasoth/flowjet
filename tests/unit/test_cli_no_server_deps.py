@@ -37,7 +37,7 @@ def test_cli_import_does_not_pull_server_deps() -> None:
 
 
 def test_core_import_does_not_pull_server_deps() -> None:
-    _run_isolated("import flowjet.core, flowjet.core.backends.fake;")
+    _run_isolated("import flowjet.core, flowjet.core.runtime.fake;")
 
 
 def test_serve_command_is_dispatched_lazily() -> None:
