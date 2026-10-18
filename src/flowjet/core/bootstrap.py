@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from soothe_nano.config import SootheConfig
-from soothe_nano.resolve import resolve_checkpointer
+from soothe_nano.utils.resolver import resolve_checkpointer
 
 from flowjet.core.backend import Backend, resolve_backend
 from flowjet.core.modes import (
@@ -65,9 +65,9 @@ def register_flowjet_builtin_skills() -> None:
         return
     if not BUILTIN_SKILLS_DIR.is_dir():
         return
-    from soothe_nano.skills import register_builtin_skill_root
+    from soothe_nano.skills.builtins import SkillRoots
 
-    register_builtin_skill_root(BUILTIN_SKILLS_DIR, source="builtin")
+    SkillRoots.register(BUILTIN_SKILLS_DIR, source="builtin")
     _REGISTERED = True
 
 

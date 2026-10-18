@@ -292,13 +292,11 @@ async def _drain(routed: object, *, interaction_mode: str) -> None:
 def test_soothe_backend_owns_the_persona_via_config(monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("soothe")
     import soothe_nano.prompts.fragments as fragments
-    import soothe_nano.prompts.identity as identity
     from soothe.config import SootheConfig as HostSootheConfig
 
-    # soothe patches these module globals; restore them so other tests see the
+    # soothe patches this module global; restore it so other tests see the
     # FlowJet override rather than the host-rendered fragment.
     monkeypatch.setattr(fragments, "ASSISTANT_IDENTITY_FRAGMENT", "ORIGINAL")
-    monkeypatch.setattr(identity, "ASSISTANT_IDENTITY_FRAGMENT", "ORIGINAL")
 
     from flowjet.core.identity import FLOWJET_CREATOR
     from flowjet.core.modes import apply_profile
@@ -315,14 +313,12 @@ def test_soothe_backend_owns_the_persona_via_config(monkeypatch: pytest.MonkeyPa
 def test_soothe_backend_keeps_an_explicit_persona(monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("soothe")
     import soothe_nano.prompts.fragments as fragments
-    import soothe_nano.prompts.identity as identity
     from soothe.config import SootheConfig as HostSootheConfig
     from soothe.config.models import AssistantIdentity
 
     from flowjet.core.modes import apply_profile
 
     monkeypatch.setattr(fragments, "ASSISTANT_IDENTITY_FRAGMENT", "ORIGINAL")
-    monkeypatch.setattr(identity, "ASSISTANT_IDENTITY_FRAGMENT", "ORIGINAL")
 
     cfg = HostSootheConfig(agent={"assistant_identity": AssistantIdentity(creator="Acme Inc.")})
     forced = apply_profile(cfg, CLI_PROFILE, backend=Backend.SOOTHE)
@@ -333,7 +329,6 @@ def test_soothe_backend_keeps_an_explicit_persona(monkeypatch: pytest.MonkeyPatc
 def test_nano_config_is_left_to_the_fragment_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """No ``agent.assistant_identity`` on nano config → override stays in force."""
     import soothe_nano.prompts.fragments as fragments
-    import soothe_nano.prompts.identity as nano_identity
 
     from flowjet.core import identity as flowjet_identity
     from flowjet.core.identity import FLOWJET_IDENTITY_FRAGMENT, install_flowjet_identity
@@ -343,7 +338,6 @@ def test_nano_config_is_left_to_the_fragment_override(monkeypatch: pytest.Monkey
     # test proves the nano path installs the FlowJet fragment itself.
     monkeypatch.setattr(flowjet_identity, "_INSTALLED", False)
     monkeypatch.setattr(fragments, "ASSISTANT_IDENTITY_FRAGMENT", "ORIGINAL")
-    monkeypatch.setattr(nano_identity, "ASSISTANT_IDENTITY_FRAGMENT", "ORIGINAL")
 
     install_flowjet_identity()
     apply_profile(SootheConfig(), CLI_PROFILE, backend=Backend.NANO)

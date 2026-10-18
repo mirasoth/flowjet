@@ -63,7 +63,7 @@ def main() -> None:
     section("POST /v1/responses  (stream=false)")
     created = http.post(
         "/v1/responses",
-        json={"model": model, "input": "Raw HTTP create.", "stream": False},
+        json={"model": model, "input": "Reply with exactly this text and nothing else: Raw HTTP create.", "stream": False},
     )
     created.raise_for_status()
     created_body = created.json()
@@ -83,7 +83,7 @@ def main() -> None:
         "/v1/responses",
         json={
             "model": model,
-            "input": "Raw SSE report.",
+            "input": "Reply with exactly this text and nothing else: Raw SSE report.",
             "stream": True,
             "flowjet": {"projection": "report"},
         },
@@ -105,7 +105,7 @@ def main() -> None:
         "/v1/responses",
         json={
             "model": model,
-            "input": "Raw SSE progress.",
+            "input": "Reply with exactly this text and nothing else: Raw SSE progress.",
             "stream": True,
             "flowjet": {
                 "projection": "progress",
@@ -130,7 +130,7 @@ def main() -> None:
         "/v1/responses",
         json={
             "model": model,
-            "input": "Raw SSE developer.",
+            "input": "Reply with exactly this text and nothing else: Raw SSE developer.",
             "stream": True,
             # emit_tools is honoured only by the fake backend; a real agent
             # decides for itself whether the prompt warrants a tool call.
