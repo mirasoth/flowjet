@@ -175,12 +175,132 @@ def test_parse_reads_flowjet_keys_and_ignores_nano_keys() -> None:
         lambda: ToolSandboxSettings(enabled=True, image="   "),
         lambda: ToolSandboxSettings(vcpus=0),
         lambda: ToolSandboxSettings(mem_mib=64),
-        lambda: ToolSandboxSettings(max_sandboxes=0),
+        lambda: ToolSandboxSettings(max_sandboxes=-1),
     ],
 )
 def test_parse_rejects_invalid_settings(factory: Callable[[], ToolSandboxSettings]) -> None:
     with pytest.raises(ValueError):
         _ = factory()
+
+
+def test_parse_max_sandboxes_none_maps_to_none() -> None:
+    """``max_sandboxes: none`` in YAML maps to ``None`` for compute-sizing."""
+    settings = SandboxSettingsLoader.parse_section(
+        {"enabled": True, "image": "img:1", "max_sandboxes": "none"}
+    )
+    assert settings.max_sandboxes is None
+
+
+def test_parse_max_sandboxes_zero_means_unlimited() -> None:
+    """``max_sandboxes: 0`` means unlimited (no LRU eviction)."""
+    settings = SandboxSettingsLoader.parse_section(
+        {"enabled": True, "image": "img:1", "max_sandboxes": 0}
+    )
+    assert settings.max_sandboxes == 0
+    assert settings.effective_max_sandboxes() == 0
+
+
+def test_parse_max_sandboxes_numeric_string_zero() -> None:
+    """A numeric string ``"0"`` is coerced to int 0 (unlimited)."""
+    settings = SandboxSettingsLoader.parse_section(
+        {"enabled": True, "image": "img:1", "max_sandboxes": "0"}
+    )
+    assert settings.max_sandboxes == 0
+
+
+def test_parse_max_sandboxes_explicit_int_preserved() -> None:
+    """An explicit int ``max_sandboxes`` is preserved as-is (back-compat)."""
+    settings = SandboxSettingsLoader.parse_section(
+        {"enabled": True, "image": "img:1", "max_sandboxes": 3}
+    )
+    assert settings.max_sandboxes == 3
+
+
+def test_parse_max_sandboxes_numeric_string_accepted() -> None:
+    """A numeric string (e.g. from YAML without quotes) is coerced to int."""
+    settings = SandboxSettingsLoader.parse_section(
+        {"enabled": True, "image": "img:1", "max_sandboxes": "5"}
+    )
+    assert settings.max_sandboxes == 5
+
+
+def test_effective_max_sandboxes_explicit() -> None:
+    """When ``max_sandboxes`` is an explicit int, ``effective_`` returns it."""
+    settings = ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=4)
+    assert settings.effective_max_sandboxes() == 4
+
+
+def test_effective_max_sandboxes_compute_from_cpu() -> None:
+    """None mode computes cap from 70% usable CPU ÷ vcpus, min 8."""
+    # 16 cores × 0.70 = 11 usable; 11 // 2 = 5 → floored to 8.
+    settings = ToolSandboxSettings(enabled=True, image="img:1", vcpus=2, max_sandboxes=None)
+    assert settings.effective_max_sandboxes(cpu_count=16) == 8
+
+    # 32 cores × 0.70 = 22 usable; 22 // 2 = 11 → 11 (above min).
+    assert settings.effective_max_sandboxes(cpu_count=32) == 11
+
+    # 32 cores × 0.70 = 22 usable; 22 // 4 = 5 → floored to 8.
+    settings_4vcpu = ToolSandboxSettings(enabled=True, image="img:1", vcpus=4, max_sandboxes=None)
+    assert settings_4vcpu.effective_max_sandboxes(cpu_count=32) == 8
+
+
+def test_effective_max_sandboxes_compute_min_floor() -> None:
+    """Even a tiny host gets the minimum cap of 8."""
+    settings = ToolSandboxSettings(enabled=True, image="img:1", vcpus=2, max_sandboxes=None)
+    assert settings.effective_max_sandboxes(cpu_count=1) == 8
+
+
+def test_effective_max_sandboxes_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``FLOWJET_SANDBOX_MAX`` env var overrides the YAML value."""
+    settings = ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=None)
+    monkeypatch.setenv("FLOWJET_SANDBOX_MAX", "5")
+    assert settings.effective_max_sandboxes(cpu_count=32) == 5
+
+
+def test_effective_max_sandboxes_env_override_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``FLOWJET_SANDBOX_MAX=0`` means unlimited via env override."""
+    settings = ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=4)
+    monkeypatch.setenv("FLOWJET_SANDBOX_MAX", "0")
+    assert settings.effective_max_sandboxes() == 0
+
+
+def test_effective_max_sandboxes_env_override_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``FLOWJET_SANDBOX_MAX=none`` defers to compute-sizing even if YAML pins a value."""
+    settings = ToolSandboxSettings(enabled=True, image="img:1", vcpus=2, max_sandboxes=4)
+    monkeypatch.setenv("FLOWJET_SANDBOX_MAX", "none")
+    assert settings.effective_max_sandboxes(cpu_count=32) == 11
+
+
+def test_effective_max_sandboxes_env_override_falls_back_on_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unparseable env value falls back to the YAML field."""
+    settings = ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=3)
+    monkeypatch.setenv("FLOWJET_SANDBOX_MAX", "garbage")
+    assert settings.effective_max_sandboxes() == 3
+
+
+def test_effective_max_sandboxes_env_percent_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``FLOWJET_SANDBOX_MAX_PERCENT`` tunes the CPU usable fraction (default 70)."""
+    settings = ToolSandboxSettings(enabled=True, image="img:1", vcpus=2, max_sandboxes=None)
+    # 32 cores × 0.50 = 16 usable; 16 // 2 = 8 → floored to 8.
+    monkeypatch.setenv("FLOWJET_SANDBOX_MAX_PERCENT", "50")
+    assert settings.effective_max_sandboxes(cpu_count=32) == 8
+    # 32 cores × 0.90 = 28 usable; 28 // 2 = 14 → 14 (above min).
+    monkeypatch.setenv("FLOWJET_SANDBOX_MAX_PERCENT", "90")
+    assert settings.effective_max_sandboxes(cpu_count=32) == 14
+
+
+def test_effective_max_sandboxes_env_percent_invalid_uses_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An out-of-range percentage falls back to the 70% default."""
+    settings = ToolSandboxSettings(enabled=True, image="img:1", vcpus=2, max_sandboxes=None)
+    monkeypatch.setenv("FLOWJET_SANDBOX_MAX_PERCENT", "150")
+    # 32 × 0.70 = 22; 22 // 2 = 11
+    assert settings.effective_max_sandboxes(cpu_count=32) == 11
 
 
 def test_load_settings_requires_existing_explicit_path(tmp_path: Path) -> None:
@@ -403,6 +523,29 @@ async def test_max_sandboxes_evicts_idle_lru(
         await manager.open_workspace(str(ws2))
         assert sandbox1.killed  # evicted (idle, LRU)
         assert manager.lease_count == 1
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_max_sandboxes_zero_means_unlimited(
+    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
+) -> None:
+    """``max_sandboxes: 0`` disables LRU eviction — all idle sandboxes stay."""
+    ws1 = tmp_path / "ws1"
+    ws2 = tmp_path / "ws2"
+    ws1.mkdir()
+    ws2.mkdir()
+    manager = ArcBoxToolSandboxManager(
+        ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=0)
+    )
+    try:
+        await manager.open_workspace(str(ws1))
+        sandbox1 = fake_arcbox.instances[0].sandboxes[0]
+        await manager.close_workspace(str(ws1))
+        await manager.open_workspace(str(ws2))
+        assert not sandbox1.killed  # NOT evicted — unlimited
+        assert manager.lease_count == 2
     finally:
         await manager.shutdown()
 

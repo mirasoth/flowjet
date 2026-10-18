@@ -214,12 +214,21 @@ class ArcBoxToolSandboxManager:
         self._reaper_task = asyncio.create_task(
             self._reap_idle(), name="arcbox-tool-sandbox-reaper"
         )
+        max_sb = self._settings.effective_max_sandboxes()
+        if max_sb == 0:
+            cap_desc = "unlimited"
+        elif self._settings.max_sandboxes is None:
+            cap_desc = "computed"
+        else:
+            cap_desc = "explicit"
         logger.info(
-            "ArcBox tool sandbox started: image=%s vcpus=%d mem_mib=%d max=%d network=%s",
+            "ArcBox tool sandbox started: image=%s vcpus=%d mem_mib=%d max=%d "
+            "(%s) network=%s",
             self._settings.image,
             self._settings.vcpus,
             self._settings.mem_mib,
-            self._settings.max_sandboxes,
+            max_sb,
+            cap_desc,
             self._settings.network,
         )
 
@@ -271,8 +280,12 @@ class ArcBoxToolSandboxManager:
                 logger.exception("ArcBox tool sandbox reaper error")
 
     async def _make_room_unlocked(self) -> None:
-        """Evict least-recently-used idle sandboxes above ``max_sandboxes``."""
-        while len(self._leases) >= self._settings.max_sandboxes:
+        """Evict least-recently-used idle sandboxes above the effective cap."""
+        max_sandboxes = self._settings.effective_max_sandboxes()
+        if max_sandboxes == 0:
+            # Unlimited: no LRU eviction.
+            return
+        while len(self._leases) >= max_sandboxes:
             candidates = [
                 (key, lease) for key, lease in self._leases.items() if lease.active_runs == 0
             ]
@@ -282,7 +295,7 @@ class ArcBoxToolSandboxManager:
                 logger.warning(
                     "ArcBox tool sandbox at max_sandboxes=%d with all sandboxes "
                     "busy; spawning an extra sandbox",
-                    self._settings.max_sandboxes,
+                    max_sandboxes,
                 )
                 return
             key, lease = min(candidates, key=lambda kv: kv[1].last_used)

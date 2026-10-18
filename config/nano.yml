@@ -1,4 +1,4 @@
-# Default nano profile for flowjet-server images.
+# Default nano profile for server images.
 # Sourced from soothe config/develop/nano.yml (dashscope provider only).
 
 providers:

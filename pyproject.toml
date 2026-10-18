@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "flowjet"
 version = "2.0.11"
-description = "FlowJet — agent CLI (fj) and server (ACP + OpenAI-compatible HTTP) powered by soothe-nano"
+description = "FlowJet — agent CLI (fj) and server (ACP + OpenAI-compatible HTTP) powered by Soothe"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11,<3.15"
 authors = [{ name = "Xiaming Chen" }]
-keywords = ["flowjet", "fj", "cli", "server", "acp", "openai", "agent", "soothe", "nano", "ai", "coding-agent"]
+keywords = ["flowjet", "acp", "openai", "agent", "soothe", "ai", "coding-agent"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -28,7 +28,6 @@ classifiers = [
 # Single-dependency CLI wheel; HTTP service deps live in the `server` extra.
 dependencies = [
     "soothe>=1.2.0b2,<2.0.0",
-    "soothe-nano>=2.0.0a1,<2.1.0",
 ]
 
 [project.optional-dependencies]
@@ -41,7 +40,7 @@ server = [
     "langchain-core>=0.3",
     # S3/MinIO workspace sync backend
     "s3fs>=2024.6",
-    # ArcBox microVM SDK — sandboxed tool execution via soothe-nano's
+    # ArcBox microVM SDK — sandboxed tool execution via soothe's
     # sandbox backend (https://github.com/arcboxlabs/arcbox)
     "arcbox>=0.1.0",
 ]
@@ -107,7 +106,7 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 
-# Any-heavy moved code (nano/langchain objects); loosened until annotated.
+# Any-heavy moved code; loosened until annotated.
 [[tool.mypy.overrides]]
 module = ["flowjet.server.*", "flowjet.core.bridges.*"]
 disallow_untyped_defs = false

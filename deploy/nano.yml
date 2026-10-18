@@ -1,7 +1,7 @@
-# FlowJet Server nano.yml — deployment config
+# Server nano.yml — deployment config
 # PostgreSQL persistence + pgvector + DashScope (OpenAI-compatible) provider.
 # Mirrors ../soothe/deploy/nano.yml structure; keeps the DashScope provider
-# from config/nano.yml (flowjet-server default).
+# from config/nano.yml (server default).
 #
 # Mounted at /flowjet/config/nano.yml (default agent path).
 # Uses environment variable substitution (${ENV_VAR}).
