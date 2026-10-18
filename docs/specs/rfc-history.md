@@ -21,6 +21,7 @@ This document tracks all RFC lifecycle events in chronological order (newest fir
 
 | Date | Event | RFC / Document | Summary |
 |------|-------|----------------|---------|
+| 2026-10-18 | Created | [RFC-005](RFC-005-arcbox-tool-sandbox.md) | ArcBox tool sandbox via soothe-nano 2.0; whole-worker arcbox isolation removed |
 | 2026-07-31 | Reference Updated | [TEST-COVERAGE-MATRIX](../impl/TEST-COVERAGE-MATRIX.md) | Feature → test attachment for RFC-001–003 |
 | 2026-07-31 | Created | [IG-003](../impl/IG-003-production-isolation-hardening.md) | Production isolation hardening guide for RFC-003 |
 | 2026-07-31 | Created | [RFC-003](RFC-003-production-isolation-hardening.md) | Production-ready ThreadPool lifecycle, bridge, and policy |

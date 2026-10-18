@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -67,64 +66,6 @@ class Settings(BaseSettings):
     # (backend / frontend) a plain-file view of every workspace. Empty = disabled.
     workspace_content_source: str | None = None
 
-    # Isolation mode — "thread_pool" (default, in-process) or "arcbox"
-    # (microVM-per-workspace sandboxing via the external arcbox runtime,
-    # https://github.com/arcboxlabs/arcbox). "arcbox" requires the arcbox
-    # SDK (pip install arcbox) and the arcbox daemon running on the host
-    # (Hypervisor.framework on macOS, KVM on Linux).
-    isolation_mode: Literal["thread_pool", "arcbox"] = "thread_pool"
-    # Docker image reference for the in-VM worker (typically the flowjet-server
-    # image — it carries the flowjet venv + worker entrypoint).
-    arcbox_image: str | None = None
-    # Max concurrently live worker VMs (across all workspaces). VMs are
-    # spawned on demand per workspace; there is no baseline pre-warm.
-    arcbox_max_pool: int = 4
-    # Per-VM resource limits.
-    arcbox_vcpus: int = 2
-    arcbox_mem_mib: int = 2048
-    # Fixed in-sandbox path for the workspace directory.
-    arcbox_workspace_container_path: str = "/workspace"
-    # Network access for worker VMs. "true" = full network (SDK default);
-    # "false" = fully isolated (no egress).
-    arcbox_network: bool = True
-    # Comma-separated env var names copied from the server environment into
-    # the worker VM (e.g. FLOWJET_NANO_CONFIG, FLOWJET_SERVER_BACKEND).
-    arcbox_pass_env: str | None = None
-    # ArcBox daemon connection: explicit API URL for remote daemon proxy
-    # (e.g. http://host.docker.internal:9847). None = local Unix socket.
-    # Can also be set via ARCBOX_API_URL env var.
-    arcbox_api_url: str | None = None
-    # Bearer credential for the daemon proxy (env: ARCBOX_API_KEY).
-    arcbox_api_key: str | None = None
-    # Per-unary-RPC deadline in seconds (None = no bound).
-    arcbox_request_timeout: float | None = None
-    arcbox_idle_timeout: float = 300.0
-    arcbox_max_requests: int = 100
-
-    def validate_isolation_compatibility(self, backend: str) -> None:
-        """Raise ``ValueError`` if isolation settings are incompatible with the backend.
-
-        ArcBox isolation requires the ``soothe`` host runtime.
-        The arcbox worker builds a :class:`SootheAgentAdapter` internally,
-        which depends on soothe's host middleware (goal/step guard, decompose,
-        ask-user).  When ``FLOWJET_SERVER_BACKEND=nano`` is set, the worker
-        would fall back to :class:`NanoAgentAdapter` — which lacks the host
-        layer the isolation pool was designed for — producing a confusing
-        silent degradation rather than the expected isolated-soothe behaviour.
-
-        This guard makes the misconfiguration a loud, early failure at server
-        startup rather than a runtime surprise.
-        """
-        if self.isolation_mode == "arcbox" and backend != "soothe":
-            raise ValueError(
-                "isolation_mode='arcbox' requires FLOWJET_SERVER_BACKEND=soothe, "
-                f"but got backend='{backend}'. ArcBox isolation only works with "
-                "the soothe host runtime, not soothe-nano. Either set "
-                "FLOWJET_SERVER_BACKEND=soothe (or unset it for the default) "
-                "or set FLOWJET_ISOLATION_MODE=thread_pool to use in-process "
-                "isolation with the nano backend."
-            )
-
     def model_ids(self) -> list[str]:
         return [m.strip() for m in self.models.split(",") if m.strip()]
 
@@ -139,29 +80,5 @@ class Settings(BaseSettings):
             max_requests_per_worker=self.max_requests_per_worker,
             reuse_runner=self.reuse_runner,
             request_timeout_seconds=self.request_timeout,
-            ready_timeout_seconds=self.ready_timeout,
-        )
-
-    def arcbox_pool_settings(self):
-        """Build ArcBoxVMSettings from server config."""
-        from flowjet.core.backends.isolation.arcbox_vm_pool import ArcBoxVMSettings
-
-        pass_env: list[str] | None = None
-        if self.arcbox_pass_env and self.arcbox_pass_env.strip():
-            pass_env = [e.strip() for e in self.arcbox_pass_env.split(",") if e.strip()]
-
-        return ArcBoxVMSettings(
-            image=self.arcbox_image,
-            max_size=max(1, self.arcbox_max_pool),
-            vcpus=self.arcbox_vcpus,
-            mem_mib=self.arcbox_mem_mib,
-            workspace_container_path=self.arcbox_workspace_container_path,
-            network=self.arcbox_network,
-            pass_env=pass_env,
-            api_url=self.arcbox_api_url,
-            api_key=self.arcbox_api_key,
-            request_timeout=self.arcbox_request_timeout,
-            idle_timeout_seconds=self.arcbox_idle_timeout,
-            max_requests_per_worker=self.arcbox_max_requests,
             ready_timeout_seconds=self.ready_timeout,
         )

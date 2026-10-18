@@ -324,8 +324,9 @@ def test_flowjet_forces_workspace_boundary(monkeypatch, tmp_path):
     captured: list[Any] = []
     sentinel = object()
 
-    def create_agent(config):
+    def create_agent(config, **kwargs):
         captured.append(config)
+        assert "backend" in kwargs  # sandbox injection seam (None = host tools)
         return sentinel
 
     monkeypatch.setattr(soothe_nano, "create_dual_mode_nano_agent", create_agent)
