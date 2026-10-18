@@ -27,7 +27,7 @@ classifiers = [
 ]
 # Single-dependency CLI wheel; HTTP service deps live in the `server` extra.
 dependencies = [
-    "soothe>=1.2.0b1,<2.0.0",
+    "soothe>=1.2.0b2,<2.0.0",
     "soothe-nano>=2.0.0a1,<2.1.0",
 ]
 
@@ -68,11 +68,6 @@ constraint-dependencies = [
     "cryptography>=45,<46; platform_machine == 'x86_64' and sys_platform == 'darwin'",
 ]
 
-[tool.uv.sources]
-# Unreleased host layer adapted to nano 2.0 (feat/nano-v2); replace with a
-# version floor once soothe ships a nano-2-compatible release.
-soothe = { path = "../soothe/packages/soothe", editable = true }
-
 [project.scripts]
 flowjet = "flowjet.cli.cli:main"
 fj = "flowjet.cli.cli:main"
@@ -88,7 +83,7 @@ Issues = "https://github.com/caesar0301/flowjet/issues"
 packages = ["src/flowjet"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/flowjet/", "nano.yml", "README.md", "LICENSE", "docs/", "CHANGELOG.md"]
+include = ["src/flowjet/", "config/", "README.md", "LICENSE", "docs/", "CHANGELOG.md"]
 
 # Non-Python assets inside `src/flowjet` ship automatically; re-listing them in
 # force-include duplicates files and breaks `uv build`.

@@ -1,0 +1,74 @@
+# Sandbox-enabled config for flowjet-server with soothe backend.
+# Based on ~/.flowjet/config/nano.yml (dict-format embedding_profile) + sandbox section.
+
+providers:
+  - name: dashscope
+    provider_type: openai
+    api_base_url: "${DASHSCOPE_BASE_URL}"
+    api_key: "${DASHSCOPE_API_KEY}"
+    models:
+      - glm-5.2
+      - qwen3.7-plus
+      - qwen3.6-flash
+      - kimi-k2.5
+      - MiniMax-M3
+      - text-embedding-v4
+
+router_profiles:
+  - name: glm
+    router:
+      default: "dashscope:glm-5.2"
+      fast: "dashscope:qwen3.6-flash"
+      think: "dashscope:glm-5.2"
+      image: "dashscope:qwen3.7-plus"
+      ocr: "dashscope:qwen3.7-plus"
+
+active_router_profile: glm
+
+embedding_profile:
+  model_role: dashscope:text-embedding-v4
+  embedding_dims: 1536
+
+persistence:
+  default_backend: sqlite
+
+vector_stores:
+  - name: sqlite_vec_dev
+    provider_type: sqlite_vec
+    dsn: null
+    index_type: hnsw
+    url: null
+    api_key: null
+    grpc_port: 50051
+
+vector_store_router:
+  default: sqlite_vec_dev:soothe_default
+
+tools:
+  wizsearch:
+    default_engines:
+      - duckduckgo
+      - bing
+
+observability:
+  log_file_level: DEBUG
+
+security:
+  allow_paths_outside_workspace: true
+
+# ArcBox tool sandbox (RFC-005): tool calls run in a per-workspace microVM.
+# The `sandbox:` section is flowjet-owned (SandboxSettingsLoader); the
+# `on_deny`/`placement_overrides`/`max_shuttle_bytes` keys are soothe-nano
+# placement policy (SandboxConfig) and flow through to the agent build.
+sandbox:
+  enabled: true
+  image: soothe-nano-prod
+  vcpus: 2
+  mem_mib: 1024
+  network: true
+  workspace_root: /workspace
+  default_timeout: 120
+  connect_timeout: 60
+  idle_timeout_seconds: 300
+  max_sandboxes: 2
+  on_deny: drop

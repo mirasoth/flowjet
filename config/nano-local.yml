@@ -1,8 +1,9 @@
 # FlowJet (fj) example config for the local Mac Studio inference stack.
-# Place and modify this file in ~/.soothe/config/nano.yml.
+# Place and modify this file at ~/.flowjet/config/nano.yml (the default
+# config path; see FLOWJET_HOME in docs/server.md).
 #
-# Or use config argument to set session level configs:
-# Usage: fj -c ./nano.yml who are you
+# Or use the config argument to set a session-level config:
+# Usage: fj -c ./config/nano-local.yml who are you
 
 providers:
   - name: omlx
