@@ -1,4 +1,4 @@
-# FlowJet (fj) example config for the local Mac Studio inference stack.
+# Example config for the local Mac Studio inference stack.
 # Place and modify this file at ~/.flowjet/config/nano.yml (the default
 # config path; see FLOWJET_HOME in docs/server.md).
 #

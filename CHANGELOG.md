@@ -64,6 +64,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged files via a size/mtime manifest. See
   [RFC-005](docs/specs/RFC-005-arcbox-tool-sandbox.md).
 
+- **Dynamic `max_sandboxes` compute-sizing.** `sandbox.max_sandboxes` now
+  accepts `None` (in addition to an explicit int). When set to `None`, the
+  cap is computed at startup from the host's logical CPU count: 70% of CPU
+  is treated as usable, divided by the per-sandbox `vcpus`, with a hard
+  minimum of 8 (so small hosts and CI runners stay usable). An explicit
+  int still pins the cap (back-compat). The startup log now reports whether
+  the cap was computed or explicit.
+
+- **`max_sandboxes: 0` (unlimited) and env overrides.** Setting
+  `sandbox.max_sandboxes: 0` disables LRU eviction entirely — all idle
+  sandboxes stay alive until the idle reaper or shutdown reclaims them.
+  Two env vars allow operator overrides without editing nano.yml:
+  `FLOWJET_SANDBOX_MAX` (int; `0` = unlimited) pins the cap;
+  `FLOWJET_SANDBOX_MAX_PERCENT` (1–100, default 70) tunes the CPU usable
+  fraction when `max_sandboxes` is `None`. The `max_sandboxes` field is now
+  also declared on soothe-nano's `SandboxConfig` (`int | None`, `ge=0`,
+  default `8`) as the single source of truth for the cap, so the operator
+  can set it in the `sandbox:` section without a flowjet-specific override.
+
 ### Removed
 
 - **Whole-worker arcbox isolation (`FLOWJET_ISOLATION_MODE=arcbox`).** The

@@ -1,17 +1,80 @@
-"""Flowjet-owned ``sandbox:`` settings parsed from the nano.yml."""
+"""Server-owned ``sandbox:`` settings parsed from the nano.yml."""
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# When ``max_sandboxes`` is ``None``, the cap is computed from the host's
+# logical CPU count and per-sandbox resource consumption. The formula reserves
+# a configurable fraction of CPU headroom (default 70% usable) and divides by
+# the per-sandbox vCPU allocation, then applies a hard minimum so small hosts
+# still get a usable pool. The minimum also prevents pathological zero-cap
+# results on single-core CI runners.
+_COMPUTED_MAX_SANDBOXES_MIN = 8
+_DEFAULT_CPU_USABLE_FRACTION = 0.70
+
+# Env var names for operator overrides without editing nano.yml.
+#   FLOWJET_SANDBOX_MAX          → fixed int cap (0 = unlimited)
+#   FLOWJET_SANDBOX_MAX_PERCENT  → percentage of host CPU usable (1–100,
+#                                  default 70); applies only when max is None.
+_ENV_MAX_SANDBOXES = "FLOWJET_SANDBOX_MAX"
+_ENV_MAX_SANDBOXES_PERCENT = "FLOWJET_SANDBOX_MAX_PERCENT"
+
+
+def _env_cpu_usable_fraction() -> float:
+    """Read ``FLOWJET_SANDBOX_MAX_PERCENT`` (1–100, default 70)."""
+    raw = os.environ.get(_ENV_MAX_SANDBOXES_PERCENT)
+    if not raw:
+        return _DEFAULT_CPU_USABLE_FRACTION
+    try:
+        pct = int(raw.strip())
+    except ValueError:
+        return _DEFAULT_CPU_USABLE_FRACTION
+    if pct < 1 or pct > 100:
+        return _DEFAULT_CPU_USABLE_FRACTION
+    return pct / 100.0
+
+
+def compute_max_sandboxes(
+    vcpus: int,
+    *,
+    cpu_count: int | None = None,
+    usable_fraction: float | None = None,
+) -> int:
+    """Compute a dynamic sandbox cap from host CPU and per-sandbox vCPUs.
+
+    The host keeps ``1 - usable_fraction`` CPU headroom (default 30%); the
+    usable core budget is divided by the per-sandbox ``vcpus`` allocation to
+    get the concurrent sandbox count. A hard floor of
+    :data:`_COMPUTED_MAX_SANDBOXES_MIN` keeps small hosts (including CI runners)
+    usable.
+
+    >>> compute_max_sandboxes(2, cpu_count=8)
+    8
+    >>> compute_max_sandboxes(4, cpu_count=32)
+    8
+    >>> compute_max_sandboxes(2, cpu_count=32)
+    11
+    """
+    if vcpus < 1:
+        raise ValueError("vcpus must be >= 1")
+    if usable_fraction is None:
+        usable_fraction = _env_cpu_usable_fraction()
+    if cpu_count is None:
+        cpu_count = os.cpu_count() or 1
+    usable = max(1, int(cpu_count * usable_fraction))
+    computed = max(1, usable // vcpus)
+    return max(computed, _COMPUTED_MAX_SANDBOXES_MIN)
+
 
 @dataclass(slots=True)
 class ToolSandboxSettings:
-    """Flowjet-owned ``sandbox:`` keys parsed from the nano.yml.
+    """Server-owned ``sandbox:`` keys parsed from the nano.yml.
 
-    nano.yml keys owned by flowjet (unknown keys are ignored by
+    nano.yml keys owned by the server (unknown keys are ignored by
     ``SootheConfig``)::
 
         sandbox:
@@ -24,7 +87,7 @@ class ToolSandboxSettings:
           default_timeout: 120
           connect_timeout: 60
           idle_timeout_seconds: 300
-          max_sandboxes: 4
+          max_sandboxes: 8         # 0 (unlimited), None (compute from host CPU), or int
           api_url: null            # daemon connection; env fallback ARCBOX_API_URL
           api_key: null            # daemon credential; env fallback ARCBOX_API_KEY
 
@@ -44,7 +107,13 @@ class ToolSandboxSettings:
     default_timeout: int = 120
     connect_timeout: float = 60.0
     idle_timeout_seconds: float = 300.0
-    max_sandboxes: int = 4
+    # Default cap of 8 sandboxes. ``0`` means unlimited — no LRU eviction.
+    # ``None`` means compute from host CPU (70% usable, overridable via
+    # ``FLOWJET_SANDBOX_MAX_PERCENT``) and per-sandbox vCPUs, with a hard
+    # minimum of 8. A positive int pins the cap explicitly. The env var
+    # ``FLOWJET_SANDBOX_MAX`` (int, 0=unlimited) overrides YAML at load time.
+    max_sandboxes: int | None = 8
+
     api_url: str | None = None
     api_key: str | None = None
 
@@ -52,14 +121,51 @@ class ToolSandboxSettings:
         if self.enabled and not (self.image and self.image.strip()):
             raise ValueError(
                 "sandbox.enabled=true in nano.yml requires sandbox.image "
-                "(the guest image reference, e.g. the flowjet-server image)."
+                "(the guest image reference, e.g. the server image)."
             )
-        if self.max_sandboxes < 1:
-            raise ValueError("sandbox.max_sandboxes must be >= 1")
+        if self.max_sandboxes is not None and self.max_sandboxes < 0:
+            raise ValueError(
+                "sandbox.max_sandboxes must be a non-negative int (0 = "
+                "unlimited) or None"
+            )
         if self.vcpus < 1:
             raise ValueError("sandbox.vcpus must be >= 1")
         if self.mem_mib < 128:
             raise ValueError("sandbox.mem_mib must be >= 128")
+
+    def effective_max_sandboxes(self, *, cpu_count: int | None = None) -> int:
+        """Resolve the sandbox cap: env override, explicit int, None, or unlimited.
+
+        Resolution order (highest priority first):
+        1. ``FLOWJET_SANDBOX_MAX`` env var (int; ``0`` = unlimited → returns 0)
+        2. Explicit ``max_sandboxes`` int (``0`` = unlimited → returns 0)
+        3. ``None`` → computed from host CPU and per-sandbox vCPUs
+
+        Returns ``0`` when the cap is unlimited; callers must treat ``0`` as
+        "no LRU eviction" (see :meth:`ArcBoxToolSandboxManager._make_room`).
+
+        ``cpu_count`` is injectable for deterministic tests; production reads
+        :func:`os.cpu_count`.
+        """
+        resolved = self._resolve_max_sandboxes()
+        if resolved == 0:
+            return 0  # unlimited
+        if resolved is not None:
+            return resolved
+        return compute_max_sandboxes(self.vcpus, cpu_count=cpu_count)
+
+    def _resolve_max_sandboxes(self) -> int | None:
+        """Return the raw cap from env override or field, or ``None`` for compute."""
+        env_raw = os.environ.get(_ENV_MAX_SANDBOXES)
+        if env_raw:
+            token = env_raw.strip().lower()
+            if token in ("none", "null"):
+                return None
+            try:
+                return int(token)
+            except ValueError:
+                pass  # fall through to field value
+        return self.max_sandboxes
 
 
 class SandboxSettingsLoader:
@@ -69,7 +175,7 @@ class SandboxSettingsLoader:
     def parse_section(section: Any) -> ToolSandboxSettings:
         """Parse the raw ``sandbox:`` mapping from nano.yml.
 
-        Keys flowjet does not own (``on_deny``, ``placement_overrides``,
+        Keys the server does not own (``on_deny``, ``placement_overrides``,
         ``max_shuttle_bytes``) are ignored here — they stay in the loaded
         ``SootheConfig`` and reach the agent build unchanged.
         """
@@ -80,6 +186,16 @@ class SandboxSettingsLoader:
             for f in ToolSandboxSettings.__dataclass_fields__  # type: ignore[attr-defined]
         }
         values = {k: section[k] for k in section if k in known}
+        # ``max_sandboxes: None`` in YAML parses as the string "none"; map
+        # that to ``None`` so :meth:`effective_max_sandboxes` computes the cap.
+        # ``max_sandboxes: 0`` means unlimited (no LRU eviction).
+        if isinstance(values.get("max_sandboxes"), str):
+            token = values["max_sandboxes"].strip().lower()
+            if token in ("none", "null"):
+                values["max_sandboxes"] = None
+            else:
+                # Accept a numeric string for YAML robustness (incl. 0).
+                values["max_sandboxes"] = int(token)
         return ToolSandboxSettings(**values)
 
     @classmethod

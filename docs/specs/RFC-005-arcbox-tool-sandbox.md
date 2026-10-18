@@ -62,7 +62,8 @@ sandbox:
   default_timeout: 120       # per guest execute, seconds
   connect_timeout: 60
   idle_timeout_seconds: 300  # idle sandbox recycle
-  max_sandboxes: 4           # live VM cap (LRU idle eviction)
+  max_sandboxes: 8          # 0 (unlimited), None (70% usable CPU / vcpus, min 8), or int
+  # FLOWJET_SANDBOX_MAX (int; 0=unlimited) and FLOWJET_SANDBOX_MAX_PERCENT (1-100, default 70) env overrides
   # api_url / api_key: optional; env fallback ARCBOX_API_URL / ARCBOX_API_KEY
   # soothe-nano placement policy (pass-through):
   on_deny: drop              # 'raise' fails closed on unregistered tools
@@ -88,7 +89,10 @@ flowchart LR
 
 - `flowjet.core.backends.tool_sandbox.ArcBoxToolSandboxManager` — one guest VM
   per workspace: lazy spawn (`AsyncArcBox.create(..., wait_until_ready=True)`),
-  idle reaper, LRU eviction at `max_sandboxes`, per-workspace asyncio lock.
+  idle reaper, LRU eviction at `max_sandboxes` (explicit int, `None`, or `0`
+  for unlimited — `None` sizes from host CPU: 70% usable ÷ per-sandbox vCPUs,
+  minimum 8; env overrides `FLOWJET_SANDBOX_MAX` and `FLOWJET_SANDBOX_MAX_PERCENT`),
+  per-workspace asyncio lock.
 - `SandboxAwareWorkspaceResolver` — decorates the existing resolver so staging
   runs inside the session lifecycle: open = inner materialize → host push;
   close = guest pull → inner checkpoint (the sync checkpoint must see guest
