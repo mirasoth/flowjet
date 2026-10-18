@@ -125,8 +125,7 @@ class ToolSandboxSettings:
             )
         if self.max_sandboxes is not None and self.max_sandboxes < 0:
             raise ValueError(
-                "sandbox.max_sandboxes must be a non-negative int (0 = "
-                "unlimited) or None"
+                "sandbox.max_sandboxes must be a non-negative int (0 = unlimited) or None"
             )
         if self.vcpus < 1:
             raise ValueError("sandbox.vcpus must be >= 1")

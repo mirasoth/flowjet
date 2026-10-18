@@ -222,8 +222,7 @@ class ArcBoxToolSandboxManager:
         else:
             cap_desc = "explicit"
         logger.info(
-            "ArcBox tool sandbox started: image=%s vcpus=%d mem_mib=%d max=%d "
-            "(%s) network=%s",
+            "ArcBox tool sandbox started: image=%s vcpus=%d mem_mib=%d max=%d (%s) network=%s",
             self._settings.image,
             self._settings.vcpus,
             self._settings.mem_mib,
