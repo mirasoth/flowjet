@@ -1,11 +1,4 @@
-"""RuntimeBackend that admits, resolves workspaces, and submits to an isolation pool.
-
-Phase 1–2 use :class:`~flowjet.core.backends.isolation.pool.ThreadPool`.
-Phase 3 adds :class:`~flowjet.core.backends.isolation.arcbox_vm_pool.ArcBoxVMIsolationPool`
-for microVM-per-workspace session isolation via the external arcbox runtime.
-Both implement the
-:class:`~flowjet.core.backends.isolation.isolation_pool.IsolationPool` protocol.
-"""
+"""RuntimeBackend that admits, resolves workspaces, and submits to the thread pool."""
 
 from __future__ import annotations
 
@@ -17,7 +10,7 @@ from uuid import uuid4
 from flowjet.core.backends.isolation.adapter import AdapterFactory
 from flowjet.core.backends.isolation.admission import SessionAdmission
 from flowjet.core.backends.isolation.mode_gate import InteractionModeGate
-from flowjet.core.backends.isolation.pool import PoolMetrics, PoolSettings, ThreadPool
+from flowjet.core.backends.isolation.pool import PoolSettings, ThreadPool
 from flowjet.core.backends.isolation.request import IsolatedRunRequest
 from flowjet.core.backends.isolation.workspace import WorkspaceResolver
 from flowjet.core.events import ModelInfo, RunRequest, RuntimeEvent
@@ -29,11 +22,6 @@ class IsolatingRuntimeBackend:
     The workspace resolver is injectable (Phase 2): callers can pass a
     :class:`SyncAwareWorkspaceResolver` to enable fsspec workspace sync.
     The default is the local-only :class:`WorkspaceResolver` (Phase 1).
-
-    The isolation pool is injectable (Phase 3): callers can pass an
-    :class:`~flowjet.core.backends.isolation.arcbox_vm_pool.ArcBoxVMIsolationPool`
-    to enable microVM-per-workspace session isolation.  The default is the
-    in-process :class:`ThreadPool` (Phase 1/2).
     """
 
     def __init__(
@@ -44,10 +32,9 @@ class IsolatingRuntimeBackend:
         pool_settings: PoolSettings | None = None,
         home: Path | str | None = None,
         admission: SessionAdmission | None = None,
-        pool: Any | None = None,
-        allow_external_workspace: bool = False,
         mode_gate: InteractionModeGate | None = None,
         workspace_resolver: WorkspaceResolver | None = None,
+        allow_external_workspace: bool = False,
     ) -> None:
         self._models = models or ["default"]
         home_path = Path(home).expanduser() if home else Path.home() / ".flowjet"
@@ -56,11 +43,11 @@ class IsolatingRuntimeBackend:
         )
         self._admission = admission or SessionAdmission()
         self._mode_gate = mode_gate or InteractionModeGate()
-        self._pool = pool or ThreadPool(adapter_factory, pool_settings)
+        self._pool = ThreadPool(adapter_factory, pool_settings)
         self._started = False
 
     @property
-    def pool(self) -> Any:
+    def pool(self) -> ThreadPool:
         return self._pool
 
     @property
@@ -68,7 +55,7 @@ class IsolatingRuntimeBackend:
         return self._workspaces
 
     def pool_metrics(self) -> dict[str, Any]:
-        m: PoolMetrics = self._pool.metrics()
+        m = self._pool.metrics()
         return {
             "total_workers": m.total_workers,
             "idle_workers": m.idle_workers,

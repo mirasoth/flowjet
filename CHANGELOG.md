@@ -10,6 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ArcBox tool sandbox (RFC-005).** Tool calls — shell commands and workspace
+  file operations — can now run inside a per-workspace ArcBox Linux microVM
+  via soothe-nano 2.0's `ArcBoxBackend`. Enabled by a `sandbox:` section in
+  the nano.yml (`enabled`, `image`, `vcpus`, `mem_mib`, `network`,
+  `workspace_root`, `default_timeout`, `idle_timeout_seconds`,
+  `max_sandboxes`); the section's placement-policy keys (`on_deny`,
+  `placement_overrides`, `max_shuttle_bytes`) pass through to soothe-nano
+  unchanged. The AgentRuntime isolation is unchanged (thread pool); the
+  agent loop and credentials stay on the host, only the execution surface
+  moves into the guest. The host workspace stays the integration point:
+  `SandboxAwareWorkspaceResolver` stages host→guest at session open and
+  guest→host at close (before any workspace-sync checkpoint), skipping
+  unchanged files via a size/mtime manifest. See
+  [RFC-005](docs/specs/RFC-005-arcbox-tool-sandbox.md).
+
+### Removed
+
+- **Whole-worker arcbox isolation (`FLOWJET_ISOLATION_MODE=arcbox`).** The
+  microVM-per-workspace *worker* mode (arcbox_vm_pool / arcbox_worker /
+  arcbox_protocol) is deleted — superseded by the ArcBox tool sandbox above.
+  `FLOWJET_ISOLATION_MODE`, all `FLOWJET_ARCBOX_*` settings, and the
+  `validate_isolation_compatibility` startup guard are gone; the thread pool
+  is the only isolation pool. The `arcbox` SDK dependency stays (used by the
+  tool sandbox).
+
 ## [2.0.11] — 2026-10-15
 
 ### Changed

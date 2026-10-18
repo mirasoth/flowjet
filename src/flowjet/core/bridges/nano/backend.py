@@ -70,20 +70,19 @@ def build_isolating_nano_backend(
     pool_settings: Any = None,
     allow_external_workspace: bool = False,
     workspace_resolver: Any = None,
-    pool: Any | None = None,
+    sandbox_manager: Any | None = None,
 ) -> Any:
     """Construct IsolatingRuntimeBackend with NanoAgentAdapter factory.
 
-    When ``pool`` is provided (Phase 3), it is used directly instead of
-    constructing a new :class:`ThreadPool`.  This allows callers to inject
-    a :class:`BoxLiteVMIsolationPool` for microVM-based isolation.
+    ``sandbox_manager`` (nano.yml ``sandbox:`` section) runs tool calls in a
+    per-workspace ArcBox microVM via soothe-nano's sandbox backend.
     """
     from flowjet.core.backends.isolation import IsolatingRuntimeBackend, PoolSettings
 
     settings = pool_settings if pool_settings is not None else PoolSettings()
 
     def factory() -> NanoAgentAdapter:
-        return NanoAgentAdapter(config_path=config_path)
+        return NanoAgentAdapter(config_path=config_path, sandbox_manager=sandbox_manager)
 
     return IsolatingRuntimeBackend(
         models=models,
@@ -92,5 +91,4 @@ def build_isolating_nano_backend(
         home=home,
         allow_external_workspace=allow_external_workspace,
         workspace_resolver=workspace_resolver,
-        pool=pool,
     )

@@ -171,7 +171,7 @@ def test_cli_nano_backend_uses_nano_factory(monkeypatch: pytest.MonkeyPatch) -> 
     agent = bootstrap.create_agent(SootheConfig(), CLI_PROFILE, backend=Backend.NANO)
 
     assert agent == "nano-agent"
-    assert captured == {"interaction_mode": None}
+    assert captured == {"interaction_mode": None, "backend": None}
 
 
 def test_cli_soothe_backend_disables_hitl_interrupts(monkeypatch: pytest.MonkeyPatch) -> None:

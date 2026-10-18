@@ -54,7 +54,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv /app/.venv; \
     # The image only needs the HTTP service; --extra server pulls fastapi,
     # uvicorn, agent-client-protocol, the S3 sync backend, and the arcbox
-    # microVM SDK (session isolation).
+    # SDK (sandboxed tool execution, see sandbox: in nano.yml).
     UV_PROJECT_ENVIRONMENT=/app/.venv uv sync --no-dev --frozen --no-editable --extra server; \
     if [ "$LOCAL_WHEELS" = "1" ]; then \
       # Force-install local wheel overrides (e.g. a locally-built soothe with

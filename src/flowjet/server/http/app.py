@@ -35,18 +35,16 @@ def build_backend(settings: Settings) -> RuntimeBackend:
     enabling fsspec workspace sync (Phase 2). Otherwise the default
     local-only :class:`WorkspaceResolver` is used (Phase 1).
 
-    When ``settings.isolation_mode`` is ``"arcbox"``, an
-    :class:`ArcBoxVMIsolationPool` is constructed and injected — enabling
-    microVM-per-workspace sandboxing via the external arcbox runtime.
-    Otherwise the default in-process :class:`ThreadPool` is used.
+    When the nano.yml enables the ``sandbox:`` section, tool calls run in a
+    per-workspace ArcBox microVM: a
+    :class:`~flowjet.core.backends.tool_sandbox.ArcBoxToolSandboxManager`
+    stages the workspace host↔guest and the adapters bind soothe-nano's
+    sandbox backend at agent build time. The AgentRuntime isolation is
+    unchanged (in-process thread pool).
     """
     backend = resolve_backend(Surface.SERVER)
-    # Guard: arcbox isolation requires the soothe host runtime.  Catch the
-    # misconfiguration early (at server startup) rather than letting the
-    # worker silently fall back to a nano adapter inside the sandbox.
-    settings.validate_isolation_compatibility(backend.value)
-    workspace_resolver = _build_workspace_resolver(settings)
-    isolation_pool = _build_isolation_pool(settings)
+    sandbox_manager = _build_sandbox_manager(settings)
+    workspace_resolver = _build_workspace_resolver(settings, sandbox_manager)
     common = dict(
         models=settings.model_ids(),
         config_path=settings.nano_config,
@@ -54,76 +52,76 @@ def build_backend(settings: Settings) -> RuntimeBackend:
         pool_settings=settings.pool_settings(),
         allow_external_workspace=settings.allow_external_workspace,
         workspace_resolver=workspace_resolver,
-        pool=isolation_pool,
+        sandbox_manager=sandbox_manager,
     )
     if backend is Backend.SOOTHE:
         return build_isolating_soothe_backend(**common)
     return build_isolating_nano_backend(**common)
 
 
-def _build_workspace_resolver(settings: Settings) -> Any:
-    """Construct the workspace resolver based on sync settings.
+def _build_sandbox_manager(settings: Settings) -> Any:
+    """Build the ArcBox tool-sandbox manager from the nano.yml ``sandbox:`` section.
+
+    Returns ``None`` when the sandbox is disabled (the default) — behavior is
+    then identical to a host-side tools deployment. Fails loud at startup when
+    the section is enabled but misconfigured (missing image) or the arcbox SDK
+    is not installed.
+    """
+    from flowjet.core.backends.tool_sandbox import (
+        ArcBoxToolSandboxManager,
+        load_tool_sandbox_settings,
+    )
+
+    sandbox_settings = load_tool_sandbox_settings(settings.nano_config)
+    if not sandbox_settings.enabled:
+        return None
+    manager = ArcBoxToolSandboxManager(sandbox_settings)
+    manager.validate_runtime()
+    return manager
+
+
+def _build_workspace_resolver(settings: Settings, sandbox_manager: Any = None) -> Any:
+    """Construct the workspace resolver based on sync and sandbox settings.
 
     When ``workspace_sync_source`` is set, build a
     :class:`SyncAwareWorkspaceResolver` backed by an fsspec sync backend.
-    Otherwise return ``None`` so the backend uses the default
-    :class:`WorkspaceResolver` (local-only, Phase 1 behavior).
+    Otherwise the resolver is the default local-only
+    :class:`WorkspaceResolver` (Phase 1 behavior).
+
+    When the tool sandbox is enabled, the resolver is wrapped in a
+    :class:`~flowjet.core.backends.tool_sandbox.SandboxAwareWorkspaceResolver`
+    so the host↔guest workspace staging runs inside the session lifecycle
+    (guest pull before the sync checkpoint).
     """
     sync_source = settings.workspace_sync_source
-    if not sync_source or not sync_source.strip():
+    if sync_source and sync_source.strip():
+        from flowjet.core.backends.isolation.workspace import (
+            SyncAwareWorkspaceResolver,
+        )
+
+        inner: Any = SyncAwareWorkspaceResolver.from_settings(
+            home=settings.home_path(),
+            cas_root=settings.workspace_cas_root,
+            sync_source=sync_source,
+            sync_config_path=settings.workspace_sync_config,
+            allow_external_workspace=settings.allow_external_workspace,
+            content_source=settings.workspace_content_source,
+        )
+    elif sandbox_manager is not None:
+        from flowjet.core.backends.isolation.workspace import WorkspaceResolver
+
+        inner = WorkspaceResolver(
+            settings.home_path(),
+            allow_external_workspace=settings.allow_external_workspace,
+        )
+    else:
         return None
-    from flowjet.core.backends.isolation.workspace import (
-        SyncAwareWorkspaceResolver,
-    )
 
-    return SyncAwareWorkspaceResolver.from_settings(
-        home=settings.home_path(),
-        cas_root=settings.workspace_cas_root,
-        sync_source=sync_source,
-        sync_config_path=settings.workspace_sync_config,
-        allow_external_workspace=settings.allow_external_workspace,
-        content_source=settings.workspace_content_source,
-    )
+    if sandbox_manager is None:
+        return inner
+    from flowjet.core.backends.tool_sandbox import SandboxAwareWorkspaceResolver
 
-
-def _build_isolation_pool(settings: Settings) -> Any:
-    """Construct the isolation pool based on isolation mode settings.
-
-    When ``isolation_mode`` is ``"arcbox"``, build an
-    :class:`ArcBoxVMIsolationPool` for microVM-per-workspace sandboxing via
-    the external arcbox runtime. Otherwise return ``None`` so the backend
-    uses the default in-process :class:`ThreadPool`.
-
-    Construction is lightweight (no SDK import — that happens lazily at
-    ``pool.start()``) so building the backend never hard-fails in
-    environments without the SDK.
-    """
-    if settings.isolation_mode != "arcbox":
-        return None
-    from flowjet.core.backends.isolation.arcbox_vm_pool import (
-        ArcBoxVMIsolationPool,
-    )
-
-    return ArcBoxVMIsolationPool(
-        adapter_factory=_arcbox_adapter_factory(settings),
-        settings=settings.arcbox_pool_settings(),
-    )
-
-
-def _arcbox_adapter_factory(settings: Settings) -> Any:
-    """Return a zero-arg adapter factory for the arcbox pool.
-
-    The adapter is constructed inside the worker VM, not in the server
-    process. This factory is a placeholder — the pool passes it to satisfy
-    the IsolationPool protocol but the worker builds its own adapter from
-    the resolved backend setting.
-
-    The worker's ``_build_adapter()`` builds a real ``SootheAgentAdapter``
-    (or ``NanoAgentAdapter``) based on the resolved server backend.
-    """
-    from flowjet.core.bridges.soothe.adapter import SootheAgentAdapter
-
-    return SootheAgentAdapter
+    return SandboxAwareWorkspaceResolver(inner, sandbox_manager)
 
 
 def create_app(

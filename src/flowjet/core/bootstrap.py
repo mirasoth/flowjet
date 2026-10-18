@@ -217,6 +217,7 @@ def create_agent(
     *,
     interaction_mode: InteractionMode | str | None = None,
     backend: Backend | None = None,
+    sandbox: Any | None = None,
 ) -> Any:
     """Build an agent for ``profile``'s surface on the selected backend.
 
@@ -227,6 +228,12 @@ def create_agent(
     The server uses a dual-mode agent and supplies the interaction mode per
     request through the LangGraph ``configurable`` dict; the CLI resolves the
     mode up front and passes it to the single-mode constructor.
+
+    ``sandbox`` is an optional soothe-nano execution backend (e.g.
+    :class:`soothe_nano.sandbox.ArcBoxBackend`): when set, shell and
+    workspace-file tool calls execute inside the sandbox instead of on the
+    host. Both the nano and the soothe host builders accept it via their
+    ``backend`` seam.
     """
     from flowjet.core.modes import apply_profile
 
@@ -235,16 +242,16 @@ def create_agent(
     cfg = apply_profile(config, profile, backend=resolved)
 
     if resolved is Backend.SOOTHE:
-        return create_soothe_agent(cfg, profile, mode)
+        return create_soothe_agent(cfg, profile, mode, sandbox=sandbox)
 
     if profile.surface is Surface.SERVER:
         from soothe_nano import create_dual_mode_nano_agent
 
-        return create_dual_mode_nano_agent(cfg)
+        return create_dual_mode_nano_agent(cfg, backend=sandbox)
 
     from soothe_nano import create_nano_agent
 
-    return create_nano_agent(cfg, interaction_mode=mode)
+    return create_nano_agent(cfg, interaction_mode=mode, backend=sandbox)
 
 
 def soothe_agent_factory() -> Any:
@@ -263,6 +270,8 @@ def create_soothe_agent(
     config: Any,
     profile: SurfaceProfile = CLI_PROFILE,
     mode: str | None = None,
+    *,
+    sandbox: Any | None = None,
 ) -> Any:
     """Build a ``soothe`` (host runtime) agent for ``profile``'s surface.
 
@@ -273,8 +282,8 @@ def create_soothe_agent(
     """
     factory = soothe_agent_factory()
     if profile.surface is Surface.SERVER:
-        return ModeRoutedSootheAgent(config, factory)
-    return factory(config, interaction_mode=mode, interrupt_on={})
+        return ModeRoutedSootheAgent(config, factory, sandbox=sandbox)
+    return factory(config, interaction_mode=mode, interrupt_on={}, backend=sandbox)
 
 
 class ModeRoutedSootheAgent:
@@ -295,17 +304,25 @@ class ModeRoutedSootheAgent:
         config: Any,
         factory: Any,
         modes: tuple[str, ...] = ("agent", "ask"),
+        *,
+        sandbox: Any | None = None,
     ) -> None:
         self._config = config
         self._factory = factory
         self._modes = modes
+        self._sandbox = sandbox
         self._agents: dict[str, Any] = {}
 
     def _agent_for(self, mode: str) -> Any:
         resolved = mode if mode in self._modes else "agent"
         agent = self._agents.get(resolved)
         if agent is None:
-            agent = self._factory(self._config, interaction_mode=resolved, interrupt_on={})
+            agent = self._factory(
+                self._config,
+                interaction_mode=resolved,
+                interrupt_on={},
+                backend=self._sandbox,
+            )
             self._agents[resolved] = agent
         return agent
 

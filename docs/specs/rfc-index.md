@@ -12,6 +12,7 @@ Master index of all RFC specifications.
 | [RFC-002](RFC-002-isolated-thread-pool-runtime.md) | Isolated Thread-Pool Runtime | Architecture Design | Draft | 2026-07-31 | 2026-07-31 |
 | [RFC-003](RFC-003-production-isolation-hardening.md) | Production Isolation Hardening | Architecture Design | Draft | 2026-07-31 | 2026-07-31 |
 | [RFC-004](RFC-004-unified-package.md) | Unified FlowJet Package (CLI + Server) | Architecture Design | Accepted | 2026-09-17 | 2026-09-17 |
+| [RFC-005](RFC-005-arcbox-tool-sandbox.md) | ArcBox Tool Sandbox (soothe-nano 2.0) | Architecture Design | Draft | 2026-10-18 | 2026-10-18 |
 
 ---
 
@@ -42,12 +43,12 @@ Master index of all RFC specifications.
 ### By Kind
 
 - **Conceptual Design**: _None yet_
-- **Architecture Design**: [RFC-001](RFC-001-openai-compatible-api.md), [RFC-002](RFC-002-isolated-thread-pool-runtime.md), [RFC-003](RFC-003-production-isolation-hardening.md)
+- **Architecture Design**: [RFC-001](RFC-001-openai-compatible-api.md), [RFC-002](RFC-002-isolated-thread-pool-runtime.md), [RFC-003](RFC-003-production-isolation-hardening.md), [RFC-005](RFC-005-arcbox-tool-sandbox.md)
 - **Implementation Interface Design**: _None yet_
 
 ### By Status
 
-- **Draft**: [RFC-001](RFC-001-openai-compatible-api.md), [RFC-002](RFC-002-isolated-thread-pool-runtime.md), [RFC-003](RFC-003-production-isolation-hardening.md)
+- **Draft**: [RFC-001](RFC-001-openai-compatible-api.md), [RFC-002](RFC-002-isolated-thread-pool-runtime.md), [RFC-003](RFC-003-production-isolation-hardening.md), [RFC-005](RFC-005-arcbox-tool-sandbox.md)
 - **Review**: _None yet_
 - **Frozen**: _None yet_
 

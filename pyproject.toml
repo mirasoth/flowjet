@@ -41,7 +41,8 @@ server = [
     "langchain-core>=0.3",
     # S3/MinIO workspace sync backend
     "s3fs>=2024.6",
-    # microVM-per-workspace session isolation (https://github.com/arcboxlabs/arcbox)
+    # ArcBox microVM SDK — sandboxed tool execution via soothe-nano's
+    # sandbox backend (https://github.com/arcboxlabs/arcbox)
     "arcbox>=0.1.0",
 ]
 dev = [

@@ -84,6 +84,49 @@ with client.responses.stream(
 | `FLOWJET_ALLOW_EXTERNAL_WORKSPACE` | `true` | Honour `metadata.workspace` outside `FLOWJET_HOME`; set `false` to force hashed per-session workspaces |
 | `FLOWJET_CORS_ORIGINS` | `*` | Comma-separated browser origins allowed to call the API |
 
+## Tool sandbox (ArcBox, optional)
+
+Tool calls — shell commands and workspace file operations — can run inside a
+per-workspace [ArcBox](https://github.com/arcboxlabs/arcbox) Linux microVM via
+soothe-nano 2.0's sandbox backend. The agent loop, LLM calls and credentials
+stay in the server process; only the execution surface moves into the guest.
+Enable it in the nano.yml (`$FLOWJET_HOME/config/nano.yml` or
+`FLOWJET_NANO_CONFIG`):
+
+```yaml
+sandbox:
+  enabled: true              # flowjet: run tool calls in an arcbox container
+  image: flowjet-server:2.2  # guest image; must ship python3 + POSIX coreutils
+  vcpus: 2
+  mem_mib: 2048
+  network: true
+  workspace_root: /workspace
+  default_timeout: 120       # per guest execute, seconds
+  idle_timeout_seconds: 300  # idle sandbox recycle
+  max_sandboxes: 4
+  # soothe-nano placement policy (pass-through):
+  on_deny: drop              # 'raise' fails closed on unregistered tools
+```
+
+Requirements and behavior:
+
+- The arcbox SDK ships with the `server` extra; the **arcbox daemon** must run
+  on the host (`arcbox serve` — Hypervisor.framework on macOS, KVM on Linux).
+  Connect to a remote daemon with `ARCBOX_API_URL` / `ARCBOX_API_KEY`.
+- One microVM per workspace, spawned lazily, recycled after
+  `idle_timeout_seconds`, LRU-evicted at `max_sandboxes`.
+- The host workspace directory stays the integration point: at session open
+  the tree is staged host → guest, at close guest → host (before any
+  workspace-sync checkpoint). Unchanged files are skipped via a
+  size/mtime manifest.
+- Inside the sandbox the agent sees `/workspace` (the guest root) as its
+  workspace. Framework state (memories etc.) routes back to the host.
+- Concurrent sessions sharing one workspace share one guest; a host push is
+  skipped while a peer run is active. Host files deleted between sessions are
+  not removed from the guest.
+
+See [RFC-005](specs/RFC-005-arcbox-tool-sandbox.md) for details.
+
 ## Security model
 
 The CLI and the server have deliberately different invariants, declared in
@@ -134,3 +177,4 @@ healthcheck.
 - [RFC-001: OpenAI-Compatible API](specs/RFC-001-openai-compatible-api.md)
 - [RFC-002: Isolated Thread-Pool Runtime](specs/RFC-002-isolated-thread-pool-runtime.md)
 - [RFC-003: Production Isolation Hardening](specs/RFC-003-production-isolation-hardening.md)
+- [RFC-005: ArcBox Tool Sandbox](specs/RFC-005-arcbox-tool-sandbox.md)
