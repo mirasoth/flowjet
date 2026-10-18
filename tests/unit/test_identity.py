@@ -17,10 +17,8 @@ _NANO_WORDING = "a helpful AI assistant invented by"
 
 def test_identity_fragment_replaces_nano_template() -> None:
     import soothe_nano.prompts.fragments as fragments
-    import soothe_nano.prompts.identity as identity
 
     assert install_flowjet_identity() is True
-    assert identity.ASSISTANT_IDENTITY_FRAGMENT == FLOWJET_IDENTITY_FRAGMENT
     assert fragments.ASSISTANT_IDENTITY_FRAGMENT == FLOWJET_IDENTITY_FRAGMENT
     assert _NANO_WORDING not in FLOWJET_IDENTITY_FRAGMENT
 

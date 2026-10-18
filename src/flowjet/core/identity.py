@@ -64,21 +64,21 @@ def install_flowjet_identity() -> bool:
         return True
 
     try:
-        from soothe_nano.prompts import fragments, identity
+        from soothe_nano.prompts import fragments
     except ImportError:  # pragma: no cover - soothe-nano is a hard dependency
         logger.warning("soothe-nano prompt fragments unavailable; identity not overridden")
         return False
 
-    if not hasattr(identity, "ASSISTANT_IDENTITY_FRAGMENT"):
+    if not hasattr(fragments, "ASSISTANT_IDENTITY_FRAGMENT"):
         logger.warning(
-            "soothe_nano.prompts.identity no longer exposes "
+            "soothe_nano.prompts.fragments no longer exposes "
             "ASSISTANT_IDENTITY_FRAGMENT; FlowJet will identify as the nano default"
         )
         return False
 
-    # `identity` bound the constant at import time; `fragments` is the source of
-    # truth other code may read. Patch both so either import path agrees.
-    identity.ASSISTANT_IDENTITY_FRAGMENT = FLOWJET_IDENTITY_FRAGMENT
+    # nano 2.0: ``PromptIdentity.identity_block`` reads the fragment from the
+    # ``fragments`` module at call time, so patching it here reaches every
+    # prompt built afterwards.
     fragments.ASSISTANT_IDENTITY_FRAGMENT = FLOWJET_IDENTITY_FRAGMENT
     _INSTALLED = True
     return True

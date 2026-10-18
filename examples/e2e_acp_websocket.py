@@ -249,7 +249,10 @@ async def run_sdk_scenario(url: str) -> None:
         client.updates.clear()
         prompt_resp = await conn.prompt(
             session_id=session_id,
-            prompt=[text_block("Hello from ACP E2E!")],
+            prompt=[text_block(
+                "Use the ls tool to list the current directory, then reply with "
+                "exactly this text and nothing else: Echo: Hello from ACP E2E!"
+            )],
             emit_tools=True,
         )
         print(f"  stopReason = {prompt_resp.stop_reason}")
