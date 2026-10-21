@@ -38,10 +38,15 @@ microVM duplicated soothe-nano's sandbox capability at the wrong layer.
 - Per-session guest isolation: the sandbox is **per workspace**. Concurrent
   sessions sharing one workspace share one guest (staged serially; a peer
   mid-run skips the host push so live guest state is never clobbered).
-- Guest-side deletion propagation: a host file deleted between sessions is
-  not removed from the guest (the pull direction is authoritative at close).
 - Incremental (delta) transfers: staging is a full-tree push/pull with a
   `(size, mtime_ns)` manifest skip for unchanged files.
+
+> **Revision (2026-10-21, RFC-RD-607)**: guest-side deletion propagation is no
+> longer a non-goal — `pull` now removes host files that were recorded in the
+> last push manifest but disappeared from the guest tree (so agent-side
+> deletes flow guest → host → sync checkpoint → content tree). Host files
+> created after the push are never in the manifest and can never be deleted
+> by this path.
 
 ## 4. Configuration
 

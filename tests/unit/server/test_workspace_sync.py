@@ -91,6 +91,7 @@ async def test_open_close_keyed_by_workspace_id(tmp_path: Path):
     mock_ws.manifest = None
     mock_ws.start_tracking = AsyncMock()
     mock_ws.checkpoint = AsyncMock()
+    mock_ws.materialize_content = AsyncMock(return_value=0)
     mock_manager = MagicMock()
     mock_manager.open = AsyncMock(return_value=mock_ws)
     mock_manager.close = AsyncMock()
@@ -116,6 +117,7 @@ async def test_two_sessions_same_workspace_share_open_run(tmp_path: Path):
     mock_ws.manifest = None
     mock_ws.start_tracking = AsyncMock()
     mock_ws.checkpoint = AsyncMock()
+    mock_ws.materialize_content = AsyncMock(return_value=0)
     mock_manager = MagicMock()
     mock_manager.open = AsyncMock(return_value=mock_ws)
     mock_manager.close = AsyncMock()
@@ -128,6 +130,55 @@ async def test_two_sessions_same_workspace_share_open_run(tmp_path: Path):
     await resolver.open_session("session-b", p2)
     # One open per run_id (workspace), not per session.
     assert mock_manager.open.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_reuse_turn_materializes_again_but_skips_reconcile(tmp_path: Path):
+    """RFC-RD-607 §4.3: every turn materializes; reconcile only when sole active run."""
+
+    class FakeSyncWorkspace:
+        """Real materialize_content signature (soothe 2.0 shape) for kwarg probing."""
+
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+            self.recover = AsyncMock(return_value=None)
+            self.manifest = None
+            self.start_tracking = AsyncMock()
+            self.checkpoint = AsyncMock()
+
+        async def materialize_content(
+            self, *, protected: object = (), reconcile: bool = True
+        ) -> int:
+            self.calls.append({"protected": list(protected), "reconcile": reconcile})
+            return 0
+
+    resolver = SyncAwareWorkspaceResolver(
+        tmp_path, sync_source="s3://b/p", cas_root=str(tmp_path / "cas")
+    )
+    fake_ws = FakeSyncWorkspace()
+    mock_manager = MagicMock()
+    mock_manager.open = AsyncMock(return_value=fake_ws)
+    mock_manager.close = AsyncMock()
+    resolver._manager = mock_manager
+
+    ws_id = "shared-ws"
+    p1 = resolver.resolve("session-a", {"workspace": ws_id})
+    p2 = resolver.resolve("session-b", {"workspace": ws_id})
+
+    await resolver.open_session("session-a", p1)
+    assert fake_ws.calls[0]["reconcile"] is True  # sole active run
+
+    await resolver.open_session("session-b", p2)
+    assert fake_ws.calls[1]["reconcile"] is False  # peer run active — deletes deferred
+
+    await resolver.close_session("session-a", p1)
+    # Peer still active: checkpoint runs but the workspace stays open.
+    fake_ws.checkpoint.assert_awaited_once()
+    mock_manager.close.assert_not_awaited()
+
+    await resolver.close_session("session-b", p2)
+    assert fake_ws.checkpoint.await_count == 2
+    mock_manager.close.assert_awaited_once()  # last run out closes the lifecycle
 
 
 # ---------------------------------------------------------------------------
@@ -207,16 +258,17 @@ async def test_sync_resolver_open_session_restores_artifacts(tmp_path: Path):
 
     sha_good = _hl.sha256(b"same").hexdigest()
 
-    mock_ws = MagicMock()
-    mock_ws.recover = AsyncMock(return_value=None)
-    mock_ws.root = ws_root
-    mock_ws.manifest = SimpleNamespace(
+    mock_manifest = SimpleNamespace(
         artifacts=[
             SimpleNamespace(path="keep.txt", sha256=sha_good, size=4),
             SimpleNamespace(path="missing-blob.txt", sha256="f" * 64, size=9),
         ],
         resources=[],
     )
+    mock_ws = MagicMock()
+    mock_ws.recover = AsyncMock(return_value=SimpleNamespace(manifest_snapshot=mock_manifest))
+    mock_ws.root = ws_root
+    mock_ws.manifest = mock_manifest
     mock_ws.start_tracking = AsyncMock()
     mock_manager = MagicMock()
     mock_manager.open = AsyncMock(return_value=mock_ws)
