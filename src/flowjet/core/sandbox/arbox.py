@@ -116,12 +116,18 @@ class WorkspaceStager:
     ) -> dict[str, tuple[int, int]]:
         """Download the guest workspace tree back to the host (skip identical).
 
-        Returns the manifest for the next push.
+        Deletion propagation (RFC-RD-607 §4.4): files the agent deleted inside
+        the guest are absent from its tree and are removed from the host too.
+        Only paths recorded in the push manifest are eligible — host files
+        created after the push are never in it, so they can never be deleted
+        by this path. Returns the manifest for the next push.
         """
         root = Path(workspace)
         guest_root = PurePosixPath(self._settings.workspace_root)
         pulled = 0
+        deleted = 0
         next_manifest: dict[str, tuple[int, int]] = {}
+        guest_files: set[str] = set()
 
         async def walk(guest_dir: PurePosixPath, rel_dir: PurePosixPath) -> None:
             nonlocal pulled
@@ -142,6 +148,7 @@ class WorkspaceStager:
                     continue
                 if entry.kind != "file":
                     continue
+                guest_files.add(rel_entry.as_posix())
                 data = await sandbox.files.read_bytes(guest_path)
                 dest = root / Path(*rel_entry.parts)
                 if dest.is_file():
@@ -157,8 +164,34 @@ class WorkspaceStager:
                 pulled += 1
 
         await walk(guest_root, PurePosixPath("."))
-        if pulled:
-            logger.info("Sandbox pull for %s: %d files", workspace, pulled)
+        for rel in manifest:
+            if rel in guest_files:
+                continue
+            dest = root / Path(*PurePosixPath(rel).parts)
+            if not dest.is_file() or dest.is_symlink():
+                continue
+            try:
+                await asyncio.to_thread(dest.unlink)
+            except OSError:
+                logger.warning("Sandbox pull: host delete failed for %s in %s", rel, workspace)
+                continue
+            deleted += 1
+            parent = dest.parent
+            while parent != root and parent.is_relative_to(root):
+                if any(parent.iterdir()):
+                    break
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+                parent = parent.parent
+        if pulled or deleted:
+            logger.info(
+                "Sandbox pull for %s: %d files pulled, %d guest deletions propagated",
+                workspace,
+                pulled,
+                deleted,
+            )
         return next_manifest
 
 

@@ -7,6 +7,7 @@ import hashlib
 import logging
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -110,6 +111,29 @@ class WorkspaceResolver:
             return path == self._home
 
 
+@dataclass
+class _OpenWorkspaceEntry:
+    """One open workspace — shared by all concurrent turns of the same run_id.
+
+    ``active_runs`` counts turns currently mid-run on this workspace; the
+    lifecycle (``manager.close``) belongs to the last run out. ``manifest``
+    caches the recovered engine manifest so the per-turn refresh can protect
+    agent artifacts from deletion reconcile.
+    """
+
+    ws: Any
+    active_runs: int = 0
+    manifest: Any | None = None
+    restored: bool = False
+
+
+def _manifest_artifact_paths(manifest: Any | None) -> list[str]:
+    """Relative paths of the manifest's artifacts (reconcile protection set)."""
+    if manifest is None:
+        return []
+    return [entry.path for entry in (getattr(manifest, "artifacts", None) or [])]
+
+
 class SyncAwareWorkspaceResolver(WorkspaceResolver):
     """Workspace resolver backed by soothe's fsspec workspace sync.
 
@@ -150,7 +174,7 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
         self._manager: Any | None = None
         self._sync_backend: Any | None = None
         self._restore_cas: Any | None = None
-        self._open_workspaces: dict[str, Any] = {}
+        self._open_workspaces: dict[str, _OpenWorkspaceEntry] = {}
 
     @property
     def is_sync_enabled(self) -> bool:
@@ -263,7 +287,17 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
         return path
 
     async def open_session(self, session: str, workspace: Path) -> None:
-        """Materialize workspace from object store + start dirty tracking."""
+        """Refresh the workspace from the object store + start dirty tracking.
+
+        RFC-RD-607 §4.3: the sync boundary is the agent turn (one pair of
+        open/close hooks per prompt). Every turn unconditionally materializes
+        the content tree — including the reuse path where a peer session's
+        turn already holds the workspace open (sha-skip keeps repeat turns
+        cheap). Deletion reconcile runs only while this turn is the sole
+        active run on the workspace: deleting files under a peer's feet is
+        worse than a delayed delete, so peer-occupied turns skip it (logged).
+        Prior agent artifacts are restored once, on the opening turn.
+        """
         manager = self._ensure_manager()
         if manager is None:
             return
@@ -273,18 +307,39 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
         # for perfect consistency across resolve/open/close.
         run_id = workspace.name
 
-        # If a workspace is already open for this session (reuse), skip.
-        if run_id in self._open_workspaces:
-            return
+        entry = self._open_workspaces.get(run_id)
+        if entry is None:
+            ws = await manager.open(run_id)
+            entry = _OpenWorkspaceEntry(ws=ws)
+            self._open_workspaces[run_id] = entry
+        else:
+            ws = entry.ws
+        entry.active_runs += 1
 
-        ws = await manager.open(run_id)
+        if entry.manifest is None:
+            try:
+                entry.manifest = await self._recover_manifest(ws)
+            except Exception:
+                logger.warning("Manifest recovery failed for run %s", run_id, exc_info=True)
+
         # Dual-source sync, read path: materialize the content root (e.g.
         # triarch workspace materials) into the workspace BEFORE replaying
         # checkpoint state, so the agent sees both its prior outputs and the
-        # latest backend-uploaded files.
+        # latest backend-uploaded files. The dirty tracker only watches
+        # input/working/output + root files, so content-tree writes never
+        # pollute the dirty set.
         if hasattr(ws, "materialize_content"):
             try:
-                await ws.materialize_content()
+                if self._supports_content_reconcile(ws):
+                    await ws.materialize_content(
+                        protected=_manifest_artifact_paths(entry.manifest),
+                        reconcile=entry.active_runs == 1,
+                    )
+                else:
+                    # soothe < 2.0: no protected/reconcile kwargs — degrade to
+                    # a plain materialize (no reconcile; deletes stay until
+                    # the soothe 2.0.0 release train lands).
+                    await ws.materialize_content()
             except Exception:
                 logger.warning(
                     "Content materialization failed for run %s; continuing with "
@@ -292,19 +347,43 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
                     run_id,
                     exc_info=True,
                 )
-        await self._restore_prior_state(ws)
-        self._open_workspaces[run_id] = ws
+
+        if entry.manifest is not None and not entry.restored:
+            await self._restore_prior_state(ws, entry.manifest)
+            entry.restored = True
 
         # Start dirty tracking + background uploader for incremental persistence.
         await ws.start_tracking()
         logger.info("Opened sync workspace for session %s at %s", session, workspace)
 
-    async def _restore_prior_state(self, ws: Any) -> None:
-        """Recover the prior manifest and materialize its files locally.
+    @staticmethod
+    def _supports_content_reconcile(ws: Any) -> bool:
+        """True when the workspace's ``materialize_content`` takes RFC-RD-607 kwargs.
+
+        soothe < 2.0 lacks ``protected``/``reconcile``; probing the signature
+        keeps flowjet runnable against both release trains.
+        """
+        import inspect
+
+        try:
+            params = inspect.signature(ws.materialize_content).parameters
+        except (TypeError, ValueError):
+            return False
+        return "protected" in params and "reconcile" in params
+
+    async def _recover_manifest(self, ws: Any) -> Any | None:
+        """Recover the prior engine manifest snapshot (single call per open).
 
         Round-trip half of workspace sync: ``close_session`` checkpoints and
-        uploads dirty files; this restores them so a fresh server process (or
-        an evicted session workspace) sees the agent's prior outputs.
+        uploads dirty files; this reads back the manifest so the per-turn
+        materialize can protect agent artifacts and the opening turn can
+        restore them.
+        """
+        payload = await ws.recover()  # reads the latest checkpoint payload
+        return payload.manifest_snapshot if payload is not None else None
+
+    async def _restore_prior_state(self, ws: Any, manifest: Any | None) -> None:
+        """Materialize the recovered manifest's files locally.
 
         - Agent-written files live in ``manifest.artifacts`` (path → sha256,
           blobs under ``<root>/blobs/``) and are restored in place at their
@@ -312,8 +391,6 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
         - Declared input resources (``manifest.resources``) are materialized
           under ``<root>/input/`` via the soothe Materializer.
         """
-        payload = await ws.recover()  # restores checkpoint state, returns snapshot payload
-        manifest = payload.manifest_snapshot if payload is not None else None
         if manifest is None:
             return
 
@@ -363,20 +440,32 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
         return self._restore_cas
 
     async def close_session(self, session: str, workspace: Path) -> None:
-        """Checkpoint dirty files + upload to object store + close workspace."""
+        """Checkpoint dirty files + upload to object store; close when last run ends.
+
+        Concurrent turns of the same workspace share one open workspace:
+        a mid-run peer's close checkpoints the shared state but keeps the
+        workspace open — the lifecycle (``manager.close``) belongs to the
+        last run out (RFC-RD-607 §4.3).
+        """
         if self._manager is None:
             return
 
         run_id = workspace.name
 
-        ws = self._open_workspaces.pop(run_id, None)
-        if ws is None:
+        entry = self._open_workspaces.get(run_id)
+        if entry is None:
             return
 
+        if entry.active_runs > 0:
+            entry.active_runs -= 1
         try:
-            await ws.checkpoint()
+            await entry.ws.checkpoint()
         except Exception:
             logger.warning("Checkpoint failed for session %s", session, exc_info=True)
+        if entry.active_runs > 0:
+            return
+
+        self._open_workspaces.pop(run_id, None)
         try:
             await self._manager.close(run_id)
         except Exception:

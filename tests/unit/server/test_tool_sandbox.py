@@ -441,6 +441,50 @@ async def test_close_pulls_guest_changes_back_to_host(
 
 
 @pytest.mark.asyncio
+async def test_close_propagates_guest_deletions_to_host(
+    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
+) -> None:
+    """A file the agent deleted inside the guest is removed from the host (RFC-RD-607 §4.4)."""
+    ws = make_workspace(tmp_path)
+    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    try:
+        await manager.open_workspace(str(ws))
+        sandbox = fake_arcbox.instances[0].sandboxes[0]
+        # Agent deleted sub/b.txt inside the guest.
+        _ = sandbox.files.tree.pop("/workspace/sub/b.txt")
+
+        await manager.close_workspace(str(ws))
+        assert not (ws / "sub" / "b.txt").exists()
+        assert not (ws / "sub").exists()  # emptied parent pruned
+        assert (ws / "a.txt").read_text() == "alpha"  # untouched file survives
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_pull_never_deletes_host_files_added_after_push(
+    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
+) -> None:
+    """Host files created after the push are not in the manifest — never deleted."""
+    ws = make_workspace(tmp_path)
+    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    try:
+        await manager.open_workspace(str(ws))
+        sandbox = fake_arcbox.instances[0].sandboxes[0]
+        _ = sandbox.files.tree.pop("/workspace/a.txt")
+        # Host-side addition between push and pull (e.g. a synced-in material).
+        new_dir = ws / "materials" / "m1"
+        new_dir.mkdir(parents=True)
+        _ = (new_dir / "new.txt").write_text("fresh")
+
+        await manager.close_workspace(str(ws))
+        assert not (ws / "a.txt").exists()  # guest deletion propagated
+        assert (new_dir / "new.txt").read_text() == "fresh"  # post-push host file survives
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_close_pulls_only_when_last_run_ends(
     fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
 ) -> None:
