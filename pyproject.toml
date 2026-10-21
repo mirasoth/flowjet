@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flowjet"
-version = "2.1.1"
+version = "2.1.2"
 description = "FlowJet — agent CLI (fj) and server (ACP + OpenAI-compatible HTTP) powered by Soothe"
 readme = "README.md"
 license = { text = "MIT" }
@@ -27,7 +27,7 @@ classifiers = [
 ]
 # Single-dependency CLI wheel; HTTP service deps live in the `server` extra.
 dependencies = [
-    "soothe>=1.2.0,<2.0.0",
+    "soothe>=1.2.1,<2.0.0",
 ]
 
 [project.optional-dependencies]

@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.2] — 2026-10-21
+
+### Changed
+
+- **Bump `soothe` to 1.2.1.** The runtime dependency floor moves from
+  `>=1.2.0` to `>=1.2.1,<2.0.0` to track the upstream fix release. No flowjet
+  API or behavior changes; the locked dependency set is otherwise unchanged.
+
 ## [2.1.1] — 2026-10-21
 
 ### Fixed
