@@ -462,6 +462,24 @@ class FlowJetAcpAgent:
                             session_id,
                             update_agent_thought_text(event.message or "Waiting for input"),
                         )
+                        # Surface the ask_user questions as message chunks, not
+                        # just a thought: hosts accumulate message chunks as the
+                        # turn's reply, so a clarification turn would otherwise
+                        # end with no content at all (thoughts are intermediate
+                        # narration). The CLI renders the same block.
+                        if event.questions:
+                            from flowjet.cli.stream import format_questions_block
+
+                            block = format_questions_block(
+                                event.questions,
+                                session_id,
+                                resume_hint="",
+                            )
+                            await client.session_update(
+                                session_id,
+                                update_agent_message_text(block),
+                            )
+                            output_text += block
                 elif isinstance(event, RunCompleted):
                     output_text = event.output_text or output_text
                     usage_info = event.usage

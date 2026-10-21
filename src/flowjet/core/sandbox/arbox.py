@@ -26,12 +26,10 @@ def _import_arcbox() -> Any:
         import arcbox  # type: ignore[import-not-found]
     except ImportError as exc:  # pragma: no cover - environment-dependent
         raise RuntimeError(
-            "sandbox.enabled=true in nano.yml requires the external arcbox SDK "
-            "(pip install arcbox, already part of the flowjet `server` extra) "
-            "and the arcbox daemon running on the host (arcbox serve). The "
-            "daemon manages microVMs via Hypervisor.framework (macOS) or KVM "
-            "(Linux). Remove the sandbox: section or set sandbox.enabled=false "
-            "to run tools host-side."
+            "sandbox.enabled=true in nano.yml requires the arcbox SDK, which ships "
+            "transitively via soothe-nano (a dependency of soothe). Reinstall flowjet "
+            "or run `arcbox serve` on the host. Remove the sandbox: section or set "
+            "sandbox.enabled=false to run tools host-side."
         ) from exc
     return arcbox
 

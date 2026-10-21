@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] — 2026-10-21
+
+### Fixed
+
+- **ACP clarification turns no longer end empty.** When the agent paused with
+  `ask_user` questions over ACP, the questions were only surfaced as an
+  intermediate agent thought — but hosts accumulate message chunks as the
+  turn's reply, so a clarification turn ended with no content at all. The ACP
+  agent now also emits the questions block as a message chunk (rendered via
+  `format_questions_block`), so the user sees the questions in the host's reply
+  surface and answers there.
+
+- **`format_questions_block` supports non-CLI hosts.** The resume footer
+  ("Resume with: fjf -t <thread> <your answer>") was hardcoded for the CLI.
+  ACP and other non-CLI hosts now pass `resume_hint=""` to omit the
+  CLI-specific footer; the user answers in the host's own input surface.
+  The CLI path is unchanged (footer still shown by default).
+
+- **Drop the direct `arcbox` dependency from the `server` extra.** The arcbox
+  SDK ships transitively via soothe-nano (a dependency of soothe), so the
+  explicit `arcbox>=0.1.0` pin in `pyproject.toml` was redundant and could
+  drift out of sync. The sandbox import error message is updated to point at
+  the transitive path instead of instructing `pip install arcbox`.
+
 ## [2.1.0] — 2026-10-18
 
 ### Changed

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flowjet"
-version = "2.1.0"
+version = "2.1.1"
 description = "FlowJet — agent CLI (fj) and server (ACP + OpenAI-compatible HTTP) powered by Soothe"
 readme = "README.md"
 license = { text = "MIT" }
@@ -40,9 +40,6 @@ server = [
     "langchain-core>=0.3",
     # S3/MinIO workspace sync backend
     "s3fs>=2024.6",
-    # ArcBox microVM SDK — sandboxed tool execution via soothe's
-    # sandbox backend (https://github.com/arcboxlabs/arcbox)
-    "arcbox>=0.1.0",
 ]
 dev = [
     "pytest>=8.0.0",
