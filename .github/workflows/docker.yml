@@ -68,7 +68,10 @@ jobs:
             echo "name=${normalized}" >> "${GITHUB_OUTPUT}"
             echo "image_tag=${image_tag}" >> "${GITHUB_OUTPUT}"
             echo "semver_tag=${semver}" >> "${GITHUB_OUTPUT}"
-            echo "Release tag ${GH_REF_NAME} -> image tag ${image_tag} (semver alias ${semver})"
+            # Move `latest` on release tags, except prereleases (e.g. v2.1.1-rc1).
+            if [[ "${normalized}" == *-* ]]; then latest_tag=""; else latest_tag="latest"; fi
+            echo "latest_tag=${latest_tag}" >> "${GITHUB_OUTPUT}"
+            echo "Release tag ${GH_REF_NAME} -> image tag ${image_tag} (semver alias ${semver}, latest: ${latest_tag:-no})"
           elif [ "${normalized}" = "main" ]; then
             image_tag="latest"
             echo "name=${normalized}" >> "${GITHUB_OUTPUT}"
@@ -143,6 +146,7 @@ jobs:
           tags: |
             type=raw,value=${{ steps.branch.outputs.image_tag }}
             type=raw,value=${{ steps.branch.outputs.semver_tag }},enable=${{ steps.branch.outputs.semver_tag != '' }}
+            type=raw,value=${{ steps.branch.outputs.latest_tag }},enable=${{ steps.branch.outputs.latest_tag != '' }}
             type=sha,prefix=
 
       - name: Build and push image (multi-platform)
