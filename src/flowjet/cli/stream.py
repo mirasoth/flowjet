@@ -276,16 +276,28 @@ class AnswerWriter:
         return self.buf
 
 
-def format_questions_block(questions: tuple[dict[str, Any], ...], thread_id: str) -> str:
+def format_questions_block(
+    questions: tuple[dict[str, Any], ...],
+    thread_id: str,
+    resume_hint: str | None = None,
+) -> str:
     """Render ``ask_user`` questions as a terminal block with a resume hint.
 
     The block is written to stdout after the ephemeral progress line is
     cleared, so it stays visible. Each question lists its options with the
     recommended one (label ending in "(Recommended)") marked. The footer
-    tells the user how to resume with an answer via ``fjf``.
+    tells the user how to resume with an answer via ``fjf``. Non-CLI hosts
+    (ACP) pass ``resume_hint=""`` to omit the CLI-specific footer — the user
+    answers in the host's own input.
     """
+    footer = (
+        f"Resume with: fjf -t {thread_id} <your answer>" if resume_hint is None else resume_hint
+    )
     if not questions:
-        return f"\n⏸ Paused for input · resume with: fjf -t {thread_id} <your answer>\n"
+        block = "\n⏸ Paused for input"
+        if footer:
+            block += f" · {footer}"
+        return block + "\n"
     lines: list[str] = ["", "⏸ Paused for input:"]
     for qi, q in enumerate(questions, 1):
         header = str(q.get("header") or "").strip()
@@ -310,7 +322,8 @@ def format_questions_block(questions: tuple[dict[str, Any], ...], thread_id: str
                     lines.append(f"      • {label}{marker} — {desc}")
                 else:
                     lines.append(f"      • {label}{marker}")
-    lines.append(f"\n  Resume with: fjf -t {thread_id} <your answer>\n")
+    if footer:
+        lines.append(f"\n  {footer}\n")
     return "\n".join(lines) + "\n"
 
 
