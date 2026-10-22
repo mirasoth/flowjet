@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **ArcBox tool sandbox: guest network is now off by default**
+  (`sandbox.network` defaults to `false`, was `true`). With `true` the guest is
+  NAT'ed through the ArcBox host and the daemon only knows ENABLED|NONE, so
+  everything the host can route to — internal network and corporate VPN
+  included — was reachable from agent shell commands. With `false` the guest
+  boots without a network device (no route, no DNS): shell/code execution can
+  reach neither the public internet nor internal services. Web search/crawl is
+  unaffected — `web_search`/`fetch_url` are host-placement tools and never run
+  in the guest. Opt back in per deployment (`sandbox.network: true` in the
+  nano.yml) when the guest really needs egress.
+
 ## [2.1.2] — 2026-10-21
 
 ### Changed

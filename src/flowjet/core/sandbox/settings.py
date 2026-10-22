@@ -82,7 +82,7 @@ class ToolSandboxSettings:
           image: <image ref>       # guest image; must ship python3 + coreutils
           vcpus: 2
           mem_mib: 2048
-          network: true
+          network: false           # guest egress; OFF by default
           workspace_root: /workspace
           default_timeout: 120
           connect_timeout: 60
@@ -102,7 +102,12 @@ class ToolSandboxSettings:
     image: str | None = None
     vcpus: int = 2
     mem_mib: int = 2048
-    network: bool = True
+    # Guest egress. OFF by default: `true` NATs the guest through the ArcBox
+    # host with no per-destination policy (the daemon only knows ENABLED|NONE),
+    # so everything the host can route to — internal network and VPN included —
+    # becomes reachable from agent shell commands. Web access is not lost: the
+    # web tools are host-placement and never run in the guest.
+    network: bool = False
     workspace_root: str = "/workspace"
     default_timeout: int = 120
     connect_timeout: float = 60.0

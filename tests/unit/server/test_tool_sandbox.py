@@ -139,6 +139,14 @@ def test_parse_defaults_to_disabled() -> None:
     assert SandboxSettingsLoader.parse_section({}).enabled is False
 
 
+def test_network_defaults_to_off() -> None:
+    """Guest egress is opt-in: `true` exposes the host's whole routing table."""
+    assert ToolSandboxSettings().network is False
+    assert SandboxSettingsLoader.parse_section({"enabled": True, "image": "img"}).network is False
+    # Explicit opt-in still works.
+    assert SandboxSettingsLoader.parse_section({"network": True}).network is True
+
+
 def test_parse_reads_flowjet_keys_and_ignores_nano_keys() -> None:
     settings = SandboxSettingsLoader.parse_section(
         {
@@ -361,7 +369,7 @@ async def test_open_spawns_sandbox_and_pushes_workspace(
                 "template": "img:1",
                 "vcpus": 3,
                 "memory_mib": 512,
-                "network": True,
+                "network": False,  # default: guest has no network at all
                 "wait_until_ready": True,
             }
         ]
