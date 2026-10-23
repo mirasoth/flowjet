@@ -12,7 +12,7 @@ both directions and tears the connection down on disconnect.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import APIRouter, WebSocket
 
@@ -39,7 +39,7 @@ def create_acp_router(acp_server: AcpServer) -> APIRouter:
 
         await handle_asgi_websocket(
             acp_server,
-            websocket.scope,
+            cast("dict[str, Any]", websocket.scope),
             websocket.receive,
             websocket.send,
         )

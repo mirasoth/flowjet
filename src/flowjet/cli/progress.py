@@ -310,7 +310,7 @@ def _abbrev_path(path: str) -> str:
     try:
         from soothe_nano.utils.formatting import convert_and_abbreviate_path
 
-        return convert_and_abbreviate_path(path)
+        return str(convert_and_abbreviate_path(path))
     except Exception:
         home = os.path.expanduser("~")
         if path.startswith(home + os.sep):

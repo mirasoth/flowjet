@@ -26,7 +26,7 @@ class SandboxAwareWorkspaceResolver:
         return self._manager
 
     def resolve(self, session: str, metadata: dict[str, Any] | None = None) -> Path:
-        return self._inner.resolve(session, metadata)
+        return Path(self._inner.resolve(session, metadata))
 
     async def open_session(self, session: str, workspace: Path) -> None:
         await self._inner.open_session(session, workspace)

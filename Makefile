@@ -5,7 +5,7 @@ HOST ?= 0.0.0.0
 PORT ?= 8618
 export UV_INDEX_URL
 
-.PHONY: sync sync-dev format format-check lint lint-fix autofix \
+.PHONY: sync sync-dev format format-check lint lint-fix autofix typecheck check \
 	test test-unit test-integration test-server test-http test-acp test-coverage \
 	run serve examples examples-sdk examples-modes examples-http examples-acp examples-e2e \
 	build publish clean help
@@ -22,7 +22,9 @@ help:
 	@echo "  make format-check    - Check formatting (CI)"
 	@echo "  make lint            - Lint with ruff"
 	@echo "  make lint-fix        - Auto-fix lint issues"
-	@echo "  make autofix         - Format + auto-fix lint issues"
+	@echo "  make typecheck       - Type-check with mypy"
+	@echo "  make check           - format-check + lint + typecheck (read-only gate)"
+	@echo "  make autofix         - format + lint-fix (auto-fix what is mechanical)"
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test            - Run unit + integration + server tests"
@@ -73,6 +75,13 @@ lint:
 lint-fix:
 	$(UV_RUN) ruff check --fix src/ tests/
 
+typecheck:
+	$(UV_RUN) mypy src/flowjet/
+
+# Read-only quality gate (CI): format-check + lint + typecheck.
+check: format-check lint typecheck
+
+# Mechanical auto-fix only: format + ruff --fix. mypy is not auto-fixable.
 autofix: format lint-fix
 
 test-unit:

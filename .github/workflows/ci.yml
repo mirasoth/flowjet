@@ -33,11 +33,8 @@ jobs:
       - name: Sync dependencies
         run: make sync-dev
 
-      - name: Format check
-        run: make format-check
-
-      - name: Lint
-        run: make lint
+      - name: Quality check (format + lint + typecheck)
+        run: make check
 
       - name: Unit tests
         run: make test-unit
