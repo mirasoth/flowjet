@@ -102,12 +102,25 @@ python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+# Skill-local scripts ship their own (looser) tooling; excluded from package lint.
+exclude = "src/flowjet/builtin_skills"
 
 # Any-heavy moved code; loosened until annotated.
 [[tool.mypy.overrides]]
 module = ["flowjet.server.*", "flowjet.core.bridges.*"]
 disallow_untyped_defs = false
 warn_return_any = false
+
+# Local runtimes and stub-less third-party packages consumed at runtime;
+# typed via runtime contract, not via inline types.
+[[tool.mypy.overrides]]
+module = [
+    "soothe_nano.*",
+    "soothe.*",
+    "fsspec",
+    "yaml",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

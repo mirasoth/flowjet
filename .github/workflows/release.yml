@@ -60,13 +60,9 @@ jobs:
             echo "Version ${VERSION} not found on PyPI, will publish"
           fi
 
-      - name: Format check
+      - name: Quality check (format + lint + typecheck)
         if: steps.check.outputs.exists == 'false'
-        run: make format-check
-
-      - name: Lint
-        if: steps.check.outputs.exists == 'false'
-        run: make lint
+        run: make check
 
       - name: Unit tests
         if: steps.check.outputs.exists == 'false'

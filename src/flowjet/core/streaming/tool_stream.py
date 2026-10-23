@@ -176,10 +176,10 @@ class ToolCallArgAccumulator:
 
         out: list[tuple[str, str, dict[str, Any]]] = []
         for tc_id in updated_ids:
-            state = self._pending.get(tc_id)
-            if not state:
+            pending = self._pending.get(tc_id)
+            if not pending:
                 continue
-            name = str(state.get("name") or "") or "tool"
+            name = str(pending.get("name") or "") or "tool"
             out.append((tc_id, name, self._resolved_args(tc_id)))
         return out
 

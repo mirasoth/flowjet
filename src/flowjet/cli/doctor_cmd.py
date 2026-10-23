@@ -153,7 +153,8 @@ async def _run_diagnose(
             "soothe-nano diagnose API unavailable; upgrade soothe-nano "
             "(fj doctor requires soothe-nano>=1.0.8)"
         ) from exc
-    return await diagnose(config, deep=deep, live_llm=live_llm)
+    result: list[dict[str, Any]] = await diagnose(config, deep=deep, live_llm=live_llm)
+    return result
 
 
 def _bin_version(bin_path: str) -> str | None:

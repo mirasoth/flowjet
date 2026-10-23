@@ -16,7 +16,7 @@ import traceback
 from collections.abc import Coroutine
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from flowjet.cli import __version__
 
@@ -441,7 +441,8 @@ def _build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "-c",
         "--config",
         metavar="PATH",
-        help=_LazyHelp(_default_config_help),
+        # Lazy help keeps the heavy default-config import off -V / normal runs.
+        help=cast("str", _LazyHelp(_default_config_help)),
     )
     paths.add_argument(
         "-w",
@@ -468,7 +469,8 @@ def _build_setup_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "-c",
         "--config",
         metavar="PATH",
-        help=_LazyHelp(_default_config_help),
+        # Lazy help keeps the heavy default-config import off -V / normal runs.
+        help=cast("str", _LazyHelp(_default_config_help)),
     )
     return parser
 

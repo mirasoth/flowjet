@@ -251,17 +251,18 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
         allowlist intentionally excludes local paths, but a local object
         store is a supported target for single-node deployments and tests.
         """
-        scheme = self._sync_source.split("://", 1)[0].lower()
+        source = self._sync_source or ""
+        scheme = source.split("://", 1)[0].lower()
         if scheme == "file":
             import fsspec
             from soothe.workspace.sync.backends.fsspec import FsspecSyncBackend
 
-            fs, root = fsspec.url_to_fs(self._sync_source)
+            fs, root = fsspec.url_to_fs(source)
             return FsspecSyncBackend(fs=fs, root=str(root))
 
         from soothe.workspace.sync import construct_sync_backend
 
-        return construct_sync_backend(self._sync_source, config=config)
+        return construct_sync_backend(source, config=config)
 
     def _load_sync_config(self) -> dict[str, Any] | None:
         """Load optional sync config JSON (credentials, endpoint, etc.)."""
@@ -271,7 +272,8 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
 
         path = Path(self._sync_config).expanduser()
         with path.open() as f:
-            return json.load(f)
+            data: dict[str, Any] = json.load(f)
+            return data
 
     def resolve(self, session: str, metadata: dict[str, Any] | None = None) -> Path:
         """Resolve workspace path — delegates to base when sync is disabled."""
@@ -483,7 +485,7 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
         cls,
         *,
         home: Path,
-        cas_root: str | Path,
+        cas_root: str | Path | None = None,
         sync_source: str,
         sync_config_path: str | None = None,
         allow_external_workspace: bool = False,

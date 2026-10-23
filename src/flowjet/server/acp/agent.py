@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from acp.helpers import (
@@ -275,11 +275,11 @@ class FlowJetAcpAgent:
 
         version = protocol_version if protocol_version <= PROTOCOL_VERSION else PROTOCOL_VERSION
         return InitializeResponse(
-            protocolVersion=version,
-            agentCapabilities=AgentCapabilities(
-                loadSession=True,
+            protocol_version=version,
+            agent_capabilities=AgentCapabilities(
+                load_session=True,
             ),
-            agentInfo=Implementation(
+            agent_info=Implementation(
                 name="flowjet-server",
                 title="FlowJet Server",
                 version=flowjet_version,
@@ -298,7 +298,7 @@ class FlowJetAcpAgent:
         session_id = f"acp-{uuid4().hex}"
         self._sessions.add(session_id)
         self._remember_cwd(session_id, cwd)
-        return NewSessionResponse(sessionId=session_id)
+        return NewSessionResponse(session_id=session_id)
 
     async def load_session(
         self,
@@ -319,7 +319,7 @@ class FlowJetAcpAgent:
     ) -> Any:
         from acp.schema import ListSessionsResponse, SessionInfo
 
-        sessions = [SessionInfo(sessionId=sid, cwd=cwd or ".") for sid in sorted(self._sessions)]
+        sessions = [SessionInfo(session_id=sid, cwd=cwd or ".") for sid in sorted(self._sessions)]
         return ListSessionsResponse(sessions=sessions)
 
     async def set_session_mode(self, session_id: str, mode_id: str, **kwargs: Any) -> Any:
@@ -334,7 +334,7 @@ class FlowJetAcpAgent:
 
         # flowjet-server does not expose configurable session options yet;
         # return an empty list so the response validates against the schema.
-        return SetSessionConfigOptionResponse(configOptions=[])
+        return SetSessionConfigOptionResponse(config_options=[])
 
     async def authenticate(self, method_id: str, **kwargs: Any) -> Any:
         return None
@@ -350,9 +350,9 @@ class FlowJetAcpAgent:
         client = self._client
         input_text = _extract_prompt_text(prompt)
         models = await self._backend.list_models()
-        model = models[0].id if models else "default"
-
-        # The cwd arrives on the session-setup calls, not on session/prompt, so
+        model = (
+            models[0].id if models else "default"
+        )  # The cwd arrives on the session-setup calls, not on session/prompt, so
         # replay what this session was created with. Without it the backend
         # falls back to a hashed workspace under FLOWJET_HOME and the client's
         # project directory never reaches the agent.
@@ -374,7 +374,11 @@ class FlowJetAcpAgent:
         )
 
         output_text = ""
-        stop_reason = "end_turn"
+        # ACP PromptResponse.stop_reason is a closed Literal — keep the local
+        # typed the same way so assignments cannot drift outside the enum.
+        stop_reason: Literal[
+            "end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"
+        ] = "end_turn"
         usage_info: UsageInfo | None = None
 
         async def _drive() -> None:
@@ -514,12 +518,12 @@ class FlowJetAcpAgent:
         usage = None
         if usage_info is not None:
             usage = Usage(
-                totalTokens=usage_info.total_tokens,
-                inputTokens=usage_info.input_tokens,
-                outputTokens=usage_info.output_tokens,
+                total_tokens=usage_info.total_tokens,
+                input_tokens=usage_info.input_tokens,
+                output_tokens=usage_info.output_tokens,
             )
 
-        return PromptResponse(stopReason=stop_reason, usage=usage)
+        return PromptResponse(stop_reason=stop_reason, usage=usage)
 
     async def fork_session(
         self,
@@ -534,7 +538,7 @@ class FlowJetAcpAgent:
         new_id = f"acp-{uuid4().hex}"
         self._sessions.add(new_id)
         self._remember_cwd(new_id, cwd)
-        return ForkSessionResponse(sessionId=new_id)
+        return ForkSessionResponse(session_id=new_id)
 
     async def resume_session(
         self,

@@ -8,7 +8,7 @@ delegates here. core remains server-agnostic — no imports from
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from flowjet.core.backend_config import Backend, resolve_backend
 from flowjet.core.bridges.nano import build_isolating_nano_backend
@@ -88,8 +88,8 @@ class ServerRuntimeBuilder:
             checkpointer_policy=checkpointer_policy,
         )
         if backend is Backend.SOOTHE:
-            return build_isolating_soothe_backend(**common)
-        return build_isolating_nano_backend(**common)
+            return cast("RuntimeBackend", build_isolating_soothe_backend(**common))
+        return cast("RuntimeBackend", build_isolating_nano_backend(**common))
 
     @classmethod
     def sandbox_manager(cls, config_path: str | None) -> ArcBoxToolSandboxManager | None:

@@ -241,7 +241,7 @@ def choose_provider_interactive(providers: list[dict[str, Any]]) -> dict[str, An
 
 def resolve_config_value(value: str, *, field: str) -> str:
     """Expand ``${ENV_VAR}`` placeholders; raise if any remain unresolved."""
-    resolved = _resolve_env(value)
+    resolved = str(_resolve_env(value))
     match = _ENV_VAR_RE.search(resolved)
     if match:
         env_name = match.group(1)

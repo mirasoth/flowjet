@@ -464,16 +464,16 @@ async def iter_nano_runtime_events(
                         yield Narration(text=answer)
 
             elif isinstance(message_obj, ToolMessage):
-                tc_id = getattr(message_obj, "tool_call_id", None)
-                call = str(tc_id) if tc_id else None
-                name, tc_args = tool_args.pop(tc_id)
+                msg_call_id = getattr(message_obj, "tool_call_id", None)
+                call = str(msg_call_id) if msg_call_id else None
+                tool_name, tc_args = tool_args.pop(msg_call_id)
                 if not tc_args:
-                    tc_args = open_args.pop(call or "", None) or {}
+                    tc_args = open_args.pop(call or "", {}) or {}
                 else:
-                    open_args.pop(call or "", None)
-                name = (
-                    name
-                    or open_tools.pop(call or "", None)
+                    open_args.pop(call or "", {})
+                resolved_name = (
+                    tool_name
+                    or open_tools.pop(call or "", "")
                     or getattr(message_obj, "name", None)
                     or "tool"
                 )
@@ -481,11 +481,11 @@ async def iter_nano_runtime_events(
                 err_detail = ToolResultInspector.error_detail(message_obj.content)
                 ok = status != "error" and err_detail is None
                 detail = ToolResultInspector.simplify_error(err_detail) if err_detail else None
-                if str(name) in _QUIET_TOOLS and ok:
+                if str(resolved_name) in _QUIET_TOOLS and ok:
                     # Plan bookkeeping already surfaced as a step event.
                     continue
                 yield ToolCompleted(
-                    tool=str(name),
+                    tool=str(resolved_name),
                     ok=ok,
                     call_id=call,
                     args=tc_args or None,
@@ -498,8 +498,8 @@ async def iter_nano_runtime_events(
             # projections (ACP, OpenAI SSE) can forward multiple
             # agent_message_chunk / response.output_text.delta events instead
             # of a single monolithic one.
-            for delta in OutputTextChunker.word_deltas(answer):
-                yield delta
+            for text_delta in OutputTextChunker.word_deltas(answer):
+                yield text_delta
         yield RunCompleted(output_text=answer)
     except Exception as exc:  # noqa: BLE001
         # Preserve the original type and stack so the CLI can report the real
