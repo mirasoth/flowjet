@@ -175,6 +175,7 @@ def _bin_version(bin_path: str) -> str | None:
 
 def _find_chrome_executable() -> str | None:
     """Locate a Chrome/Chromium-family browser executable, or None."""
+    candidates: list[str]
     if sys.platform == "darwin":
         candidates = [
             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
