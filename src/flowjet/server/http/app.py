@@ -46,6 +46,7 @@ def build_backend(settings: Settings) -> RuntimeBackend:
         content_source=settings.workspace_content_source,
         allow_external_workspace=settings.allow_external_workspace,
         pool_settings=settings.pool_settings(),
+        checkpointer_policy=settings.server_checkpointer,
     )
 
 

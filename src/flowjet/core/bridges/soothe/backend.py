@@ -22,6 +22,7 @@ def build_isolating_soothe_backend(
     allow_external_workspace: bool = False,
     workspace_resolver: Any = None,
     sandbox_manager: Any | None = None,
+    checkpointer_policy: str | None = "off",
 ) -> Any:
     """Construct IsolatingRuntimeBackend with a SootheAgentAdapter factory."""
     return IsolatingBackendBuilder.build(
@@ -33,6 +34,7 @@ def build_isolating_soothe_backend(
         allow_external_workspace=allow_external_workspace,
         workspace_resolver=workspace_resolver,
         sandbox_manager=sandbox_manager,
+        checkpointer_policy=checkpointer_policy,
     )
 
 

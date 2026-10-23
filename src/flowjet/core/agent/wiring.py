@@ -42,6 +42,13 @@ class ServerRuntimeBuilder:
     workspace host↔guest and the adapters bind soothe-nano's sandbox backend
     at agent build time. The AgentRuntime isolation is unchanged (in-process
     thread pool).
+
+    ``checkpointer_policy`` ("auto" by default) makes each worker's adapter
+    open the shared thread-state checkpointer resolved from the config's
+    durability settings — sqlite lands on
+    ``$SOOTHE_DATA_DIR/databases/checkpoints.db``. This is what keeps one
+    ACP session's conversation continuous across turns, pool workers and
+    restarts, and what makes ``ask_user`` pauses resumable.
     """
 
     @classmethod
@@ -57,6 +64,7 @@ class ServerRuntimeBuilder:
         content_source: str | None,
         allow_external_workspace: bool,
         pool_settings: Any,
+        checkpointer_policy: str | None = "auto",
     ) -> RuntimeBackend:
         backend = resolve_backend(Surface.SERVER)
         sandbox_manager = cls.sandbox_manager(config_path)
@@ -77,6 +85,7 @@ class ServerRuntimeBuilder:
             allow_external_workspace=allow_external_workspace,
             workspace_resolver=workspace_resolver,
             sandbox_manager=sandbox_manager,
+            checkpointer_policy=checkpointer_policy,
         )
         if backend is Backend.SOOTHE:
             return build_isolating_soothe_backend(**common)

@@ -103,6 +103,7 @@ class IsolatingRuntimeBackend:
             workspace=workspace,
             thread_id=session,
             metadata=metadata,
+            resume_value=request.resume_value,
         )
         async with self._admission.admit(session):
             await self._workspaces.open_session(session, workspace)

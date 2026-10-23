@@ -12,6 +12,7 @@ import traceback as _traceback
 from collections.abc import AsyncIterator
 from typing import Any
 
+from flowjet.core.bridges.nano.interrupts import detect_pending_ask_user
 from flowjet.core.events import (
     InterruptWaiting,
     Narration,
@@ -305,7 +306,10 @@ async def iter_nano_runtime_events(
 
     When ``resume_value`` is set, the run resumes a paused graph (an
     ``ask_user`` interrupt) with that value via ``Command(resume=...)``
-    instead of starting a new turn from ``input_text``.
+    instead of starting a new turn from ``input_text``. When it is not, the
+    thread snapshot is probed for a pending ``ask_user`` interrupt — if one is
+    found, ``input_text`` *is* the answer and the run resumes with it (the
+    CLI's ``fjf`` semantics; the server's ACP path relies on the same rule).
     """
     try:
         from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -327,13 +331,17 @@ async def iter_nano_runtime_events(
     # Resume a paused graph (ask_user interrupt) rather than starting a new
     # turn. LangGraph's ``Command(resume=...)`` delivers the value to the
     # ``interrupt()`` call that suspended the graph.
+    config = {"configurable": configurable}
+    if resume_value is None and str(input_text or "").strip():
+        pending = await detect_pending_ask_user(agent, config)
+        if pending is not None:
+            resume_value = {"answers": [input_text]}
     if resume_value is not None:
         from langgraph.types import Command
 
         payload: Any = Command(resume=resume_value)
     else:
         payload = {"messages": [HumanMessage(content=input_text)]}
-    config = {"configurable": configurable}
     answer = ""
     composing = False
     open_tools: dict[str, str] = {}
