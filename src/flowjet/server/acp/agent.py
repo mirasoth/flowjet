@@ -475,13 +475,9 @@ class FlowJetAcpAgent:
                         # end with no content at all (thoughts are intermediate
                         # narration). The CLI renders the same block.
                         if event.questions:
-                            from flowjet.cli.stream import format_questions_block
+                            from flowjet.cli.stream import format_questions_markdown
 
-                            block = format_questions_block(
-                                event.questions,
-                                session_id,
-                                resume_hint="",
-                            )
+                            block = format_questions_markdown(event.questions)
                             await client.session_update(
                                 session_id,
                                 update_agent_message_text(block),
