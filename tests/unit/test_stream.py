@@ -706,6 +706,36 @@ def test_format_questions_block_empty_shows_generic_hint() -> None:
     assert "fjf -t t-456" in block
 
 
+def test_format_questions_markdown_renders_bold_options() -> None:
+    from flowjet.cli.stream import format_questions_markdown
+
+    block = format_questions_markdown(tuple(_QUESTIONS))
+    assert block.startswith("**⏸ Paused for input**")
+    assert "**[Auth method] Which auth method should I use?**" in block
+    assert "- **API Key (Recommended) ★** — Use an API key" in block
+    assert "- **OAuth** — Use OAuth flow" in block
+    # ACP hosts answer in their own input: no CLI resume hint.
+    assert "fjf" not in block
+
+
+def test_format_questions_markdown_multiple_questions_numbered() -> None:
+    from flowjet.cli.stream import format_questions_markdown
+
+    questions = (
+        *_QUESTIONS,
+        {"question": "What is the deadline?", "header": "", "options": []},
+    )
+    block = format_questions_markdown(questions)
+    assert "**Q1: [Auth method] Which auth method should I use?**" in block
+    assert "**Q2: What is the deadline?**" in block
+
+
+def test_format_questions_markdown_empty_questions() -> None:
+    from flowjet.cli.stream import format_questions_markdown
+
+    assert format_questions_markdown(()) == "**⏸ Paused for input**\n"
+
+
 # ---------------------------------------------------------------------------
 # extract_ask_user_interrupts — pulls questions from __interrupt__ payloads
 # ---------------------------------------------------------------------------

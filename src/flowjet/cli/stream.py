@@ -420,6 +420,39 @@ def format_questions_block(
     return "\n".join(lines) + "\n"
 
 
+def format_questions_markdown(questions: tuple[dict[str, Any], ...]) -> str:
+    """Render ``ask_user`` questions as Markdown for hosts that render replies.
+
+    Same content as :func:`format_questions_block` (the CLI renders that block
+    to a terminal), but in Markdown so ACP/UI hosts show a bold pause heading
+    with bulleted, bolded options. The plain-text block cannot be reused here:
+    its space indentation collapses under Markdown rendering and the whole
+    block displays as one run-on paragraph.
+    """
+    if not questions:
+        return "**⏸ Paused for input**\n"
+    lines: list[str] = ["**⏸ Paused for input**"]
+    for qi, q in enumerate(questions, 1):
+        header = str(q.get("header") or "").strip()
+        question = str(q.get("question") or "").strip()
+        label = f"[{header}] {question}" if header else question
+        prefix = f"Q{qi}: " if len(questions) > 1 else ""
+        lines.append(f"\n**{prefix}{label}**")
+        options = q.get("options")
+        if isinstance(options, list):
+            for opt in options:
+                if not isinstance(opt, dict):
+                    continue
+                opt_label = str(opt.get("label") or "").strip()
+                desc = str(opt.get("description") or "").strip()
+                marker = " ★" if "(Recommended)" in opt_label or "Recommended" in opt_label else ""
+                if desc:
+                    lines.append(f"- **{opt_label}{marker}** — {desc}")
+                else:
+                    lines.append(f"- **{opt_label}{marker}**")
+    return "\n".join(lines) + "\n"
+
+
 async def stream_query(
     agent: SootheNanoAgent,
     query: str,
