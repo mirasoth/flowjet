@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.4] — 2026-10-23
+
+### Added
+
+- **Resumable `ask_user` pauses via shared thread-state checkpointer.** The
+  server now persists agent thread state (LangGraph checkpoint) to a shared
+  SQLite database (WAL mode + busy_timeout) so that `ask_user` pauses survive
+  pool-worker switches and server restarts. A second turn on the same session
+  resumes the paused interrupt and delivers the user's input text as the
+  answer — no more re-asking the same question after a worker rotation. The
+  `server_checkpointer` setting (`"auto"` by default, `"off"` for legacy
+  stateless behavior) controls the policy end-to-end: Settings →
+  `ServerRuntimeBuilder` → `build_isolating_nano_backend` →
+  `AgentAdapterBase`, which opens the checkpointer once per worker, attaches
+  it at build time, and survives taint rebuilds.
+
+### Changed
+
+- **CI now enforces mypy type compliance.** A `make typecheck` (mypy) gate
+  was added to the CI pipeline, and type annotations were fixed across the
+  CLI, core, and server packages to achieve full compliance.
+
 ## [2.1.3] — 2026-10-23
 
 ### Fixed
