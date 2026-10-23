@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from io import StringIO
 from typing import Any
@@ -769,3 +770,210 @@ def testextract_ask_user_interrupts_multiple_questions() -> None:
     assert questions[0]["header"] == "H1"
     assert questions[1]["header"] == "H2"
     assert ids == ("int-4",)
+
+
+# ---------------------------------------------------------------------------
+# Run failure → AgentRunError → CLI error output
+# ---------------------------------------------------------------------------
+
+
+class _ExplodingAgent:
+    async def astream(self, *_a: Any, **_k: Any) -> AsyncIterator[Any]:
+        yield _msg_chunk(AIMessageChunk(content="partial"))
+        raise ValueError("provider quota exceeded")
+
+
+@pytest.mark.asyncio
+async def test_stream_query_run_failure_carries_original_traceback() -> None:
+    from flowjet.cli.stream import AgentRunError
+
+    with pytest.raises(AgentRunError) as excinfo:
+        await stream_query(
+            _ExplodingAgent(),  # type: ignore[arg-type]
+            "q",
+            thread_id="t1",
+            out=StringIO(),
+            err=StringIO(),
+            progress=ProgressLine(StringIO(), enabled=False),
+        )
+    assert excinfo.value.exc_type == "ValueError"
+    assert excinfo.value.traceback_text is not None
+    assert "ValueError: provider quota exceeded" in excinfo.value.traceback_text
+
+
+def test_format_cli_error_reports_original_exc_type() -> None:
+    from flowjet.cli.stream import AgentRunError, format_cli_error
+
+    exc = AgentRunError("provider quota exceeded", exc_type="RateLimitError")
+    assert format_cli_error(exc) == "error: RateLimitError: provider quota exceeded"
+
+
+def test_format_cli_error_unnamed_exc_type_falls_back() -> None:
+    from flowjet.cli.stream import AgentRunError, format_cli_error
+
+    exc = AgentRunError("boom", exc_type=None)
+    assert format_cli_error(exc) == "error: AgentRunError: boom"
+
+
+def test_write_cli_error_verbose_prints_original_traceback() -> None:
+    from flowjet.cli.stream import AgentRunError, write_cli_error
+
+    err = StringIO()
+    write_cli_error(
+        AgentRunError(
+            "boom",
+            exc_type="ValueError",
+            traceback_text=(
+                "Traceback (most recent call last):\n  ...real frames...\nValueError: boom\n"
+            ),
+        ),
+        verbose=True,
+        err=err,
+    )
+    out = err.getvalue()
+    assert out.startswith("error: ValueError: boom\n")
+    assert "real frames" in out
+    # The re-raise site traceback must not leak in — the original is the
+    # diagnosable one.
+    assert "stream.py" not in out
+
+
+def test_write_cli_error_non_verbose_one_line_only() -> None:
+    from flowjet.cli.stream import AgentRunError, write_cli_error
+
+    err = StringIO()
+    write_cli_error(AgentRunError("boom", exc_type="ValueError"), verbose=False, err=err)
+    # Single-line message, no traceback carried — nothing hidden, no hint.
+    assert err.getvalue() == "error: ValueError: boom\n"
+
+
+def test_write_cli_error_hint_when_detail_truncated() -> None:
+    from flowjet.cli.stream import AgentRunError, write_cli_error
+
+    err = StringIO()
+    write_cli_error(
+        AgentRunError("line one\nline two", exc_type="ValueError"), verbose=False, err=err
+    )
+    assert "run with -v" in err.getvalue()
+
+    err2 = StringIO()
+    write_cli_error(
+        AgentRunError("boom", exc_type="ValueError", traceback_text="TRACEBACK-BODY"),
+        verbose=False,
+        err=err2,
+    )
+    assert "run with -v" in err2.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Empty answer → visible warning with failed-tool bookkeeping
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_query_no_output_warns_with_failed_tool() -> None:
+    tool_msg = ToolMessage(content="disk full while writing", tool_call_id="c1", status="error")
+    agent = _FakeAgent([((), "messages", (tool_msg, {}))])
+    out, err = StringIO(), StringIO()
+    await stream_query(
+        agent,  # type: ignore[arg-type]
+        "q",
+        thread_id="t1",
+        out=out,
+        err=err,
+        progress=ProgressLine(out, enabled=False),
+    )
+    warning = err.getvalue()
+    assert "agent produced no output" in warning
+    assert "1 tool call(s) failed" in warning
+    assert "disk full while writing" in warning
+    assert "rerun with -v" in warning
+
+
+@pytest.mark.asyncio
+async def test_stream_query_no_output_without_tool_failures() -> None:
+    agent = _FakeAgent([])
+    out, err = StringIO(), StringIO()
+    await stream_query(
+        agent,  # type: ignore[arg-type]
+        "q",
+        thread_id="t1",
+        out=out,
+        err=err,
+        progress=ProgressLine(out, enabled=False),
+    )
+    warning = err.getvalue()
+    assert "agent produced no output" in warning
+    assert "tool call(s) failed" not in warning
+
+
+# ---------------------------------------------------------------------------
+# Timeout + partial-output flush
+# ---------------------------------------------------------------------------
+
+
+class _HangingAgent:
+    async def astream(self, *_a: Any, **_k: Any) -> AsyncIterator[Any]:
+        yield _msg_chunk(AIMessageChunk(content="Let me check the build logs."))
+        await asyncio.sleep(30)
+
+
+@pytest.mark.asyncio
+async def test_stream_query_flushes_partial_output_on_failure() -> None:
+    from flowjet.cli.stream import AgentRunError
+
+    class _FailLateAgent:
+        async def astream(self, *_a: Any, **_k: Any) -> AsyncIterator[Any]:
+            yield _msg_chunk(AIMessageChunk(content="The answer is 42"))
+            raise ValueError("provider dropped mid-answer")
+
+    out, err = StringIO(), StringIO()
+    with pytest.raises(AgentRunError) as excinfo:
+        await stream_query(
+            _FailLateAgent(),  # type: ignore[arg-type]
+            "q",
+            thread_id="t1",
+            out=out,
+            err=err,
+            progress=ProgressLine(out, enabled=False),
+        )
+    assert excinfo.value.exc_type == "ValueError"
+    flushed = err.getvalue()
+    assert "partial output before failure" in flushed
+    assert "The answer is 42" in flushed
+
+
+@pytest.mark.asyncio
+async def test_stream_query_timeout_cancels_run() -> None:
+    from flowjet.cli.stream import AgentRunError
+
+    out, err = StringIO(), StringIO()
+    with pytest.raises(AgentRunError) as excinfo:
+        await stream_query(
+            _HangingAgent(),  # type: ignore[arg-type]
+            "q",
+            thread_id="t1",
+            out=out,
+            err=err,
+            progress=ProgressLine(out, enabled=False),
+            timeout_s=0.05,
+        )
+    assert excinfo.value.exc_type == "TimeoutError"
+    assert "timed out after" in str(excinfo.value)
+    # Narration buffered before the hang is not lost.
+    assert "partial output before failure" in err.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_stream_query_no_timeout_completes() -> None:
+    out, err = StringIO(), StringIO()
+    result = await stream_query(
+        _FakeAgent([_msg_chunk(AIMessageChunk(content="done text"))]),
+        "q",
+        thread_id="t1",
+        out=out,
+        err=err,
+        progress=ProgressLine(out, enabled=False),
+        timeout_s=0,
+    )
+    assert result == "done text"

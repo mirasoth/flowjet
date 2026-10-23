@@ -10,7 +10,9 @@ import asyncio
 import contextlib
 import logging
 import os
+import signal
 import sys
+import traceback
 from collections.abc import Coroutine
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -21,6 +23,8 @@ from flowjet.cli import __version__
 FORMAL_CLI = "flowjet"
 CLI_ALIASES = frozenset({"fj", "fjf", FORMAL_CLI})
 
+_logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # CLI logging — stdlib only, kept here so ``fj -V`` / ``fj -h`` never pay the
@@ -29,18 +33,30 @@ CLI_ALIASES = frozenset({"fj", "fjf", FORMAL_CLI})
 
 _BROWSER_USE_SETUP_LOGGING = "BROWSER_USE_SETUP_LOGGING"
 _FJ_CONSOLE_HANDLER = "fj-console"
+_FJ_FILE_HANDLER = "fj-file"
+_LOG_FILE_ENV = "FJ_LOG_FILE"
 
 
 class _CompactConsoleFormatter(logging.Formatter):
-    """One-line console records without exception tracebacks."""
+    """One-line console records; exceptions summarized on the same line.
+
+    Full tracebacks would smash the ephemeral progress line, but dropping the
+    exception entirely (the old behavior) hid the root cause even with ``-v``.
+    The full stack for run failures is available via ``AgentRunError``.
+    """
 
     def formatException(self, ei: object) -> str:  # noqa: N802 - logging API
         return ""
 
     def format(self, record: logging.LogRecord) -> str:
-        # logger.exception sets exc_info; drop it so format() stays one line.
-        record.exc_info = None
-        record.exc_text = None
+        # logger.exception sets exc_info; fold "type: message" into the record
+        # message so format() stays one line without losing the cause.
+        if record.exc_info:
+            exc_val = record.exc_info[1]
+            if exc_val is not None:
+                record.msg = f"{record.getMessage()}: {type(exc_val).__name__}: {exc_val}"
+            record.exc_info = None
+            record.exc_text = None
         return super().format(record)
 
 
@@ -52,6 +68,8 @@ def configure_cli_logging(*, verbose: bool = False) -> None:
       lines do not interleave with the agent answer.
     - Prevent ``lastResort`` traceback dumps from soothe tool failures.
     - When ``verbose``, show WARNING+ as single-line messages on stderr.
+    - When ``FJ_LOG_FILE`` is set, mirror WARNING+ (with full tracebacks) to
+      that rotating file for post-mortem diagnosis of silent failures.
     """
     os.environ.setdefault(_BROWSER_USE_SETUP_LOGGING, "false")
     _remove_root_console_handlers()
@@ -68,6 +86,32 @@ def configure_cli_logging(*, verbose: bool = False) -> None:
         root.addHandler(null)
     if root.level < logging.WARNING:
         root.setLevel(logging.WARNING)
+    _attach_file_log_handler(root)
+
+
+def _attach_file_log_handler(root: logging.Logger) -> None:
+    """Attach the ``FJ_LOG_FILE`` rotating handler once, if requested.
+
+    Unlike the compact console formatter, the file keeps full tracebacks, so
+    ``logger.exception`` records from soothe/plugins stay diagnosable after a
+    crash — including for deaths the CLI itself cannot report (SIGKILL).
+    """
+    if any(getattr(h, "name", None) == _FJ_FILE_HANDLER for h in root.handlers):
+        return
+    path = os.environ.get(_LOG_FILE_ENV, "").strip()
+    if not path:
+        return
+    try:
+        handler = RotatingFileHandler(path, maxBytes=2_000_000, backupCount=2, encoding="utf-8")
+    except OSError:
+        _logger.warning("FJ_LOG_FILE is not writable: %s", path)
+        return
+    handler.set_name(_FJ_FILE_HANDLER)
+    handler.setLevel(logging.WARNING)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)-8s [%(name)s] %(message)s")
+    )
+    root.addHandler(handler)
 
 
 def silence_after_plugins(*, verbose: bool = False) -> None:
@@ -155,13 +199,18 @@ notes:
   • Bypass mode (skip all security enforcement) is the CLI default — use -a for guardrails
   • One query per thread at a time; different threads may run concurrently
   • With -v, prints thread <id> and the project dir on stderr before the run
+  • --timeout N cancels a run after N seconds (0 = no limit)
+  • Exit codes: 0 ok · 1 error · 2 usage · 3 no output · 130/143 interrupted
+  • Set FJ_LOG_FILE=<path> to keep warnings & errors (with tracebacks) on file
 """
 
 
 # Boolean short flags that may appear clustered (``-lv`` → ``-l -v``).
 _BOOL_SHORTS = frozenset({"h", "V", "l", "v", "f", "a"})
 # Short flags that consume the next argv token as a value.
-_VALUE_FLAGS = frozenset({"-c", "--config", "-t", "--thread", "-w", "--workspace", "-n"})
+_VALUE_FLAGS = frozenset(
+    {"-c", "--config", "-t", "--thread", "-w", "--workspace", "-n", "--timeout"}
+)
 _FLAG_ONLY = frozenset(
     {
         "-h",
@@ -179,7 +228,7 @@ _FLAG_ONLY = frozenset(
         "--ask",
     }
 )
-_EQUALS_PREFIXES = ("--config=", "--thread=", "--workspace=")
+_EQUALS_PREFIXES = ("--config=", "--thread=", "--workspace=", "--timeout=")
 
 
 def _expand_short_cluster(tok: str) -> list[str] | None:
@@ -244,6 +293,7 @@ def validate_arg_composition(args: Any) -> str | None:
     - ``-n`` requires ``-l``/``--list``
     - ``-l`` is exclusive with a query, ``-f``, ``-t``, ``-w``, ``--no-stream``, ``--ask``
     - ``-t``/``--thread`` overrides ``-f``/``--follow`` when both are given
+    - ``--timeout`` must be >= 0 (0 = no limit)
     """
     listing = bool(getattr(args, "list", False))
     list_limit = getattr(args, "list_limit", None)
@@ -256,6 +306,10 @@ def validate_arg_composition(args: Any) -> str | None:
 
     if list_limit is not None and not listing:
         return "-n requires -l/--list"
+
+    timeout = getattr(args, "timeout", None)
+    if timeout is not None and timeout < 0:
+        return "--timeout must be >= 0 (0 = no limit)"
 
     if listing:
         if query:
@@ -376,6 +430,14 @@ def _build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         help="Ask mode: answer the query with no tools (pure Q&A)",
     )
 
+    run = parser.add_argument_group("run")
+    run.add_argument(
+        "--timeout",
+        metavar="SECONDS",
+        type=float,
+        help="Cancel the run after N seconds (0 = no limit)",
+    )
+
     paths = parser.add_argument_group("paths")
     paths.add_argument(
         "-c",
@@ -458,6 +520,10 @@ def _load_config_or_exit(args: argparse.Namespace) -> Any | int:
         return 1
     except Exception as exc:
         sys.stderr.write(f"error: failed to load config: {exc}\n")
+        if getattr(args, "verbose", False):
+            sys.stderr.write(
+                "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+            )
         return 1
 
 
@@ -517,7 +583,10 @@ async def _detect_pending_interrupt(agent: Any, thread_id: str) -> Any:
         return None
     try:
         snapshot = await get_state({"configurable": {"thread_id": thread_id}})
-    except Exception:
+    except Exception as exc:
+        # Not fatal — but explain why a pending question may be missed and a
+        # new turn started instead of resuming (visible with -v / FJ_LOG_FILE).
+        _logger.warning("thread snapshot check failed; starting a new turn: %s", exc)
         return None
     if snapshot is None:
         return None
@@ -567,6 +636,9 @@ async def run_async(args: argparse.Namespace) -> int:
         return config
 
     workspace = Path(args.workspace).expanduser().resolve() if args.workspace else None
+    # ``--timeout 0`` means no limit (same as omitting the flag).
+    timeout_raw = getattr(args, "timeout", None)
+    timeout_s = float(timeout_raw) if timeout_raw else None
 
     try:
         async with open_sqlite_checkpointer(config) as checkpointer:
@@ -607,19 +679,21 @@ async def run_async(args: argparse.Namespace) -> int:
                         sys.stdout.flush()
                     resume_value = {"answers": [args.query_text]}
                 if args.no_stream:
-                    await invoke_query(
+                    result = await invoke_query(
                         agent,
                         args.query_text,
                         thread_id=thread_id,
                         resume_value=resume_value,
+                        timeout_s=timeout_s,
                     )
                 else:
-                    await stream_query(
+                    result = await stream_query(
                         agent,
                         args.query_text,
                         thread_id=thread_id,
                         show_tool_calls=args.verbose,
                         resume_value=resume_value,
+                        timeout_s=timeout_s,
                     )
     except ConcurrentSessionError as exc:
         sys.stderr.write(f"error: {exc}\n")
@@ -627,6 +701,26 @@ async def run_async(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         sys.stderr.write("\ninterrupted\n")
         return 130
+    except asyncio.CancelledError:
+        sig = _interrupt_signal
+        if sig is not None:
+            name = signal.Signals(sig).name
+            sys.stderr.write(f"\ninterrupted by {name} (signal {sig})\n")
+            return 128 + sig
+        sys.stderr.write("error: run cancelled\n")
+        return 130
+    except BrokenPipeError:
+        # Our stdout consumer (e.g. ``fj q | head``) closed early. The final
+        # flush guard in ``main`` silences the shutdown-time noise.
+        sys.stderr.write("error: output pipe closed\n")
+        return 141
+    except SystemExit as exc:
+        # A plugin/tool called sys.exit() mid-run; without this the process
+        # would exit with no message at all.
+        sys.stderr.write(
+            f"error: unexpected exit({exc.code}) raised during the run (plugin/tool called sys.exit)\n"
+        )
+        return 1
     except Exception as exc:
         from flowjet.cli.stream import write_cli_error
 
@@ -639,12 +733,65 @@ async def run_async(args: argparse.Namespace) -> int:
         append_history(args.query_text)
     except Exception:
         pass
+    if not result:
+        # Completed but produced no answer text (a warning is already on
+        # stderr) — scripts need a distinct, detectable exit code.
+        return 3
     return 0
 
 
 # Seconds a stray background task gets to honour cancellation before the loop is
 # closed anyway.
 _TEARDOWN_GRACE_S = 3.0
+
+# Signal (SIGTERM/SIGHUP) that cancelled the current run, if any. Module-level
+# because the loop-installed callback and `run_async` share the main thread.
+_interrupt_signal: int | None = None
+
+
+def _on_interrupt_signal(sig: int, task: asyncio.Task[int]) -> None:
+    # Convert SIGTERM/SIGHUP into a graceful task cancel (recorded for the exit code).
+    global _interrupt_signal
+    if _interrupt_signal is None:
+        _interrupt_signal = int(sig)
+    if not task.done():
+        task.cancel()
+
+
+def _install_signal_cancellation(
+    loop: asyncio.AbstractEventLoop,
+    task: asyncio.Task[int],
+) -> list[tuple[int, Any]]:
+    # Route SIGTERM/SIGHUP through the loop so the run unwinds cleanly.
+    #
+    # Without this the default disposition kills the process instantly — no
+    # cleanup, no message (the "no message and exit" symptom). Platforms
+    # without add_signal_handler (Windows) or non-main-thread callers keep
+    # the default behaviour.
+    installed: list[tuple[int, Any]] = []
+    for name in ("SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        previous = signal.getsignal(sig)
+        try:
+            loop.add_signal_handler(sig, _on_interrupt_signal, sig, task)
+        except (NotImplementedError, RuntimeError, ValueError, OSError):
+            continue
+        installed.append((int(sig), previous))
+    return installed
+
+
+def _remove_signal_cancellation(
+    loop: asyncio.AbstractEventLoop,
+    installed: list[tuple[int, Any]],
+) -> None:
+    for sig, previous in installed:
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            loop.remove_signal_handler(signal.Signals(sig))
+        if previous not in (signal.SIG_DFL, None):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                signal.signal(signal.Signals(sig), previous)  # type: ignore[arg-type]
 
 
 async def _cancel_stray_tasks(loop: asyncio.AbstractEventLoop, grace: float) -> None:
@@ -670,13 +817,24 @@ def run_one_shot(coro: Coroutine[Any, Any, int], *, grace: float = _TEARDOWN_GRA
     one task that swallows ``CancelledError`` pins the process after the answer
     has already been printed. ``loop.close()`` is also where libraries install
     their own cleanup hooks, so it runs whether or not the strays went quietly.
+
+    SIGTERM/SIGHUP cancel the main task instead of killing the process, so the
+    run unwinds with a visible message and a conventional 128+signal exit code.
     """
+    global _interrupt_signal
+    _interrupt_signal = None
     loop = asyncio.new_event_loop()
+    installed: list[tuple[int, Any]] = []
     try:
         asyncio.set_event_loop(loop)
-        return loop.run_until_complete(coro)
+        task = loop.create_task(coro, name="fj-run")
+        installed = _install_signal_cancellation(loop, task)
+        return loop.run_until_complete(task)
     finally:
-        with contextlib.suppress(Exception):
+        _remove_signal_cancellation(loop, installed)
+        # CancelledError is a BaseException — a stray re-cancel during teardown
+        # must not mask the real result/exception.
+        with contextlib.suppress(Exception, asyncio.CancelledError):
             loop.run_until_complete(_cancel_stray_tasks(loop, grace))
         asyncio.set_event_loop(None)
         loop.close()
@@ -702,6 +860,15 @@ def main_follow(argv: list[str] | None = None) -> int:
     return main(_inject_follow(raw))
 
 
+def _handle_broken_pipe() -> int:
+    """Silence the shutdown flush noise after our stdout consumer closed early."""
+    try:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except (OSError, ValueError, AttributeError):  # pragma: no cover - platform
+        pass
+    return 141  # 128 + SIGPIPE
+
+
 def main(argv: list[str] | None = None) -> int:
     # Silence noisy third-party warnings (requests version-mismatch,
     # LangChain beta-API) before any heavy import pulls them in.
@@ -721,33 +888,43 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "setup":
             from flowjet.cli.setup_cmd import run_setup
 
-            return run_setup(getattr(args, "config", None))
-        if args.command == "doctor":
+            result = run_setup(getattr(args, "config", None))
+        elif args.command == "doctor":
             from flowjet.cli.doctor_cmd import run_doctor
 
-            return run_doctor(getattr(args, "doctor_argv", []))
-        if args.command == "doctor-fix":
+            result = run_doctor(getattr(args, "doctor_argv", []))
+        elif args.command == "doctor-fix":
             from flowjet.cli.doctor_fix_cmd import run_doctor_fix
 
-            return run_doctor_fix(getattr(args, "doctor_fix_argv", []))
-        if args.command == "__complete":
+            result = run_doctor_fix(getattr(args, "doctor_fix_argv", []))
+        elif args.command == "__complete":
             from flowjet.cli.completion import run_complete
 
-            return run_complete(getattr(args, "complete_argv", []))
-        if args.command == "serve":
+            result = run_complete(getattr(args, "complete_argv", []))
+        elif args.command == "serve":
             # Lazy: the server extra (fastapi/uvicorn/acp) must never be an
             # import-time dependency of the CLI.
             from flowjet.cli.serve_cmd import run_serve
 
-            return run_serve(getattr(args, "serve_argv", []))
-        if args.command == "completion":
+            result = run_serve(getattr(args, "serve_argv", []))
+        elif args.command == "completion":
             from flowjet.cli.completion import run_completion_script
 
-            return run_completion_script(getattr(args, "completion_argv", []))
-        return run_one_shot(run_async(args))
+            result = run_completion_script(getattr(args, "completion_argv", []))
+        else:
+            result = run_one_shot(run_async(args))
     except KeyboardInterrupt:
         sys.stderr.write("\ninterrupted\n")
         return 130
+    except BrokenPipeError:
+        return _handle_broken_pipe()
+    try:
+        # Flush before returning: a closed consumer would otherwise trigger
+        # "Exception ignored" noise during interpreter shutdown.
+        sys.stdout.flush()
+    except BrokenPipeError:
+        return _handle_broken_pipe()
+    return result
 
 
 if __name__ == "__main__":  # pragma: no cover

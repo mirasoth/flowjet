@@ -632,6 +632,278 @@ async def test_run_async_keyboard_interrupt(monkeypatch, capsys) -> None:  # typ
     assert "interrupted" in capsys.readouterr().err
 
 
+@pytest.mark.asyncio
+async def test_run_async_cancelled_error(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    import asyncio
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import flowjet.cli.agent as agent_mod
+    import flowjet.cli.agent as config_mod
+    import flowjet.cli.stream as stream_mod
+    import flowjet.cli.threads as threads_mod
+    from flowjet.cli.cli import parse_args, run_async
+
+    @asynccontextmanager
+    async def fake_cp(_config: object):
+        yield object()
+
+    async def raise_cancelled(*_a: object, **_k: object) -> str:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
+    monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
+
+    async def fake_build(*_a: object, **_k: object) -> object:
+        return object()
+
+    async def fake_resolve(*_a: object, **_k: object) -> str:
+        return "fj-test"
+
+    monkeypatch.setattr(agent_mod, "build_agent", fake_build)
+    monkeypatch.setattr(threads_mod, "resolve_thread_id", fake_resolve)
+    monkeypatch.setattr(stream_mod, "stream_query", raise_cancelled)
+
+    assert await run_async(parse_args(["q"])) == 130
+    assert "run cancelled" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_run_async_system_exit_from_plugin(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import flowjet.cli.agent as agent_mod
+    import flowjet.cli.agent as config_mod
+    import flowjet.cli.stream as stream_mod
+    import flowjet.cli.threads as threads_mod
+    from flowjet.cli.cli import parse_args, run_async
+
+    @asynccontextmanager
+    async def fake_cp(_config: object):
+        yield object()
+
+    async def raise_system_exit(*_a: object, **_k: object) -> str:
+        raise SystemExit(3)
+
+    monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
+    monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
+
+    async def fake_build(*_a: object, **_k: object) -> object:
+        return object()
+
+    async def fake_resolve(*_a: object, **_k: object) -> str:
+        return "fj-test"
+
+    monkeypatch.setattr(agent_mod, "build_agent", fake_build)
+    monkeypatch.setattr(threads_mod, "resolve_thread_id", fake_resolve)
+    monkeypatch.setattr(stream_mod, "stream_query", raise_system_exit)
+
+    assert await run_async(parse_args(["q"])) == 1
+    assert "exit(3)" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Exit codes / signals / broken pipe / --timeout
+# ---------------------------------------------------------------------------
+
+
+def _patch_run_async_env(monkeypatch, stream_result=None, stream_exc=None):  # type: ignore[no-untyped-def]
+    """Shared mocks for run_async tests that bypass the real agent stack."""
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import flowjet.cli.agent as agent_mod
+    import flowjet.cli.stream as stream_mod
+    import flowjet.cli.threads as threads_mod
+
+    @asynccontextmanager
+    async def fake_cp(_config: object):
+        yield object()
+
+    async def fake_stream(*_a: object, **_k: object) -> str:
+        if stream_exc is not None:
+            raise stream_exc
+        return stream_result if stream_result is not None else "ok"
+
+    async def fake_build(*_a: object, **_k: object) -> object:
+        return object()
+
+    async def fake_resolve(*_a: object, **_k: object) -> str:
+        return "fj-test"
+
+    monkeypatch.setattr(agent_mod, "load_config", lambda _p=None: SimpleNamespace())
+    monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
+    monkeypatch.setattr(agent_mod, "build_agent", fake_build)
+    monkeypatch.setattr(threads_mod, "resolve_thread_id", fake_resolve)
+    monkeypatch.setattr(stream_mod, "stream_query", fake_stream)
+    monkeypatch.setattr(stream_mod, "invoke_query", fake_stream)
+
+
+@pytest.mark.asyncio
+async def test_run_async_exit_code_3_on_empty_answer(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from flowjet.cli.cli import parse_args, run_async
+
+    _patch_run_async_env(monkeypatch, stream_result="")
+    assert await run_async(parse_args(["q"])) == 3
+
+
+@pytest.mark.asyncio
+async def test_run_async_exit_code_0_on_answer(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from flowjet.cli.cli import parse_args, run_async
+
+    _patch_run_async_env(monkeypatch, stream_result="the answer")
+    assert await run_async(parse_args(["q"])) == 0
+
+
+@pytest.mark.asyncio
+async def test_run_async_exit_code_0_on_interrupt_pause(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from flowjet.cli.cli import parse_args, run_async
+    from flowjet.cli.stream import INTERRUPTED
+
+    _patch_run_async_env(monkeypatch, stream_result=INTERRUPTED)
+    assert await run_async(parse_args(["q"])) == 0
+
+
+@pytest.mark.asyncio
+async def test_run_async_sigterm_returns_143(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    import asyncio
+
+    from flowjet.cli import cli as cli_mod
+    from flowjet.cli.cli import parse_args, run_async
+
+    _patch_run_async_env(monkeypatch, stream_exc=asyncio.CancelledError())
+    monkeypatch.setattr(cli_mod, "_interrupt_signal", 15)
+    assert await run_async(parse_args(["q"])) == 143
+    captured = capsys.readouterr().err
+    assert "interrupted by SIGTERM" in captured
+    assert "signal 15" in captured
+
+
+@pytest.mark.asyncio
+async def test_run_async_broken_pipe_returns_141(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    from flowjet.cli.cli import parse_args, run_async
+
+    _patch_run_async_env(monkeypatch, stream_exc=BrokenPipeError())
+    assert await run_async(parse_args(["q"])) == 141
+    assert "output pipe closed" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_run_async_passes_timeout_to_stream(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from flowjet.cli.cli import parse_args, run_async
+
+    seen: dict[str, object] = {}
+
+    async def fake_stream(*_a: object, **k: object) -> str:
+        seen.update(k)
+        return "ok"
+
+    _patch_run_async_env(monkeypatch)
+    import flowjet.cli.stream as stream_mod
+
+    monkeypatch.setattr(stream_mod, "stream_query", fake_stream)
+    assert await run_async(parse_args(["--timeout", "45", "q"])) == 0
+    assert seen.get("timeout_s") == 45.0
+
+    seen.clear()
+    assert await run_async(parse_args(["q"])) == 0
+    assert seen.get("timeout_s") is None
+
+
+def test_on_interrupt_signal_records_and_cancels() -> None:
+    import asyncio
+
+    from flowjet.cli import cli as cli_mod
+
+    loop = asyncio.new_event_loop()
+    try:
+        task = loop.create_task(asyncio.sleep(30))
+        cli_mod._on_interrupt_signal(15, task)
+        assert cli_mod._interrupt_signal == 15
+        try:
+            loop.run_until_complete(task)
+            raise AssertionError("task should have been cancelled")
+        except asyncio.CancelledError:
+            pass
+    finally:
+        loop.close()
+
+
+def test_install_signal_cancellation_roundtrip() -> None:
+    import asyncio
+
+    from flowjet.cli import cli as cli_mod
+
+    loop = asyncio.new_event_loop()
+    try:
+        task = loop.create_task(asyncio.sleep(0))
+        installed = cli_mod._install_signal_cancellation(loop, task)
+        if not installed:  # pragma: no cover - non-main-thread / Windows
+            return
+        try:
+            loop.run_until_complete(task)
+        finally:
+            cli_mod._remove_signal_cancellation(loop, installed)
+    finally:
+        loop.close()
+
+
+def test_timeout_flag_parsing_and_validation() -> None:
+    from flowjet.cli.cli import _build_parser, split_argv, validate_arg_composition
+
+    options, query = split_argv(["--timeout", "30", "hello", "world"])
+    assert options == ["--timeout", "30"]
+    assert query == ["hello", "world"]
+
+    args = _build_parser("fj").parse_args(["--timeout=12.5"])
+    assert args.timeout == 12.5
+    assert validate_arg_composition(args) is None
+
+    args = _build_parser("fj").parse_args(["--timeout", "-1"])
+    assert validate_arg_composition(args) == "--timeout must be >= 0 (0 = no limit)"
+
+
+def test_main_broken_pipe_returns_141(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from types import SimpleNamespace
+
+    from flowjet.cli import cli
+
+    monkeypatch.setattr(
+        cli, "parse_args", lambda argv=None: SimpleNamespace(command="query", verbose=False)
+    )
+
+    def raise_broken_pipe(coro: object) -> int:
+        if hasattr(coro, "close"):
+            coro.close()  # type: ignore[union-attr]
+        raise BrokenPipeError
+
+    monkeypatch.setattr(cli, "run_one_shot", raise_broken_pipe)
+    handled: list[int] = []
+    monkeypatch.setattr(cli, "_handle_broken_pipe", lambda: (handled.append(1), 141)[1])
+    assert cli.main(["q"]) == 141
+    assert handled
+
+
+def test_load_config_or_exit_verbose_prints_traceback(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    from types import SimpleNamespace
+
+    import flowjet.cli.agent as agent_mod
+    from flowjet.cli.cli import _load_config_or_exit
+
+    def boom(_p: object) -> None:
+        raise ValueError("bad yaml structure")
+
+    monkeypatch.setattr(agent_mod, "load_config", boom)
+    args = SimpleNamespace(config=None, verbose=True)
+    assert _load_config_or_exit(args) == 1
+    captured = capsys.readouterr().err
+    assert "failed to load config" in captured
+    assert "Traceback" in captured
+    assert "bad yaml structure" in captured
+
+
+
 def test_main_verbose_reconfigures_logging(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from flowjet.cli import cli
 

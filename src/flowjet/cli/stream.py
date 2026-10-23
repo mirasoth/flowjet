@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
 import re
 import sys
 import time
@@ -12,6 +15,7 @@ from typing import Any, TextIO
 from langchain_core.messages import AIMessage, AIMessageChunk
 from soothe_nano import SootheNanoAgent
 
+from flowjet.cli.cli import _FJ_FILE_HANDLER
 from flowjet.cli.progress import (
     ProgressLine,
     format_tool_activity,
@@ -88,7 +92,10 @@ _STATUS_SENTENCE_SEPS = (
 
 def format_cli_error(exc: BaseException) -> str:
     """One-line summary for an uncaught run failure."""
-    name = type(exc).__name__
+    # AgentRunError carries the original exception type from inside the run —
+    # report that instead of the re-wrap site (RuntimeError).
+    exc_type = getattr(exc, "exc_type", None)
+    name = exc_type if isinstance(exc_type, str) and exc_type else type(exc).__name__
     msg = str(exc).strip()
     if not msg:
         return f"error: {name}"
@@ -101,6 +108,25 @@ def format_cli_error(exc: BaseException) -> str:
     return f"error: {name}: {first}"
 
 
+class AgentRunError(RuntimeError):
+    """Re-wrapped :class:`RunFailed` carrying the original failure details.
+
+    ``exc_type`` / ``traceback_text`` preserve the exception type and stack
+    from inside the agent run, which a plain re-raise would destroy.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        exc_type: str | None = None,
+        traceback_text: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.exc_type = exc_type
+        self.traceback_text = traceback_text
+
+
 def write_cli_error(
     exc: BaseException,
     *,
@@ -110,9 +136,57 @@ def write_cli_error(
     """Write a clean error to stderr; include traceback only when verbose."""
     stream = err or sys.stderr
     stream.write(format_cli_error(exc) + "\n")
+    if not verbose and _has_hidden_detail(exc):
+        stream.write("… run with -v for the full error and traceback\n")
     if verbose:
-        stream.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+        # An AgentRunError already carries the original in-run stack — that is
+        # the useful one; the raise site here would only point at this module.
+        original_tb = getattr(exc, "traceback_text", None)
+        if isinstance(original_tb, str) and original_tb:
+            stream.write(original_tb)
+        else:
+            stream.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
     stream.flush()
+    _mirror_run_failure_to_log(exc)
+
+
+def _has_hidden_detail(exc: BaseException) -> bool:
+    """True when the one-line summary dropped message lines or a traceback."""
+    if getattr(exc, "traceback_text", None):
+        return True
+    lines = [line for line in str(exc).splitlines() if line.strip()]
+    return len(lines) > 1
+
+
+def _mirror_run_failure_to_log(exc: BaseException) -> None:
+    """Record run failures in the ``FJ_LOG_FILE`` handler with full tracebacks."""
+    for handler in logging.getLogger().handlers:
+        if getattr(handler, "name", None) != _FJ_FILE_HANDLER:
+            continue
+        _emit_file_only(handler, "run failed: " + format_cli_error(exc))
+        tb = getattr(exc, "traceback_text", None)
+        if not (isinstance(tb, str) and tb):
+            tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        if tb:
+            _emit_file_only(handler, tb.rstrip())
+        break
+
+
+def _emit_file_only(handler: logging.Handler, message: str) -> None:
+    """Send one record to ``handler`` only (bypasses root propagation)."""
+    record = logging.LogRecord(
+        name="flowjet.cli",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg=message,
+        args=None,
+        exc_info=None,
+    )
+    try:
+        handler.handle(record)
+    except Exception:  # pragma: no cover - never fail the error path
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +350,25 @@ class AnswerWriter:
         return self.buf
 
 
+def _write_no_output_warning(
+    stderr: TextIO,
+    failed_tool_calls: int,
+    last_tool_error: str | None,
+    thread_id: str,
+) -> None:
+    """Explain a run that completed but produced no answer text."""
+    summary = "⚠ agent produced no output"
+    if failed_tool_calls:
+        summary += f" · {failed_tool_calls} tool call(s) failed"
+    summary += f" · thread {thread_id}"
+    lines = [summary]
+    if last_tool_error:
+        lines.append(f"  last tool error: {last_tool_error}")
+    lines.append("  rerun with -v to mirror tool calls and errors")
+    stderr.write("\n".join(lines) + "\n")
+    stderr.flush()
+
+
 def format_questions_block(
     questions: tuple[dict[str, Any], ...],
     thread_id: str,
@@ -338,12 +431,16 @@ async def stream_query(
     err: TextIO | None = None,
     progress: ProgressLine | None = None,
     resume_value: Any = None,
+    timeout_s: float | None = None,
 ) -> str:
     """Run a query with ephemeral progress; print the complete final answer.
 
     When the agent pauses for human input (``ask_user`` interrupt), the
     questions are rendered and :data:`INTERRUPTED` is returned — the run is
     not complete and must be resumed with ``fjf -t <thread> <answer>``.
+
+    ``timeout_s`` cancels the whole run after that many seconds and raises
+    :class:`AgentRunError` naming the last visible activity.
     """
     stdout = out or sys.stdout
     stderr = err or sys.stderr
@@ -352,122 +449,167 @@ async def stream_query(
     answer = AnswerWriter(stdout, status, live=live_answer)
     # ``-v``: emit each tool call once when args are available.
     mirrored_tool_ids: set[str] = set()
+    # Failed tool bookkeeping, shown when the run ends with no answer text.
+    failed_tool_calls = 0
+    last_tool_error: str | None = None
     started_at = time.monotonic()
     interrupted = False
+    # Human-readable label of the latest activity, reported on timeout so the
+    # user knows where the run was stuck.
+    last_label = "Thinking"
 
-    # Deepagents emits a deprecation warning mid-run that would smash the
-    # ephemeral progress line when mixed onto the terminal.
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            category=DeprecationWarning,
-            module=r"soothe_deepagents\.middleware\.filesystem",
-        )
-        warnings.filterwarnings(
-            "ignore",
-            message=r".*Passing a callable \(factory\) as `backend`.*",
-        )
-        async with status:
-            status.update("Thinking", color="cyan")
-            async for event in backend.stream_run(
-                RunRequest(
-                    model="default",
-                    input_text=query,
-                    session=thread_id,
-                    resume_value=resume_value,
-                )
-            ):
-                if isinstance(event, Progress):
-                    # ``raw`` carries the soothe-nano custom payload so the
-                    # terminal can keep using its own label/colour mapping.
-                    if event.raw is not None:
-                        mapped = friendly_progress(event.raw)
-                        if mapped:
-                            label, color = mapped
+    def _flush_partial() -> None:
+        """Surface buffered narration before an error replaces the progress line."""
+        if answer.buf:
+            stderr.write("\n· partial output before failure:\n")
+            stderr.write(answer.buf.rstrip() + "\n")
+            stderr.flush()
+
+    timeout_cm = asyncio.timeout(timeout_s) if timeout_s else contextlib.nullcontext()
+    try:
+        # Deepagents emits a deprecation warning mid-run that would smash the
+        # ephemeral progress line when mixed onto the terminal.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=DeprecationWarning,
+                module=r"soothe_deepagents\.middleware\.filesystem",
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*Passing a callable \(factory\) as `backend`.*",
+            )
+            async with status:
+                status.update("Thinking", color="cyan")
+                async with timeout_cm:
+                    async for event in backend.stream_run(
+                        RunRequest(
+                            model="default",
+                            input_text=query,
+                            session=thread_id,
+                            resume_value=resume_value,
+                        )
+                    ):
+                        if isinstance(event, Progress):
+                            # ``raw`` carries the soothe-nano custom payload so the
+                            # terminal can keep using its own label/colour mapping.
+                            if event.raw is not None:
+                                mapped = friendly_progress(event.raw)
+                                if mapped:
+                                    label, color = mapped
+                                    last_label = label
+                                    status.update(label, color=color)
+                                    # Only mirror events that drive the progress line
+                                    # (skips policy.checked, output.*, …).
+                                    if show_tool_calls:
+                                        event_type = event.raw.get("type", "unknown")
+                                        _write_verbose(status, stderr, f"  [event] {event_type}\n")
+                            continue
+
+                        if isinstance(event, ToolStarted):
+                            answer.reset_for_tools()
+                            label, color = format_tool_activity(event.tool, event.args)
+                            last_label = label
                             status.update(label, color=color)
-                            # Only mirror events that drive the progress line
-                            # (skips policy.checked, output.*, …).
                             if show_tool_calls:
-                                event_type = event.raw.get("type", "unknown")
-                                _write_verbose(status, stderr, f"  [event] {event_type}\n")
-                    continue
+                                _mirror_tool(
+                                    status,
+                                    stderr,
+                                    mirrored_tool_ids,
+                                    event.call_id or "",
+                                    event.tool,
+                                    event.args or {},
+                                )
+                            continue
 
-                if isinstance(event, ToolStarted):
-                    answer.reset_for_tools()
-                    label, color = format_tool_activity(event.tool, event.args)
-                    status.update(label, color=color)
-                    if show_tool_calls:
-                        _mirror_tool(
-                            status,
-                            stderr,
-                            mirrored_tool_ids,
-                            event.call_id or "",
-                            event.tool,
-                            event.args or {},
-                        )
-                    continue
+                        if isinstance(event, ToolCompleted):
+                            is_error = not event.ok
+                            if is_error:
+                                failed_tool_calls += 1
+                                detail = event.detail or event.preview
+                                if detail:
+                                    last_tool_error = " ".join(str(detail).split())[:200]
+                            label, color = format_tool_done(
+                                event.tool,
+                                event.args,
+                                is_error=is_error,
+                                detail=event.detail,
+                            )
+                            last_label = label
+                            status.update(label, color=color)
+                            if show_tool_calls:
+                                # Late mirror if args never parsed as complete mid-stream.
+                                _mirror_tool(
+                                    status,
+                                    stderr,
+                                    mirrored_tool_ids,
+                                    event.call_id or "",
+                                    event.tool,
+                                    event.args or {},
+                                )
+                                if event.preview:
+                                    tag = "error" if is_error else "result"
+                                    _write_verbose(status, stderr, f"  [{tag}] {event.preview}\n")
+                            continue
 
-                if isinstance(event, ToolCompleted):
-                    is_error = not event.ok
-                    label, color = format_tool_done(
-                        event.tool,
-                        event.args,
-                        is_error=is_error,
-                        detail=event.detail,
-                    )
-                    status.update(label, color=color)
-                    if show_tool_calls:
-                        # Late mirror if args never parsed as complete mid-stream.
-                        _mirror_tool(
-                            status,
-                            stderr,
-                            mirrored_tool_ids,
-                            event.call_id or "",
-                            event.tool,
-                            event.args or {},
-                        )
-                        if event.preview:
-                            tag = "error" if is_error else "result"
-                            _write_verbose(status, stderr, f"  [{tag}] {event.preview}\n")
-                    continue
+                        if isinstance(event, Narration):
+                            # Live preview only; dropped automatically when a tool call
+                            # starts (see ToolStarted → reset_for_tools).
+                            answer.set(event.text)
+                            continue
 
-                if isinstance(event, Narration):
-                    # Live preview only; dropped automatically when a tool call
-                    # starts (see ToolStarted → reset_for_tools).
-                    answer.set(event.text)
-                    continue
+                        if isinstance(event, RunCompleted):
+                            if event.output_text:
+                                answer.set(event.output_text)
+                            continue
 
-                if isinstance(event, RunCompleted):
-                    if event.output_text:
-                        answer.set(event.output_text)
-                    continue
+                        if isinstance(event, InterruptWaiting):
+                            status.update("Waiting for input…", color="yellow")
+                            if event.questions:
+                                # A real ``ask_user`` interrupt pauses the graph —
+                                # render the questions and mark the run as interrupted
+                                # so the CLI returns ``INTERRUPTED`` instead of "Done".
+                                status.blank()
+                                stdout.write(format_questions_block(event.questions, thread_id))
+                                stdout.flush()
+                                interrupted = True
+                            elif show_tool_calls:
+                                _write_verbose(
+                                    status,
+                                    stderr,
+                                    "\n  [interrupted] agent paused for input\n",
+                                )
+                            continue
 
-                if isinstance(event, InterruptWaiting):
-                    status.update("Waiting for input…", color="yellow")
-                    if event.questions:
-                        # A real ``ask_user`` interrupt pauses the graph —
-                        # render the questions and mark the run as interrupted
-                        # so the CLI returns ``INTERRUPTED`` instead of "Done".
-                        status.blank()
-                        stdout.write(format_questions_block(event.questions, thread_id))
-                        stdout.flush()
-                        interrupted = True
-                    elif show_tool_calls:
-                        _write_verbose(
-                            status,
-                            stderr,
-                            "\n  [interrupted] agent paused for input\n",
-                        )
-                    continue
+                        if isinstance(event, RunFailed):
+                            raise AgentRunError(
+                                event.message,
+                                exc_type=event.exc_type or event.code,
+                                traceback_text=event.traceback,
+                            )
 
-                if isinstance(event, RunFailed):
-                    raise RuntimeError(event.message)
+    except TimeoutError:
+        if isinstance(timeout_cm, asyncio.Timeout) and timeout_cm.expired():
+            _flush_partial()
+            raise AgentRunError(
+                f"run timed out after {timeout_s:.0f}s — last activity: {last_label}",
+                exc_type="TimeoutError",
+            ) from None
+        _flush_partial()
+        raise
+    except BaseException:
+        _flush_partial()
+        raise
 
     answer_text = answer.finish()
     if interrupted:
         # The run paused for input — don't print "Done", the questions block
         # (or generic pause message) is already on stdout.
         return INTERRUPTED
+    if not answer_text:
+        # A silent "✓ Done" teaches nothing — make the empty outcome and any
+        # failed tool calls visible instead.
+        _write_no_output_warning(stderr, failed_tool_calls, last_tool_error, thread_id)
     duration = _format_duration(time.monotonic() - started_at)
     stdout.write(f"\n✓ Done · {duration} · {thread_id}\n")
     stdout.flush()
@@ -482,6 +624,7 @@ async def invoke_query(
     out: TextIO | None = None,
     progress: ProgressLine | None = None,
     resume_value: Any = None,
+    timeout_s: float | None = None,
 ) -> str:
     """Progress until done, then print the final text (no live narration preview)."""
     return await stream_query(
@@ -493,4 +636,5 @@ async def invoke_query(
         out=out,
         progress=progress,
         resume_value=resume_value,
+        timeout_s=timeout_s,
     )
