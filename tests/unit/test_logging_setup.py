@@ -143,7 +143,6 @@ def test_write_cli_error_no_file_log_is_silent_on_disk(tmp_path, monkeypatch) ->
     assert list(tmp_path.iterdir()) == []
 
 
-
 def test_configure_cli_logging_verbose_one_line(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

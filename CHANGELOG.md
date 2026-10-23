@@ -10,6 +10,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.3] — 2026-10-23
+
+### Fixed
+
+- **CLI: every failure path now surfaces a message — no more silent exits.**
+  The CLI could exit with no output (SIGTERM/SIGHUP, plugin `sys.exit`, broken
+  pipes, empty answers) and destroyed the original error stack even with `-v`.
+  This closes every identified gap in the error-to-output flow:
+
+  - `RunFailed` now carries `exc_type` + traceback; `stream_query` raises
+    `AgentRunError` so the CLI reports the real exception type and, with `-v`,
+    the original in-run stack instead of a re-raise site.
+  - SIGTERM/SIGHUP cancel the run gracefully: "interrupted by SIGTERM" with
+    conventional `128+signal` exit codes (was: instant silent death).
+  - Empty-answer runs warn on stderr ("agent produced no output · N tool calls
+    failed · last tool error") and exit 3.
+  - Partial narration is flushed to stderr before any failure/timeout/interrupt
+    message — a provider drop no longer loses the whole answer.
+  - `--timeout SECONDS` cancels a stuck run, reporting the last activity.
+  - `FJ_LOG_FILE=<path>` keeps WARNING+ with full tracebacks in a rotating log
+    for post-mortem diagnosis (incl. `logger.exception` from plugins).
+  - Multi-line errors truncated to one line now hint "run with -v".
+  - `BrokenPipeError`: exit 141 with a message; shutdown flush noise silenced
+    via `devnull` dup2 (`fj q | head`).
+  - Teardown suppresses `CancelledError` so it cannot mask the real result.
+  - Server parity: pool `worker_error`, OpenAI-compatible and ACP failures
+    populate/render `exc_type` + traceback (ACP shows "Error: <Type>: <msg>").
+  - Minor: thread-snapshot check failures are logged; config-load errors
+    honor `-v` with a traceback; plugin `sys.exit(0)` still fails loudly.
+
 ### Changed
 
 - **ArcBox tool sandbox: guest network is now off by default**

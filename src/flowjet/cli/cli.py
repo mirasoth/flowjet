@@ -108,9 +108,7 @@ def _attach_file_log_handler(root: logging.Logger) -> None:
         return
     handler.set_name(_FJ_FILE_HANDLER)
     handler.setLevel(logging.WARNING)
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)-8s [%(name)s] %(message)s")
-    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-8s [%(name)s] %(message)s"))
     root.addHandler(handler)
 
 
@@ -521,9 +519,7 @@ def _load_config_or_exit(args: argparse.Namespace) -> Any | int:
     except Exception as exc:
         sys.stderr.write(f"error: failed to load config: {exc}\n")
         if getattr(args, "verbose", False):
-            sys.stderr.write(
-                "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-            )
+            sys.stderr.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
         return 1
 
 

@@ -120,6 +120,7 @@ def _worker_error_event(payload: Any) -> RunFailed:
         traceback=tb_text,
     )
 
+
 class _ResponseBridge:
     """Push messages from a worker thread onto an asyncio.Queue on the main loop.
 
