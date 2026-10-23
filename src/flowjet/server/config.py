@@ -66,6 +66,14 @@ class Settings(BaseSettings):
     # (backend / frontend) a plain-file view of every workspace. Empty = disabled.
     workspace_content_source: str | None = None
 
+    # Server-surface thread-state checkpointer. "auto" resolves from the
+    # nano.yml durability config (sqlite → $SOOTHE_DATA_DIR/databases/
+    # checkpoints.db, one connection per pool worker, shared file) so one ACP
+    # session's conversation stays continuous across turns, workers and
+    # restarts — and ``ask_user`` pauses become resumable. "off" restores the
+    # legacy behavior (every turn starts a fresh conversation).
+    server_checkpointer: str = "auto"
+
     def model_ids(self) -> list[str]:
         return [m.strip() for m in self.models.split(",") if m.strip()]
 

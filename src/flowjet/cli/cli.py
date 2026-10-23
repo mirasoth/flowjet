@@ -570,35 +570,16 @@ def run_pin_thread(thread_id: str) -> int:
 async def _detect_pending_interrupt(agent: Any, thread_id: str) -> Any:
     """Return the pending ``ask_user`` interrupt value, or ``None``.
 
-    Checks the LangGraph snapshot for the thread. When an ``ask_user``
-    interrupt is pending, its ``value`` carries the question specs; the CLI
-    can resume the run by feeding the user's answer to ``Command(resume=...)``.
+    Thin wrapper over the shared bridge helper
+    (:func:`flowjet.core.bridges.nano.interrupts.detect_pending_ask_user`) so
+    the CLI and the server surfaces apply the exact same probe. When an
+    ``ask_user`` interrupt is pending, its ``value`` carries the question
+    specs; the run resumes by feeding the user's answer to
+    ``Command(resume=...)``.
     """
-    get_state = getattr(agent, "aget_state", None)
-    if not callable(get_state):
-        return None
-    try:
-        snapshot = await get_state({"configurable": {"thread_id": thread_id}})
-    except Exception as exc:
-        # Not fatal — but explain why a pending question may be missed and a
-        # new turn started instead of resuming (visible with -v / FJ_LOG_FILE).
-        _logger.warning("thread snapshot check failed; starting a new turn: %s", exc)
-        return None
-    if snapshot is None:
-        return None
-    interrupts = getattr(snapshot, "interrupts", None) or ()
-    if not interrupts:
-        # Some snapshots nest interrupts under per-task state.
-        tasks = getattr(snapshot, "tasks", None) or ()
-        for task in tasks:
-            task_interrupts = getattr(task, "interrupts", None) or ()
-            interrupts = task_interrupts
-            break
-    for entry in interrupts:
-        value = getattr(entry, "value", None)
-        if isinstance(value, dict) and value.get("type") == "ask_user":
-            return value
-    return None
+    from flowjet.core.bridges.nano.interrupts import detect_pending_ask_user
+
+    return await detect_pending_ask_user(agent, {"configurable": {"thread_id": thread_id}})
 
 
 async def run_async(args: argparse.Namespace) -> int:

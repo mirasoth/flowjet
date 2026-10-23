@@ -19,6 +19,11 @@ class IsolatedRunRequest:
     thread_id: str | None = None
     metadata: dict[str, Any] | None = None
     request_id: str | None = None
+    # When set, the run resumes a paused graph (``ask_user`` interrupt) with
+    # this value via ``Command(resume=...)`` instead of starting a new turn
+    # from ``input_text``. ``None`` lets the bridge auto-detect a pending
+    # ``ask_user`` interrupt on the thread.
+    resume_value: Any = None
 
     def effective_thread_id(self) -> str:
         return self.thread_id or self.session

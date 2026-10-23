@@ -528,6 +528,7 @@ class ThreadPool:
             thread_id=request.thread_id,
             metadata=request.metadata,
             request_id=request_id,
+            resume_value=request.resume_value,
         )
 
         await self.await_session_dispatchable(req.session)

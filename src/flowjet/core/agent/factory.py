@@ -41,6 +41,7 @@ class AgentFactory:
         interaction_mode: InteractionMode | str | None = None,
         backend: Backend | None = None,
         sandbox: Any | None = None,
+        checkpointer: Any | None = None,
     ) -> Any:
         from flowjet.core.modes import apply_profile
 
@@ -49,16 +50,18 @@ class AgentFactory:
         cfg = apply_profile(config, profile, backend=resolved)
 
         if resolved is Backend.SOOTHE:
-            return cls.create_soothe(cfg, profile, mode, sandbox=sandbox)
+            return cls.create_soothe(cfg, profile, mode, sandbox=sandbox, checkpointer=checkpointer)
 
         if profile.surface is Surface.SERVER:
             from soothe_nano import create_dual_mode_nano_agent
 
-            return create_dual_mode_nano_agent(cfg, backend=sandbox)
+            return create_dual_mode_nano_agent(cfg, backend=sandbox, checkpointer=checkpointer)
 
         from soothe_nano import create_nano_agent
 
-        return create_nano_agent(cfg, interaction_mode=mode, backend=sandbox)
+        return create_nano_agent(
+            cfg, interaction_mode=mode, backend=sandbox, checkpointer=checkpointer
+        )
 
     @staticmethod
     def soothe_builder() -> Any:
@@ -80,18 +83,33 @@ class AgentFactory:
         mode: str | None = None,
         *,
         sandbox: Any | None = None,
+        checkpointer: Any | None = None,
     ) -> Any:
         """Build a ``soothe`` (host runtime) agent for ``profile``'s surface.
 
         ``interrupt_on`` is pinned to ``{}``: the host builder otherwise injects
         HITL interrupts for mutating tools (``edit_file`` / ``write_file`` /
-        ``delete`` / ``run_command``), and FlowJet has no resume path — it
-        renders ``InterruptWaiting`` and stops, so any write would stall the run.
+        ``delete`` / ``run_command``), and FlowJet does not surface those
+        approval requests as resumable pauses — only ``ask_user`` clarifications
+        are resumed (via the checkpointer + ``Command(resume=...)``), so a
+        mutating-tool interrupt would stall the run.
+
+        ``checkpointer`` is attached at graph-compile time so both mode graphs
+        of a server-surface agent share it (a post-hoc ``graph.checkpointer``
+        assignment would only reach the default mode's lazily compiled graph).
         """
         factory = cls.soothe_builder()
         if profile.surface is Surface.SERVER:
-            return ModeRoutedSootheAgent(config, factory, sandbox=sandbox)
-        return factory(config, interaction_mode=mode, interrupt_on={}, backend=sandbox)
+            return ModeRoutedSootheAgent(
+                config, factory, sandbox=sandbox, checkpointer=checkpointer
+            )
+        return factory(
+            config,
+            interaction_mode=mode,
+            interrupt_on={},
+            backend=sandbox,
+            checkpointer=checkpointer,
+        )
 
 
 class ModeRoutedSootheAgent:
@@ -103,8 +121,10 @@ class ModeRoutedSootheAgent:
     request must never land on the ``agent`` graph. Agents are built lazily, so
     a worker that only serves ``ask`` never builds the ``agent`` graph.
 
-    Only ``astream`` is proxied: that is the whole surface the nano bridge
-    (``flowjet.core.bridges.nano.mapping``) drives.
+    Only ``astream`` and ``aget_state`` are proxied: that is the whole
+    surface the nano bridge (``flowjet.core.bridges.nano.mapping``) drives
+    — streaming a turn, and probing the thread snapshot for a pending
+    ``ask_user`` interrupt before it.
     """
 
     def __init__(
@@ -114,11 +134,13 @@ class ModeRoutedSootheAgent:
         modes: tuple[str, ...] = ("agent", "ask"),
         *,
         sandbox: Any | None = None,
+        checkpointer: Any | None = None,
     ) -> None:
         self._config = config
         self._factory = factory
         self._modes = modes
         self._sandbox = sandbox
+        self._checkpointer = checkpointer
         self._agents: dict[str, Any] = {}
 
     def _agent_for(self, mode: str) -> Any:
@@ -130,18 +152,40 @@ class ModeRoutedSootheAgent:
                 interaction_mode=resolved,
                 interrupt_on={},
                 backend=self._sandbox,
+                checkpointer=self._checkpointer,
             )
             self._agents[resolved] = agent
         return agent
 
+    def _agent_for_config(self, config: Any) -> Any:
+        """Pick the mode agent for a runnable config (mirrors ``astream``)."""
+        configurable: dict[str, Any] = {}
+        if isinstance(config, dict):
+            raw = config.get("configurable") or {}
+            if isinstance(raw, dict):
+                configurable = raw
+        mode = str(configurable.get("interaction_mode") or "agent")
+        return self._agent_for(mode)
+
     async def astream(self, payload: Any, **kwargs: Any) -> Any:
         """Proxy ``astream`` to the agent built for the request's mode."""
         config = kwargs.get("config") or {}
-        configurable = config.get("configurable") or {} if isinstance(config, dict) else {}
-        mode = str(configurable.get("interaction_mode") or "agent")
-        agent = self._agent_for(mode)
+        agent = self._agent_for_config(config)
         async for chunk in agent.astream(payload, **kwargs):
             yield chunk
+
+    async def aget_state(self, config: Any = None) -> Any:
+        """Proxy ``aget_state`` to the agent built for the config's mode.
+
+        Soft-fails to ``None`` when the mode agent cannot read graph state
+        (no checkpointer), matching ``SootheNanoAgent.aget_state`` semantics
+        so pending-interrupt probes degrade instead of raising.
+        """
+        agent = self._agent_for_config(config)
+        get_state = getattr(agent, "aget_state", None)
+        if not callable(get_state):
+            return None
+        return await get_state(config=config)
 
 
 __all__ = ["AgentFactory", "ModeRoutedSootheAgent"]

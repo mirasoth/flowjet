@@ -108,11 +108,9 @@ async def build_agent(
         mode = "bypass"
     configure_cli_logging(verbose=verbose)
     ensure_workspace(workspace)
-    agent = create_agent(config, CLI_PROFILE, interaction_mode=mode)
+    agent = create_agent(config, CLI_PROFILE, interaction_mode=mode, checkpointer=checkpointer)
     # Plugin imports (e.g. browser_use) may still attach root console handlers.
     silence_after_plugins(verbose=verbose)
-    if checkpointer is not None:
-        agent.graph.checkpointer = checkpointer
     return agent
 
 

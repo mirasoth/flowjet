@@ -78,6 +78,50 @@ async def test_open_sqlite_checkpointer_yields_none_when_unresolved(
 
 
 @pytest.mark.asyncio
+async def test_open_honors_config_backend_sqlite(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Checkpointers.open resolves the backend from the config (server path)."""
+    import flowjet.core.agent.workspace as workspace_mod
+    from flowjet.core.agent.workspace import Checkpointers
+
+    db_path = tmp_path / "checkpoints.db"
+    monkeypatch.setattr(workspace_mod, "resolve_checkpointer", lambda _cfg: (None, str(db_path)))
+    # Default config: durability.checkpointer="default" inherits
+    # persistence.default_backend="sqlite".
+    async with Checkpointers.open(SootheConfig()) as cp:
+        assert cp is not None
+    assert db_path.parent.exists()
+
+
+@pytest.mark.asyncio
+async def test_open_warns_and_yields_none_for_unwired_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A postgresql backend is not wired server-side: degrade, don't crash."""
+    from flowjet.core.agent.workspace import Checkpointers
+
+    cfg = SootheConfig()
+    cfg = cfg.model_copy(
+        update={
+            "persistence": cfg.persistence.model_copy(update={"default_backend": "postgresql"}),
+        }
+    )
+    async with Checkpointers.open(cfg) as cp:
+        assert cp is None
+
+
+def test_checkpointer_policy_enabled() -> None:
+    from flowjet.core.agent.workspace import checkpointer_policy_enabled
+
+    assert checkpointer_policy_enabled("auto") is True
+    assert checkpointer_policy_enabled("AUTO") is True
+    assert checkpointer_policy_enabled(None) is False
+    assert checkpointer_policy_enabled("off") is False
+    assert checkpointer_policy_enabled("false") is False
+
+
+@pytest.mark.asyncio
 async def test_open_sqlite_checkpointer_opens_db(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -100,6 +144,10 @@ async def test_open_sqlite_checkpointer_opens_db(
     class FakeConn:
         def __init__(self) -> None:
             self.closed = False
+            self.pragmas: list[str] = []
+
+        async def execute(self, sql: str) -> None:
+            self.pragmas.append(sql)
 
         async def close(self) -> None:
             self.closed = True
@@ -127,13 +175,16 @@ async def test_open_sqlite_checkpointer_opens_db(
         assert cp is savers[0]
         assert savers[0].setup_called is True
     assert fake_conn.closed is True
+    # WAL + busy_timeout are set so pool workers can share the file.
+    assert any("journal_mode=WAL" in p for p in fake_conn.pragmas)
+    assert any("busy_timeout" in p for p in fake_conn.pragmas)
 
 
 @pytest.mark.asyncio
 async def test_build_agent_wires_checkpointer(monkeypatch: pytest.MonkeyPatch) -> None:
     import flowjet.cli.agent as agent_mod
 
-    created: dict[str, object] = {}
+    captured: dict[str, object] = {}
 
     class FakeGraph:
         def __init__(self) -> None:
@@ -143,10 +194,9 @@ async def test_build_agent_wires_checkpointer(monkeypatch: pytest.MonkeyPatch) -
         def __init__(self) -> None:
             self.graph = FakeGraph()
 
-    def fake_create(_cfg: object, _profile: object = None, **_kwargs: object) -> FakeAgent:
-        agent = FakeAgent()
-        created["agent"] = agent
-        return agent
+    def fake_create(_cfg: object, _profile: object = None, **kwargs: object) -> FakeAgent:
+        captured.update(kwargs)
+        return FakeAgent()
 
     monkeypatch.setattr(agent_mod, "configure_cli_logging", lambda **_k: None)
     monkeypatch.setattr(agent_mod, "ensure_workspace", lambda _w=None: Path.cwd())
@@ -155,8 +205,10 @@ async def test_build_agent_wires_checkpointer(monkeypatch: pytest.MonkeyPatch) -
 
     cp = object()
     agent = await agent_mod.build_agent(SootheConfig(), checkpointer=cp, verbose=True)
-    assert agent is created["agent"]
-    assert agent.graph.checkpointer is cp
+    assert isinstance(agent, FakeAgent)
+    # The checkpointer is a build-time parameter (not a post-hoc graph patch),
+    # so every lazily compiled mode graph receives it.
+    assert captured.get("checkpointer") is cp
 
 
 @pytest.mark.asyncio

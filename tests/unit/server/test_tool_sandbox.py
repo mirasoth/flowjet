@@ -748,8 +748,13 @@ async def test_nano_adapter_binds_sandbox_and_uses_guest_workspace(
     built: list[dict[str, object | None]] = []
     agents: list[StubAgent] = []
 
-    def fake_create(_config_path: str | Path | None, *, sandbox: object | None = None) -> StubAgent:
-        built.append({"sandbox": sandbox})
+    def fake_create(
+        _config_path: str | Path | None,
+        *,
+        sandbox: object | None = None,
+        checkpointer: object | None = None,
+    ) -> StubAgent:
+        built.append({"sandbox": sandbox, "checkpointer": checkpointer})
         agent = StubAgent()
         agents.append(agent)
         return agent
@@ -779,7 +784,7 @@ async def test_nano_adapter_binds_sandbox_and_uses_guest_workspace(
     events = [event async for event in adapter.astream(req)]
     completed = [e for e in events if isinstance(e, RunCompleted)]
     assert any(e.output_text == "ok" for e in completed)
-    assert built == [{"sandbox": fake_manager.backends[str(tmp_path)]}]
+    assert built == [{"sandbox": fake_manager.backends[str(tmp_path)], "checkpointer": None}]
 
     agent = agents[0]
     assert agent.last_config is not None
