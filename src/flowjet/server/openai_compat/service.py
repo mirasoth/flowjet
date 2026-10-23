@@ -298,6 +298,8 @@ class ResponseService:
                 "total_tokens": prompt_tokens + completion_tokens,
             },
         }
+
+
 def _run_failed_from_exc(exc: BaseException) -> RunFailed:
     """Build a RunFailed that preserves the exception type and stack."""
     return RunFailed(

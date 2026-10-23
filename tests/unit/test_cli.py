@@ -903,7 +903,6 @@ def test_load_config_or_exit_verbose_prints_traceback(monkeypatch, capsys) -> No
     assert "bad yaml structure" in captured
 
 
-
 def test_main_verbose_reconfigures_logging(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from flowjet.cli import cli
 

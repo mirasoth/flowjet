@@ -328,4 +328,3 @@ def test_worker_error_event_preserves_cause() -> None:
     assert event.message == "worker error"
     assert event.exc_type is None
     assert event.traceback is None
-
