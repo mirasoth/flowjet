@@ -8,6 +8,7 @@ tool summaries, step labels, delta chunking, AI text extraction) live in
 
 from __future__ import annotations
 
+import traceback as _traceback
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -493,4 +494,11 @@ async def iter_nano_runtime_events(
                 yield delta
         yield RunCompleted(output_text=answer)
     except Exception as exc:  # noqa: BLE001
-        yield RunFailed(message=str(exc) or type(exc).__name__)
+        # Preserve the original type and stack so the CLI can report the real
+        # cause (the event is re-wrapped downstream, which would otherwise
+        # destroy both).
+        yield RunFailed(
+            message=str(exc) or type(exc).__name__,
+            exc_type=type(exc).__name__,
+            traceback="".join(_traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        )

@@ -14,6 +14,7 @@ session run in the client's project rather than in a hashed workspace.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -46,6 +47,8 @@ from flowjet.server import __version__ as flowjet_version
 
 if TYPE_CHECKING:
     from acp import Client
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["FlowJetAcpAgent", "build_acp_agent_factory"]
 
@@ -486,10 +489,17 @@ class FlowJetAcpAgent:
                     stop_reason = "end_turn"
                 elif isinstance(event, RunFailed):
                     stop_reason = "end_turn"
+                    # Surface the original exception type (not just the
+                    # re-wrapped message) and keep the stack server-side.
+                    label = (
+                        f"{event.exc_type}: {event.message}" if event.exc_type else event.message
+                    )
+                    if event.traceback:
+                        logger.error("run failed (session=%s):\n%s", session_id, event.traceback)
                     if client is not None:
                         await client.session_update(
                             session_id,
-                            update_agent_message_text(f"Error: {event.message}"),
+                            update_agent_message_text(f"Error: {label}"),
                         )
 
         task = asyncio.ensure_future(_drive())

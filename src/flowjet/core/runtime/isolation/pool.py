@@ -8,6 +8,7 @@ import contextvars
 import logging
 import queue
 import threading
+import traceback
 import uuid
 from collections.abc import AsyncIterator
 from concurrent.futures import Future
@@ -100,6 +101,24 @@ class WorkerState:
     def is_alive(self) -> bool:
         return self.thread.is_alive()
 
+
+def _worker_error_event(payload: Any) -> RunFailed:
+    """Build a RunFailed from a worker error payload, preserving the cause.
+
+    The isolation pool is thread-based (same process), so the exception keeps
+    its traceback: capture type and full stack for renderers that report them.
+    """
+    exc = payload if isinstance(payload, BaseException) else None
+    message = str(exc) if exc else (str(payload) if payload else "worker error")
+    tb_text: str | None = None
+    if exc is not None and exc.__traceback__ is not None:
+        tb_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    return RunFailed(
+        message=message,
+        code="worker_error",
+        exc_type=type(exc).__name__ if exc is not None else None,
+        traceback=tb_text,
+    )
 
 class _ResponseBridge:
     """Push messages from a worker thread onto an asyncio.Queue on the main loop.
@@ -543,9 +562,7 @@ class ThreadPool:
                     yield RunFailed(message="cancelled", code="cancelled")
                     terminal_received = True
                 elif msg_type == "error":
-                    exc = payload
-                    message = str(exc) if exc else "worker error"
-                    yield RunFailed(message=message, code="worker_error")
+                    yield _worker_error_event(payload)
                     terminal_received = True
                 elif msg_type == "ready":
                     worker_ready = True

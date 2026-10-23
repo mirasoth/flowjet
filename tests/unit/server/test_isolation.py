@@ -308,3 +308,24 @@ async def test_isolating_backend_stream(tmp_path: Path):
 # NOTE: test_isolating_backend_via_http (HTTP integration across the ASGI app,
 # IsolatingRuntimeBackend, and FakeAgentAdapter) has been moved to
 # tests/integration/test_isolation_http.py.
+
+
+def test_worker_error_event_preserves_cause() -> None:
+    from flowjet.core.runtime.isolation.pool import _worker_error_event
+
+    try:
+        raise RuntimeError("sandbox crashed")
+    except RuntimeError as exc:
+        event = _worker_error_event(exc)
+    assert event.code == "worker_error"
+    assert event.message == "sandbox crashed"
+    assert event.exc_type == "RuntimeError"
+    assert event.traceback is not None
+    assert "RuntimeError: sandbox crashed" in event.traceback
+
+    # Non-exception payloads degrade gracefully.
+    event = _worker_error_event(None)
+    assert event.message == "worker error"
+    assert event.exc_type is None
+    assert event.traceback is None
+

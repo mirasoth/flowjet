@@ -92,6 +92,10 @@ class RunCompleted:
 class RunFailed:
     message: str
     code: str | None = None
+    # Original exception type name + pre-rendered traceback, so renderers can
+    # report the real cause instead of a re-wrapped RuntimeError.
+    exc_type: str | None = None
+    traceback: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

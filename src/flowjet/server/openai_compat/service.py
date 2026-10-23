@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+import traceback
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
@@ -141,7 +142,7 @@ class ResponseService:
                     status_code=400,
                 ) from exc
             except Exception as exc:  # noqa: BLE001
-                for payload in engine.handle(RunFailed(message=str(exc) or type(exc).__name__)):
+                for payload in engine.handle(_run_failed_from_exc(exc)):
                     yield payload
                 self.store.put(response_id, engine.final_response())
 
@@ -229,7 +230,7 @@ class ResponseService:
                     status_code=400,
                 ) from exc
             except Exception as exc:  # noqa: BLE001
-                for payload in engine.handle(RunFailed(message=str(exc) or type(exc).__name__)):
+                for payload in engine.handle(_run_failed_from_exc(exc)):
                     yield payload
 
         return response_id, engine, gen()
@@ -297,3 +298,10 @@ class ResponseService:
                 "total_tokens": prompt_tokens + completion_tokens,
             },
         }
+def _run_failed_from_exc(exc: BaseException) -> RunFailed:
+    """Build a RunFailed that preserves the exception type and stack."""
+    return RunFailed(
+        message=str(exc) or type(exc).__name__,
+        exc_type=type(exc).__name__,
+        traceback="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+    )
