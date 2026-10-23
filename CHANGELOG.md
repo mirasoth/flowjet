@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.5] — 2026-10-24
+
+### Fixed
+
+- **`ask_user` pauses render as Markdown on ACP/UI hosts.** A clarification
+  turn's reply reused the CLI terminal block (space-indented `⏸ Paused for
+  input:` followed by `• option` lines). Hosts that render replies as Markdown
+  collapse the indentation, so the pause and its options displayed as a single
+  run-on paragraph. The ACP path now emits `format_questions_markdown()`: a
+  bold pause heading, a bold question (Q1:/Q2: numbering for multiple
+  questions), and options as `- **label** — description` bullets, keeping the
+  `(Recommended)` → ★ convention. The CLI keeps the plain-text block.
+
 ## [2.1.4] — 2026-10-23
 
 ### Added
