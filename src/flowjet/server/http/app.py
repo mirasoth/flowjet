@@ -47,6 +47,7 @@ def build_backend(settings: Settings) -> RuntimeBackend:
         allow_external_workspace=settings.allow_external_workspace,
         pool_settings=settings.pool_settings(),
         checkpointer_policy=settings.server_checkpointer,
+        watched_subdirs=settings.workspace_watched_subdirs_list(),
     )
 
 
@@ -85,6 +86,7 @@ def build_workspace_resolver(
         content_source=settings.workspace_content_source,
         allow_external_workspace=settings.allow_external_workspace,
         sandbox_manager=sandbox_manager,
+        watched_subdirs=settings.workspace_watched_subdirs_list(),
     )
 
 

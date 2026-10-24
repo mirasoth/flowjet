@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     # (backend / frontend) a plain-file view of every workspace. Empty = disabled.
     workspace_content_source: str | None = None
 
+    # Workspace-relative subtrees tracked by the dirty tracker (and
+    # pre-created at workspace open), as a comma-separated list, e.g.
+    # "input,working,output,deliverables". Empty/None = engine defaults
+    # (input/working/output). Unsafe entries fail loud at workspace open.
+    workspace_watched_subdirs: str | None = None
+
     # Server-surface thread-state checkpointer. "auto" resolves from the
     # nano.yml durability config (sqlite → $SOOTHE_DATA_DIR/databases/
     # checkpoints.db, one connection per pool worker, shared file) so one ACP
@@ -79,6 +85,14 @@ class Settings(BaseSettings):
 
     def home_path(self) -> Path:
         return Path(self.home).expanduser().resolve()
+
+    def workspace_watched_subdirs_list(self) -> list[str] | None:
+        """Parse ``workspace_watched_subdirs`` into entries; None = defaults."""
+        raw = self.workspace_watched_subdirs
+        if not raw or not raw.strip():
+            return None
+        entries = [e.strip() for e in raw.split(",") if e.strip()]
+        return entries or None
 
     def pool_settings(self) -> PoolSettings:
         return PoolSettings(
