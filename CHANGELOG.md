@@ -10,6 +10,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.7] — 2026-10-25
+
+### Added
+
+- **Configurable workspace watched subdirectories.** A new
+  `workspace_watched_subdirs` setting (env `FLOWJET_WORKSPACE_WATCHED_SUBDIRS`,
+  comma-separated) flows from Settings →
+  `SyncAwareWorkspaceResolver(watched_subdirs=...)` → `WorkspaceManager`, which
+  pre-creates the configured subtrees at workspace open and wires them into the
+  DirtyTracker. `None`/empty keeps the engine defaults (`input`/`working`/`output`)
+  — behavior unchanged — and unsafe entries fail loud at workspace open rather
+  than silently dropping sync coverage.
+
+### Changed
+
+- **Default identity no longer carries a personal creator byline.**
+  `FLOWJET_CREATOR` is now empty (the soothe identity renderer omits
+  "invented by {creator}" when the creator is blank) and
+  `FLOWJET_IDENTITY_FRAGMENT` drops the byline lines, so identity answers name
+  only (`{assistant_name}`). The vendor denylist (incl. Soothe/soothe-nano) is
+  unchanged. Explicit `agent.assistant_identity` in deployment config still wins
+  (e.g. MiraCloud branding).
+- **Soothe dependency pin raised to `>=1.2.3,<2.0.0`** to match the coordinated
+  release.
+
 ## [2.1.6] — 2026-10-24
 
 ### Fixed
