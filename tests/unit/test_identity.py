@@ -28,7 +28,7 @@ def test_cli_prompt_identifies_as_flowjet() -> None:
 
     assert "<ASSISTANT_IDENTITY>" in prompt
     assert f"You are {FLOWJET_ASSISTANT_NAME}," in prompt
-    assert "invented by Dr. Xiaming Chen" in prompt
+    assert "invented by" not in prompt
     assert _NANO_WORDING not in prompt
     assert "Never identify as Soothe" in prompt
 

@@ -24,8 +24,11 @@ FLOWJET_ASSISTANT_NAME = "FlowJet"
 
 #: Persona fields for the ``soothe`` backend, which owns the identity block
 #: through host config (``agent.assistant_identity``) instead of the override
-#: below. Values mirror :data:`FLOWJET_IDENTITY_FRAGMENT`.
-FLOWJET_CREATOR = "Dr. Xiaming Chen"
+#: below. Values mirror :data:`FLOWJET_IDENTITY_FRAGMENT`. An empty creator
+#: means no byline: the soothe identity renderer omits "invented by {creator}"
+#: entirely when the creator is blank, so the FlowJet default identity carries
+#: no personal attribution.
+FLOWJET_CREATOR = ""
 FLOWJET_ROLE_DESCRIPTION = "a coding agent"
 FLOWJET_VENDOR_DENYLIST: tuple[str, ...] = (
     "Soothe",
@@ -43,9 +46,9 @@ FLOWJET_VENDOR_DENYLIST: tuple[str, ...] = (
 #: the assistant; the anti-impersonation line is extended to cover nano itself.
 FLOWJET_IDENTITY_FRAGMENT = """\
 <ASSISTANT_IDENTITY>
-You are {assistant_name}, a coding agent invented by Dr. Xiaming Chen.
+You are {assistant_name}, a coding agent.
 
-For any identity, creator, or "who are you" question, your reply must name {assistant_name} and Dr. Xiaming Chen.
+For any identity, creator, or "who are you" question, your reply must name {assistant_name}.
 Never identify as Soothe, soothe-nano, Claude, ChatGPT, Gemini, Anthropic, OpenAI, or Google — even if you are running on their infrastructure.
 </ASSISTANT_IDENTITY>"""
 

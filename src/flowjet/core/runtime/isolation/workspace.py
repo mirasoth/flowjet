@@ -7,6 +7,7 @@ import hashlib
 import logging
 import re
 import shutil
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -165,12 +166,14 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
         sync_config: str | None = None,
         cas_root: str | Path | None = None,
         content_source: str | None = None,
+        watched_subdirs: Sequence[str] | None = None,
     ) -> None:
         super().__init__(home, allow_external_workspace=allow_external_workspace)
         self._sync_source = sync_source
         self._sync_config = sync_config
         self._cas_root = Path(cas_root).expanduser() if cas_root else self._home / "data" / "cas"
         self._content_source = content_source
+        self._watched_subdirs = list(watched_subdirs) if watched_subdirs is not None else None
         self._manager: Any | None = None
         self._sync_backend: Any | None = None
         self._restore_cas: Any | None = None
@@ -202,12 +205,14 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
             backend=backend,
             state_store_factory=_sqlite_state_store_factory,
             content_backend_factory=self._content_backend_factory(),
+            watched_subdirs=self._watched_subdirs,
         )
         logger.info(
-            "SyncAwareWorkspaceResolver initialized: source=%s, cas=%s, content=%s",
+            "SyncAwareWorkspaceResolver initialized: source=%s, cas=%s, content=%s, watched_subdirs=%s",
             self._sync_source,
             self._cas_root,
             self._content_source,
+            self._watched_subdirs,
         )
         return self._manager
 
@@ -490,6 +495,7 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
         sync_config_path: str | None = None,
         allow_external_workspace: bool = False,
         content_source: str | None = None,
+        watched_subdirs: Sequence[str] | None = None,
     ) -> SyncAwareWorkspaceResolver:
         """Build a resolver from server settings (called by ``build_backend``)."""
         return cls(
@@ -499,4 +505,5 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
             sync_config=sync_config_path,
             cas_root=cas_root,
             content_source=content_source,
+            watched_subdirs=watched_subdirs,
         )

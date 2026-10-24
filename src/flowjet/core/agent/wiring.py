@@ -8,6 +8,7 @@ delegates here. core remains server-agnostic — no imports from
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from flowjet.core.backend_config import Backend, resolve_backend
@@ -65,6 +66,7 @@ class ServerRuntimeBuilder:
         allow_external_workspace: bool,
         pool_settings: Any,
         checkpointer_policy: str | None = "auto",
+        watched_subdirs: Sequence[str] | None = None,
     ) -> RuntimeBackend:
         backend = resolve_backend(Surface.SERVER)
         sandbox_manager = cls.sandbox_manager(config_path)
@@ -76,6 +78,7 @@ class ServerRuntimeBuilder:
             content_source=content_source,
             allow_external_workspace=allow_external_workspace,
             sandbox_manager=sandbox_manager,
+            watched_subdirs=watched_subdirs,
         )
         common: dict[str, Any] = dict(
             models=models,
@@ -120,6 +123,7 @@ class ServerRuntimeBuilder:
         content_source: str | None,
         allow_external_workspace: bool,
         sandbox_manager: ArcBoxToolSandboxManager | None = None,
+        watched_subdirs: Sequence[str] | None = None,
     ) -> WorkspaceResolver | SyncAwareWorkspaceResolver | SandboxAwareWorkspaceResolver | None:
         """Construct the workspace resolver based on sync and sandbox settings.
 
@@ -143,6 +147,7 @@ class ServerRuntimeBuilder:
                     sync_config_path=sync_config_path,
                     allow_external_workspace=allow_external_workspace,
                     content_source=content_source,
+                    watched_subdirs=watched_subdirs,
                 )
             )
         elif sandbox_manager is not None:
