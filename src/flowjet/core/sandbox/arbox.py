@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -18,6 +20,53 @@ _PUSH_SKIP_DIRS = frozenset({".workspace", "__pycache__", ".git"})
 # Guest-side dirs that are never pulled back to the host workspace.
 _PULL_SKIP_DIRS = frozenset({"__pycache__", ".git"})
 _REAPER_INTERVAL_SECONDS = 5.0
+
+# Sandbox labels: the only cross-process channel to the daemon, so crash
+# recovery can tell "my VM", "a live peer's VM" and "a dead process's VM" apart.
+_LABEL_MANAGED = "flowjet.sandbox"
+_LABEL_OWNER = "flowjet.sandbox-owner"
+_LABEL_INSTANCE = "flowjet.sandbox-instance"
+_LABEL_WORKSPACE = "flowjet.sandbox-workspace"
+_MANAGED_VALUE = "tool"
+
+_HEARTBEAT_INTERVAL_SECONDS = 60.0
+"""How often to re-arm the daemon-side orphan deadline on live leases."""
+
+_STARTUP_SCAN_TIMEOUT_SECONDS = 15.0
+"""Bound on the startup orphan scan; recovery is best effort, boot is not."""
+
+_PROBE_COMMAND = "true"
+"""Trivial guest command used as the readiness probe's guest tier.
+
+The daemon's sandbox *records* outlive the VMs behind them: after a host
+sleep, a machine restart or a daemon restart, `list()` still reports a
+sandbox as ``ready`` while every call fails with ``VM not found``. That is a
+control-plane fact, caught by the probe's first tier (``sandbox.info()``);
+the guest command is the second tier, catching a wedged guest (VM present,
+nothing executing).
+"""
+
+_PROBE_TIMEOUT_SECONDS = 20.0
+"""Deadline for one readiness probe (the SDK kills the guest process group)."""
+
+_PROBE_BRIDGE_GRACE_SECONDS = 5.0
+"""Extra headroom over the probe deadline for the SDK round-trip itself."""
+
+_INFO_PROBE_TIMEOUT_SECONDS = 10.0
+"""Deadline for the control-plane tier of the readiness probe (one unary RPC)."""
+
+_CONTROL_RPC_TIMEOUT_SECONDS = 15.0
+"""Deadline for one control-plane lifecycle RPC (kill / set_lifecycle).
+
+The SDK's per-RPC deadline is opt-in (``Connection(request_timeout)``) and the
+manager does not configure it, so every lifecycle call needs its own bound: a
+wedged call would otherwise stall the reaper loop — and a stalled heartbeat
+reads to the daemon exactly like a dead owner, which gets *healthy* VMs
+reaped at their deadlines.
+"""
+
+_TERMINAL_SANDBOX_STATES = frozenset({"stopping", "stopped", "failed"})
+"""Guest states no turn can run in; a lease in one of them must be replaced."""
 
 
 def _import_arcbox() -> Any:
@@ -45,6 +94,9 @@ class _SandboxLease:
     manifest: dict[str, tuple[int, int]] = field(default_factory=dict)
     active_runs: int = 0
     last_used: float = field(default_factory=time.monotonic)
+    # Adopted from a previous process: pull the guest once before pushing, so
+    # artifacts written by the crashed turn are recovered instead of clobbered.
+    adopted: bool = False
 
 
 class WorkspaceStager:
@@ -212,6 +264,12 @@ class ArcBoxToolSandboxManager:
         self._workspace_locks: dict[str, asyncio.Lock] = {}
         self._reaper_task: asyncio.Task[None] | None = None
         self._started = False
+        # Identity of *this* process on the daemon: sandboxes carrying a
+        # different instance id were left behind by a previous process.
+        self._instance_id = uuid.uuid4().hex
+        # Workspace key -> orphaned sandbox id, populated once at startup.
+        self._recoverable: dict[str, str] = {}
+        self._last_heartbeat = 0.0
 
     @property
     def settings(self) -> ToolSandboxSettings:
@@ -233,15 +291,11 @@ class ArcBoxToolSandboxManager:
     async def _ensure_started(self) -> None:
         if self._started:
             return
-        arcbox = _import_arcbox()
-        connection_kwargs: dict[str, Any] = {}
-        if self._settings.api_url:
-            connection_kwargs["api_url"] = self._settings.api_url
-        if self._settings.api_key:
-            connection_kwargs["api_key"] = self._settings.api_key
-        connection = arcbox.Connection(**connection_kwargs) if connection_kwargs else None
-        self._client = arcbox.AsyncArcBox(connection)
+        self._client = self._new_client()
         self._started = True
+        # Recover what a previous process left behind *before* the first turn
+        # can spawn a duplicate VM for the same workspace.
+        await self._scan_orphans()
         self._reaper_task = asyncio.create_task(
             self._reap_idle(), name="arcbox-tool-sandbox-reaper"
         )
@@ -261,6 +315,26 @@ class ArcBoxToolSandboxManager:
             cap_desc,
             self._settings.network,
         )
+
+    def _new_client(self) -> Any:
+        arcbox = _import_arcbox()
+        connection_kwargs: dict[str, Any] = {}
+        if self._settings.api_url:
+            connection_kwargs["api_url"] = self._settings.api_url
+        if self._settings.api_key:
+            connection_kwargs["api_key"] = self._settings.api_key
+        connection = arcbox.Connection(**connection_kwargs) if connection_kwargs else None
+        return arcbox.AsyncArcBox(connection)
+
+    async def _reconnect(self) -> None:
+        """Drop the cached client and dial the daemon again (post-crash retry)."""
+        old, self._client = self._client, None
+        if old is not None:
+            try:
+                await old.aclose()
+            except Exception:  # noqa: BLE001
+                logger.debug("ArcBox client close during reconnect failed", exc_info=True)
+        self._client = self._new_client()
 
     async def shutdown(self) -> None:
         reaper = self._reaper_task
@@ -285,14 +359,17 @@ class ArcBoxToolSandboxManager:
 
     async def _kill_lease(self, lease: _SandboxLease) -> None:
         try:
-            await lease.sandbox.kill()
-        except Exception:  # noqa: BLE001
+            await asyncio.wait_for(lease.sandbox.kill(), timeout=_CONTROL_RPC_TIMEOUT_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - best effort either way
             logger.warning("ArcBox sandbox kill failed", exc_info=True)
 
     async def _reap_idle(self) -> None:
         while True:
             await asyncio.sleep(_REAPER_INTERVAL_SECONDS)
             try:
+                await self._heartbeat()
                 now = time.monotonic()
                 stale = [
                     (key, lease)
@@ -308,6 +385,136 @@ class ArcBoxToolSandboxManager:
                 raise
             except Exception:  # noqa: BLE001
                 logger.exception("ArcBox tool sandbox reaper error")
+
+    async def _heartbeat(self) -> None:
+        """Re-arm the daemon-side orphan deadline for every live lease.
+
+        ``set_lifecycle(idle_timeout=...)`` restarts the countdown, so a lease
+        whose owning process died stops being re-armed and the daemon destroys
+        it after ``orphan_timeout_seconds``. That is crash cleanup with no
+        cross-process coordination and no startup kill-list.
+
+        A lease that cannot be re-armed is unreachable: drop it so the next
+        turn spawns (or adopts) a usable sandbox instead of binding to a corpse.
+        A lease with a run in flight is left in place — the per-turn probe will
+        replace it, while dropping it now would skip that run's close-pull.
+        """
+        now = time.monotonic()
+        if now - self._last_heartbeat < _HEARTBEAT_INTERVAL_SECONDS:
+            return
+        self._last_heartbeat = now
+        for workspace, lease in list(self._leases.items()):
+            try:
+                await asyncio.wait_for(
+                    lease.sandbox.set_lifecycle(
+                        idle_timeout=self._settings.effective_orphan_timeout_seconds()
+                    ),
+                    timeout=_CONTROL_RPC_TIMEOUT_SECONDS,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                if lease.active_runs > 0:
+                    continue
+                logger.warning(
+                    "ArcBox heartbeat failed (workspace=%s, sandbox=%s); dropping lease",
+                    workspace,
+                    getattr(lease.sandbox, "id", "?"),
+                    exc_info=True,
+                )
+                self._leases.pop(workspace, None)
+
+    # ------------------------------------------------------------------
+    # Crash recovery (restart of this process)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _workspace_key(workspace: str) -> str:
+        """Stable, label-safe fingerprint of a host workspace path."""
+        return hashlib.sha256(workspace.encode()).hexdigest()[:16]
+
+    def _labels(self, workspace: str) -> dict[str, str]:
+        return {
+            _LABEL_MANAGED: _MANAGED_VALUE,
+            _LABEL_OWNER: self._settings.owner,
+            _LABEL_INSTANCE: self._instance_id,
+            _LABEL_WORKSPACE: self._workspace_key(workspace),
+        }
+
+    async def _scan_orphans(self) -> None:
+        """Index sandboxes left behind by a previous process (best effort)."""
+        if not self._settings.recover_orphans or self._client is None:
+            return
+        try:
+            await asyncio.wait_for(self._collect_orphans(), timeout=_STARTUP_SCAN_TIMEOUT_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.warning("ArcBox orphan scan failed; restarting without recovery", exc_info=True)
+
+    async def _collect_orphans(self) -> None:
+        """List owner-scoped sandboxes that belong to another instance.
+
+        Nothing is destroyed here: a rolling update may run two processes under
+        one owner, and killing a live peer's VM would corrupt it. Unclaimed
+        orphans are reaped by the daemon deadline instead.
+        """
+        assert self._client is not None
+        async for summary in self._client.list(
+            labels={_LABEL_MANAGED: _MANAGED_VALUE, _LABEL_OWNER: self._settings.owner}
+        ):
+            labels = getattr(summary, "labels", None) or {}
+            # Re-check client-side: older daemons may ignore the filter.
+            if labels.get(_LABEL_MANAGED) != _MANAGED_VALUE:
+                continue
+            if labels.get(_LABEL_OWNER) != self._settings.owner:
+                continue
+            if labels.get(_LABEL_INSTANCE) == self._instance_id:
+                continue
+            workspace_key = labels.get(_LABEL_WORKSPACE)
+            if not workspace_key:
+                continue
+            self._recoverable[workspace_key] = summary.id
+            logger.info(
+                "ArcBox orphan sandbox available for recovery: %s (workspace=%s)",
+                summary.id,
+                workspace_key,
+            )
+
+    async def _adopt(self, workspace: str) -> _SandboxLease | None:
+        """Reuse a sandbox left behind by a previous process, if it is alive.
+
+        A crash leaves the VM running with whatever the interrupted turn had
+        written but never pulled; adopting it recovers those files and avoids a
+        cold boot. Returns ``None`` when there is no candidate or its VM is gone
+        (in which case the daemon deadline reaps the stale record).
+        """
+        if not self._settings.recover_orphans or self._client is None:
+            return None
+        sandbox_id = self._recoverable.pop(self._workspace_key(workspace), None)
+        if sandbox_id is None:
+            return None
+        try:
+            sandbox = await self._client.connect(sandbox_id, timeout=self._settings.connect_timeout)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.info(
+                "ArcBox orphan sandbox %s is no longer reachable; spawning a fresh one",
+                sandbox_id,
+            )
+            return None
+        lease = _SandboxLease(sandbox=sandbox, adopted=True)
+        if not await self._lease_is_live(lease):
+            await self._kill_lease(lease)
+            return None
+        self._leases[workspace] = lease
+        logger.info(
+            "ArcBox tool sandbox adopted after restart (workspace=%s, id=%s)",
+            workspace,
+            sandbox_id,
+        )
+        return lease
 
     async def _make_room_unlocked(self) -> None:
         """Evict least-recently-used idle sandboxes above the effective cap."""
@@ -344,18 +551,104 @@ class ArcBoxToolSandboxManager:
     # Session lifecycle (main loop)
     # ------------------------------------------------------------------
 
+    async def _lease_is_live(self, lease: _SandboxLease) -> bool:
+        """Return ``True`` when the lease's guest is present and usable.
+
+        Two tiers, cheap first:
+
+        1. **Control plane** — ``sandbox.info()`` is one unary RPC, "always
+           fresh, never cached", with no lifecycle side effects and no guest
+           execution. It catches the observed failure class (the daemon's
+           record outliving the VM: ``VM not found``) and terminal states.
+        2. **Guest round-trip** — a trivial command catches a wedged guest
+           (VM present, nothing executing). Commands run as independent
+           process groups, so this never queues behind a peer's long-running
+           command.
+
+        Probing is the only way to tell "empty workspace" from "dead sandbox" —
+        the difference between an agent that works and one that reports an
+        empty workspace.
+        """
+        info = getattr(lease.sandbox, "info", None)
+        if info is not None:
+            try:
+                snapshot = await asyncio.wait_for(info(), timeout=_INFO_PROBE_TIMEOUT_SECONDS)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - any failure means "not usable"
+                logger.warning(
+                    "ArcBox control-plane probe failed (sandbox=%s); the lease will be replaced",
+                    getattr(lease.sandbox, "id", "?"),
+                    exc_info=True,
+                )
+                return False
+            state = str(getattr(snapshot, "state", "")).lower()
+            if state in _TERMINAL_SANDBOX_STATES:
+                logger.warning(
+                    "ArcBox sandbox %s is in terminal state %r; the lease will be replaced",
+                    getattr(lease.sandbox, "id", "?"),
+                    state,
+                )
+                return False
+        try:
+            await asyncio.wait_for(
+                lease.sandbox.commands.run(_PROBE_COMMAND, timeout=_PROBE_TIMEOUT_SECONDS),
+                timeout=_PROBE_TIMEOUT_SECONDS + _PROBE_BRIDGE_GRACE_SECONDS,
+            )
+        except Exception:  # noqa: BLE001 - any failure means "not usable"
+            logger.warning(
+                "ArcBox readiness probe failed (sandbox=%s); the lease will be replaced",
+                getattr(lease.sandbox, "id", "?"),
+                exc_info=True,
+            )
+            return False
+        return True
+
     async def open_workspace(self, workspace: str) -> None:
-        """Ensure a sandbox for ``workspace`` and stage host files into it."""
+        """Ensure a *usable* sandbox for ``workspace`` and stage host files into it.
+
+        Readiness invariant (once per turn, on the main loop, before the agent
+        streams): a lease whose guest no longer answers is dropped, and every
+        path that yields a new guest — spawn after a death, spawn after a
+        restart, or adoption of a crashed process's VM — seeds it, so the agent
+        never sees an empty workspace where the host has files.
+
+        A reused lease with a peer turn mid-run keeps its guest state (fresher
+        than the host copy) and skips the push, except right after a reseed:
+        a fresh or adopted VM has no current state to protect.
+        """
         await self._ensure_started()
         lock = self._workspace_lock(workspace)
         async with lock:
             lease = self._leases.get(workspace)
+            carried_runs = 0
+            seeded = False
+            if lease is not None and not await self._lease_is_live(lease):
+                # Runs still counted on the dead lease stay counted on its
+                # replacement so peer open/close pairs stay balanced.
+                carried_runs = lease.active_runs
+                logger.warning(
+                    "ArcBox tool sandbox for %s is gone (id=%s); respawning",
+                    workspace,
+                    lease.sandbox.id,
+                )
+                self._leases.pop(workspace, None)
+                await self._kill_lease(lease)
+                lease = None
+            if lease is None:
+                # After a restart the previous process's VM may still be alive
+                # (and hold un-pulled artifacts): adopt it before spawning.
+                lease = await self._adopt(workspace)
+                seeded = lease is not None
             if lease is None:
                 await self._make_room_unlocked()
                 lease = await self._spawn(workspace)
+                seeded = True
+            if seeded:
+                lease.active_runs = carried_runs
             lease.active_runs += 1
             lease.last_used = time.monotonic()
-            if lease.active_runs > 1:
+            if lease.active_runs > 1 and not seeded:
                 # A peer session is mid-run on this sandbox: its guest state
                 # is the freshest, a host push could clobber live edits.
                 logger.debug(
@@ -364,6 +657,11 @@ class ArcBoxToolSandboxManager:
                     lease.active_runs,
                 )
                 return
+            if lease.adopted:
+                # Recover the crashed turn's guest writes first, then top up
+                # from the host (materials uploaded while the process was down).
+                lease.manifest = await self._stager.pull(workspace, lease.sandbox, {})
+                lease.adopted = False
             lease.manifest = await self._stager.push(workspace, lease.sandbox, lease.manifest)
 
     async def close_workspace(self, workspace: str) -> None:
@@ -388,29 +686,69 @@ class ArcBoxToolSandboxManager:
                 logger.warning("ArcBox tool sandbox pull failed for %s", workspace, exc_info=True)
 
     async def _spawn(self, workspace: str) -> _SandboxLease:
-        assert self._client is not None
-        sandbox = await self._client.create(
-            self._settings.image,
-            vcpus=self._settings.vcpus,
-            memory_mib=self._settings.mem_mib,
-            network=self._settings.network,
-            wait_until_ready=True,
-        )
+        sandbox = await self._create(workspace)
         lease = _SandboxLease(sandbox=sandbox)
         self._leases[workspace] = lease
         logger.info("ArcBox tool sandbox ready (workspace=%s, id=%s)", workspace, sandbox.id)
         return lease
 
+    async def _create(self, workspace: str) -> Any:
+        """Create one guest with labels and a daemon-side orphan deadline.
+
+        ``idle_timeout`` + ``on_idle="kill"`` is the crash backstop: if this
+        process dies without cleaning up, the daemon destroys the VM once the
+        deadline (re-armed by :meth:`_heartbeat`) expires. One reconnect retry
+        covers a daemon that is itself restarting.
+        """
+        assert self._client is not None
+        kwargs: dict[str, Any] = {
+            "vcpus": self._settings.vcpus,
+            "memory_mib": self._settings.mem_mib,
+            "network": self._settings.network,
+            "wait_until_ready": True,
+            "labels": self._labels(workspace),
+            "idle_timeout": self._settings.effective_orphan_timeout_seconds(),
+            "on_idle": "kill",
+        }
+        try:
+            return await self._client.create(self._settings.image, **kwargs)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "ArcBox sandbox create failed for %s; reconnecting and retrying once",
+                workspace,
+                exc_info=True,
+            )
+            await self._reconnect()
+            assert self._client is not None
+            return await self._client.create(self._settings.image, **kwargs)
+
     # ------------------------------------------------------------------
     # Agent binding (worker threads)
     # ------------------------------------------------------------------
+
+    def sandbox_id_for(self, workspace: str) -> str | None:
+        """Id of the guest currently bound to ``workspace`` (``None`` if unopened).
+
+        This is the cache key adapters must use for a built agent: a reused
+        lease keeps its id, while every replacement (idle recycle, dead VM,
+        LRU eviction, respawn) yields a new one. "Same id" therefore means "the
+        backend inside the cached agent still points at this live guest" —
+        which a workspace path alone cannot tell, since it is stable across
+        sandbox generations.
+        """
+        lease = self._leases.get(workspace)
+        return lease.sandbox.id if lease is not None else None
 
     def backend_for(self, workspace: str) -> Any:
         """Return the :class:`ArcBoxBackend` bound to the workspace's sandbox.
 
         Sync and thread-safe: called from pool worker threads after
         :meth:`open_workspace` completed on the main loop. The backend is
-        cached per lease and reused while the agent serves the workspace.
+        cached per lease and reused while the agent serves the workspace;
+        because a respawn builds a new lease, callers holding a cached agent
+        must compare :meth:`sandbox_id_for` and rebuild when it changed.
         """
         lease = self._leases.get(workspace)
         if lease is None:

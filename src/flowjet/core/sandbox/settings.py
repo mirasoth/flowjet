@@ -88,6 +88,9 @@ class ToolSandboxSettings:
           connect_timeout: 60
           idle_timeout_seconds: 300
           max_sandboxes: 8         # 0 (unlimited), None (compute from host CPU), or int
+          orphan_timeout_seconds: null  # daemon-side crash deadline; None derives it
+          recover_orphans: true    # adopt surviving VMs after a restart
+          owner: flowjet           # sandbox label namespace; env FLOWJET_SANDBOX_OWNER
           api_url: null            # daemon connection; env fallback ARCBOX_API_URL
           api_key: null            # daemon credential; env fallback ARCBOX_API_KEY
 
@@ -119,6 +122,25 @@ class ToolSandboxSettings:
     # ``FLOWJET_SANDBOX_MAX`` (int, 0=unlimited) overrides YAML at load time.
     max_sandboxes: int | None = 8
 
+    # Daemon-side deadline for a sandbox whose owner stopped talking to it.
+    # A crashed flowjet-server cannot clean up its VMs, so every sandbox is
+    # created with ``idle_timeout=<orphan deadline>`` + ``on_idle="kill"``
+    # and the manager re-arms that timer while it is alive: expiry therefore
+    # means "the process that owned this sandbox is gone". ``None`` (the
+    # default) derives ``max(900, 3 × idle_timeout_seconds)`` so a long idle
+    # reaper can never be preempted by a daemon kill, and existing configs
+    # without this key keep parsing unchanged; an explicit value must exceed
+    # ``idle_timeout_seconds`` (checked only when the sandbox is enabled).
+    orphan_timeout_seconds: float | None = None
+    # Adopt sandboxes left behind by a previous process (crash / restart) and
+    # pull their guest state before reusing them. Assumes one flowjet process
+    # serves a given workspace at a time (the shipped deployment runs a single
+    # agentspace-flowjet replica); disable to always start from a fresh VM.
+    recover_orphans: bool = True
+    # Label namespace so several flowjet planes sharing one daemon never
+    # recover or reap each other's sandboxes.
+    owner: str = "flowjet"
+
     api_url: str | None = None
     api_key: str | None = None
 
@@ -136,6 +158,27 @@ class ToolSandboxSettings:
             raise ValueError("sandbox.vcpus must be >= 1")
         if self.mem_mib < 128:
             raise ValueError("sandbox.mem_mib must be >= 128")
+        if not self.owner:
+            self.owner = os.environ.get("FLOWJET_SANDBOX_OWNER", "flowjet")
+        if self.orphan_timeout_seconds is not None:
+            if self.orphan_timeout_seconds <= 0:
+                raise ValueError("sandbox.orphan_timeout_seconds must be > 0")
+            if self.enabled and self.orphan_timeout_seconds <= self.idle_timeout_seconds:
+                raise ValueError(
+                    "sandbox.orphan_timeout_seconds must exceed idle_timeout_seconds "
+                    "(the daemon-side crash deadline must never preempt the idle reaper)"
+                )
+
+    def effective_orphan_timeout_seconds(self) -> float:
+        """Resolve the daemon-side crash deadline (``None`` derives it).
+
+        Derived as ``max(900, 3 × idle_timeout_seconds)``: high enough that a
+        sandbox the process still holds is never daemon-killed between
+        heartbeats, low enough that an orphan is reaped in bounded time.
+        """
+        if self.orphan_timeout_seconds is not None:
+            return self.orphan_timeout_seconds
+        return max(900.0, self.idle_timeout_seconds * 3.0)
 
     def effective_max_sandboxes(self, *, cpu_count: int | None = None) -> int:
         """Resolve the sandbox cap: env override, explicit int, None, or unlimited.

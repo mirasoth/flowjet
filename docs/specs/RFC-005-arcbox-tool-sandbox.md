@@ -68,6 +68,9 @@ sandbox:
   connect_timeout: 60
   idle_timeout_seconds: 300  # idle sandbox recycle
   max_sandboxes: 8          # 0 (unlimited), None (70% usable CPU / vcpus, min 8), or int
+  orphan_timeout_seconds: null  # daemon-side crash deadline; null → max(900, 3× idle)
+  recover_orphans: true        # adopt a surviving VM after a restart
+  owner: flowjet               # sandbox label namespace; env FLOWJET_SANDBOX_OWNER
   # FLOWJET_SANDBOX_MAX (int; 0=unlimited) and FLOWJET_SANDBOX_MAX_PERCENT (1-100, default 70) env overrides
   # api_url / api_key: optional; env fallback ARCBOX_API_URL / ARCBOX_API_KEY
   # soothe-nano placement policy (pass-through):
@@ -92,7 +95,7 @@ flowchart LR
     E[WorkspaceResolver<br/>/ SyncAware] -->|open: push host→guest<br/>close: pull guest→host| D
 ```
 
-- `flowjet.core.backends.tool_sandbox.ArcBoxToolSandboxManager` — one guest VM
+- `flowjet.core.sandbox.arbox.ArcBoxToolSandboxManager` — one guest VM
   per workspace: lazy spawn (`AsyncArcBox.create(..., wait_until_ready=True)`),
   idle reaper, LRU eviction at `max_sandboxes` (explicit int, `None`, or `0`
   for unlimited — `None` sizes from host CPU: 70% usable ÷ per-sandbox vCPUs,
@@ -102,11 +105,73 @@ flowchart LR
   runs inside the session lifecycle: open = inner materialize → host push;
   close = guest pull → inner checkpoint (the sync checkpoint must see guest
   outputs).
-- Adapter binding — the sandbox backend is bound at agent build time; the
-  adapter rebuilds its agent when the pool worker switches workspaces. In
+- Adapter binding — the sandbox backend is pinned at agent build time, so the
+  adapter caches the built agent on **workspace + sandbox id**, not the path
+  alone: a respawn, idle recycle or eviction yields a new id and the agent is
+  rebuilt (a stale binding fails every guest tool call with `VM not found`). In
   sandbox mode the request's `configurable["workspace"]` is the **guest root**
   (`/workspace`), not the host path — matching soothe-nano sandbox semantics
   (system prompt, workspace policy, and recon all target the guest root).
+
+### 5.1 Readiness invariant
+
+`open_workspace` runs once per turn on the main loop, *before* the agent
+streams, and is the only place a guest is created or validated; the sync
+`backend_for` (worker threads) never spawns. It guarantees a *usable* guest:
+
+1. **Probe** — two tiers, cheap first. Tier 1 is `sandbox.info()`: one unary
+   RPC, "always fresh, never cached", no guest execution, no lifecycle side
+   effects — it catches the observed failure class (the daemon's record
+   *outliving the VM*: `list()` still says `ready` while every call fails
+   with `VM not found`) and terminal states (`stopping`/`stopped`/`failed`).
+   Tier 2 is a guest round-trip (`true`), catching a wedged guest (VM
+   present, nothing executing); commands run as independent process groups,
+   so it never queues behind a peer's long-running command. A record is
+   never trusted on its own.
+2. **Replace** — a lease that fails the probe is killed and dropped; the
+   replacement is seeded from the host tree. In-flight run counts carry over so
+   peer open/close pairs stay balanced, and the reseed is forced even with a
+   peer mid-run (a new VM is empty — skipping the push is how materials go
+   missing).
+3. **Reseed** — every path that yields a new guest (spawn, respawn, adoption)
+   pushes the host workspace before the turn runs.
+
+Every control-plane RPC in the manager is bounded (`kill` / `set_lifecycle`
+by a 15 s deadline, `connect` by `connect_timeout`): the SDK's per-RPC
+deadline is opt-in and unconfigured here, and one wedged call would otherwise
+stall the reaper loop — a stalled heartbeat reads to the daemon exactly like
+a dead owner, which gets *healthy* VMs reaped at their deadlines.
+
+### 5.2 Crash and restart
+
+The manager holds its leases in memory, so a `flowjet-server` crash loses the
+map while the daemon keeps the VMs. Three mechanisms keep that safe:
+
+- **Daemon-side orphan deadline** — each VM is created with
+  `idle_timeout=<orphan deadline>` + `on_idle="kill"`; the manager
+  *re-arms* that timer every `_HEARTBEAT_INTERVAL_SECONDS` (60 s, one
+  bounded `set_lifecycle` per lease). Expiry therefore means "the owning
+  process is gone", and the daemon reaps the VM with no cross-process
+  coordination and no startup kill-list. A lease that cannot be re-armed is
+  unreachable and is dropped immediately. The deadline defaults to
+  `max(900, 3 × idle_timeout_seconds)` when unset, so an existing config with
+  a long idle reaper parses unchanged and is never preempted by a daemon
+  kill; an explicit value must exceed `idle_timeout_seconds` (validated only
+  when the sandbox is enabled).
+- **Startup scan + adoption** — on first use the manager lists owner-scoped
+  sandboxes carrying its labels (`flowjet.sandbox{,-owner,-instance,-workspace}`).
+  Entries from another instance are recovery *candidates*, not victims: the
+  first turn for that workspace connects, probes, then **pulls guest → host**
+  (recovering files the interrupted turn wrote but never pulled) before pushing
+  the host tree back. No candidate (or a dead one) falls through to a fresh,
+  seeded VM. `recover_orphans: false` disables adoption.
+- **Owner scoping** — `owner` namespaces the labels so several flowjet planes
+  sharing one daemon never adopt or reap each other's sandboxes. Adoption
+  additionally assumes one process per workspace at a time (the shipped
+  agentspace plane runs a single replica).
+
+A failing `create` reconnects the client and retries once, covering a daemon
+that is itself restarting.
 - Credential boundary — LLM keys and the nano config never enter the guest;
   only the staged workspace bytes do.
 

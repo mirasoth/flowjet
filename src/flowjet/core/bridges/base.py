@@ -66,10 +66,12 @@ class AgentAdapterBase:
 
     Manages one agent instance per pool worker: lazily built on first use,
     bound to a workspace's sandbox when a ``sandbox_manager`` is present
-    (rebuilt when the worker switches workspaces), and recycled after a failed
-    or cancelled run — cancellation can interrupt middleware cleanup and leave
-    mutable graph state (for example edit-coalescing buffers) incomplete, so
-    that graph is never reused for another request.
+    (rebuilt when the worker switches workspaces *or* that workspace's sandbox
+    is replaced — the graph's backend is pinned to a sandbox id, not a path),
+    and recycled after a failed or cancelled run — cancellation can interrupt
+    middleware cleanup and leave mutable graph state (for example
+    edit-coalescing buffers) incomplete, so that graph is never reused for
+    another request.
 
     Thread state, by contrast, is *not* worker-local: when
     ``checkpointer_policy`` is enabled the adapter opens one checkpointer on
@@ -100,6 +102,8 @@ class AgentAdapterBase:
         self._checkpointer_cm: Any | None = None
         self._checkpointer_failed = False
         self._agent_workspace: str | None = None
+        #: Sandbox id the cached agent's backend is bound to (``None`` off-sandbox).
+        self._agent_sandbox_id: str | None = None
         self._active = False
         self._tainted = False
         self._generation = 1 if agent is not None else 0
@@ -148,20 +152,53 @@ class AgentAdapterBase:
 
     async def _ensure_agent(self, *, workspace: str | None = None) -> Any:
         """Async ensure: open the checkpointer before a config-driven build."""
-        needs_build = self._agent is None or (
-            self._sandbox_manager is not None and self._agent_workspace != workspace
-        )
-        if needs_build and self._agent_factory is None:
+        if self._agent_needs_rebuild(workspace) and self._agent_factory is None:
             await self._ensure_checkpointer()
         return self._ensure(workspace=workspace)
 
+    def _live_sandbox_id(self, workspace: str | None) -> str | None:
+        """Id of the guest the manager currently binds to ``workspace``."""
+        if self._sandbox_manager is None or workspace is None:
+            return None
+        return self._sandbox_manager.sandbox_id_for(workspace)
+
+    def _agent_needs_rebuild(self, workspace: str | None) -> bool:
+        """True when this worker must build a new agent for ``workspace``.
+
+        Without a sandbox manager the built agent is workspace-agnostic, so an
+        existing instance is reused. With one, the graph holds an
+        ``ArcBoxBackend`` bound at build time: either a workspace switch or a
+        replacement of *that workspace's* sandbox (idle recycle, dead VM,
+        eviction) leaves it pointing at a guest that no longer exists, where
+        every file and shell tool fails with ``VM not found``. The path alone
+        cannot detect the second case — it stays the same across generations —
+        so the live sandbox id is part of the cache key.
+        """
+        if self._agent is None:
+            return True
+        if self._sandbox_manager is None:
+            return False
+        return (
+            self._agent_workspace != workspace
+            or self._agent_sandbox_id != self._live_sandbox_id(workspace)
+        )
+
     def _ensure(self, *, workspace: str | None = None) -> Any:
+        if not self._agent_needs_rebuild(workspace):
+            assert self._agent is not None
+            return self._agent
         if self._agent is not None:
-            if self._sandbox_manager is None or self._agent_workspace == workspace:
-                return self._agent
-            # The sandbox backend is bound at build time — a workspace
-            # switch needs a fresh agent bound to the new sandbox.
-            self._agent = None
+            # Bound to a workspace/sandbox generation that is no longer current.
+            logger.info(
+                "%s: rebuilding agent for %s (sandbox %s -> %s)",
+                self.label,
+                workspace,
+                self._agent_sandbox_id,
+                self._live_sandbox_id(workspace),
+            )
+        self._agent = None
+        self._agent_sandbox_id = None
+        live_sandbox_id = self._live_sandbox_id(workspace)
         if self._agent_factory is not None:
             self._agent = self._agent_factory()
         else:
@@ -170,6 +207,7 @@ class AgentAdapterBase:
                 sandbox_backend = self._sandbox_manager.backend_for(workspace)
             self._agent = self._build(sandbox_backend=sandbox_backend)
         self._agent_workspace = workspace
+        self._agent_sandbox_id = live_sandbox_id
         self._generation += 1
         return self._agent
 
@@ -216,11 +254,13 @@ class AgentAdapterBase:
         if self._tainted:
             self._agent = None
             self._agent_workspace = None
+            self._agent_sandbox_id = None
             self._tainted = False
 
     async def cleanup(self) -> None:
         self._agent = None
         self._agent_workspace = None
+        self._agent_sandbox_id = None
         self._tainted = False
         self._active = False
         cm, self._checkpointer_cm = self._checkpointer_cm, None
