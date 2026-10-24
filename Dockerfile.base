@@ -5,8 +5,10 @@
 #   - the uv binary
 #   - the locked dependency venv (uv sync WITHOUT flowjet itself)
 #
-# Rebuild only when pyproject.toml / uv.lock / this file change
-# (.github/workflows/docker-base.yml automates this). Published as
+# Rebuild manually (.github/workflows/docker-base.yml) when the locked
+# dependency set or this file changes — flowjet's own version does NOT
+# count: it is normalized out of the content hash, so a version bump maps
+# to the same base-<hash> tag. Published as
 #   registry.cn-hangzhou.aliyuncs.com/lacogito/flowjet-base:{base-<hash>,latest}
 #
 # Manual build:

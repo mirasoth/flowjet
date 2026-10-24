@@ -4,9 +4,14 @@ name: Build Base Image
 # locked dependency venv, chromium) into lacogito/flowjet-base. App builds
 # (docker.yml) then only install flowjet itself — see Dockerfile.base.
 #
-# Triggers:
-#   - push to main touching pyproject.toml / uv.lock / Dockerfile.base
-#   - manual workflow_dispatch (also usable as an explicit fallback/refresh)
+# Manual only (workflow_dispatch): run when the locked dependency set
+# (pyproject.toml / uv.lock) or Dockerfile.base actually changes. A flowjet
+# version bump alone does NOT need a rebuild — the content hash below
+# normalizes the version out, so such a run just re-publishes the same
+# base-<hash> tag.
+#
+# If the base drifts behind uv.lock, Dockerfile.prebuilt's `uv sync --frozen`
+# fails loudly at app-build time — re-run this workflow to refresh it.
 
 on:
   workflow_dispatch:
@@ -19,13 +24,6 @@ on:
         options:
           - "true"
           - "false"
-  push:
-    branches: [main]
-    paths:
-      - "pyproject.toml"
-      - "uv.lock"
-      - "Dockerfile.base"
-      - ".github/workflows/docker-base.yml"
 
 env:
   REGISTRY: registry.cn-hangzhou.aliyuncs.com
@@ -49,34 +47,45 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      # Content-addressed tag: any change to pyproject/uv.lock/Dockerfile.base
-      # yields a new tag, so app builds can pin an exact base when needed.
+      # Content-addressed tag over the base image's real inputs: the locked
+      # dependency set + this Dockerfile. flowjet's own version is normalized
+      # out (the project 'version =' line in pyproject.toml and the version
+      # line in flowjet's own [[package]] block in uv.lock) because the base
+      # venv is built --no-install-project — a version bump changes nothing
+      # in it and maps to the SAME base-<hash> tag.
       - name: Compute base content hash
         id: hash
         run: |
           set -euo pipefail
-          content_hash="$(cat pyproject.toml uv.lock Dockerfile.base | sha256sum | cut -c1-12)"
+          content_hash="$(
+            {
+              sed -E '/^version = ".*"$/d' pyproject.toml
+              awk '
+                /^\[\[package\]\]$/ { inflowjet = 0 }
+                /^name = "flowjet"$/  { inflowjet = 1 }
+                inflowjet && /^version = / { next }
+                { print }
+              ' uv.lock
+              cat Dockerfile.base
+            } | sha256sum | cut -c1-12
+          )"
           echo "base_tag=base-${content_hash}" >> "${GITHUB_OUTPUT}"
-          echo "Base content hash -> base-${content_hash}"
+          echo "Base content hash (flowjet version normalized out) -> base-${content_hash}"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Resolve registry publish eligibility
+      - name: Resolve registry push eligibility
         id: publish
         env:
           REGISTRY_USER: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
           REGISTRY_PASS: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
-          GH_EVENT_NAME: ${{ github.event_name }}
         run: |
+          set -euo pipefail
           ready=false
           if [ -n "${REGISTRY_USER}" ] && [ -n "${REGISTRY_PASS}" ]; then ready=true; fi
           echo "registry_secrets_ready=${ready}" >> "${GITHUB_OUTPUT}"
 
+          # Manual dispatch: push only when the caller asked for it.
           want=false
-          if [ "${GH_EVENT_NAME}" = "push" ]; then
-            want=true
-          elif [ "${{ github.event.inputs.push_image }}" = "true" ]; then
+          if [ "${{ github.event.inputs.push_image }}" = "true" ]; then
             want=true
           fi
           echo "want_push=${want}" >> "${GITHUB_OUTPUT}"
@@ -99,6 +108,9 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         id: buildx
@@ -128,7 +140,7 @@ jobs:
 
       - name: Build summary
         run: |
-          echo "### FlowJet Base Image Built" >> "${GITHUB_STEP_SUMMARY}"
+          echo "### FlowJet Base Image" >> "${GITHUB_STEP_SUMMARY}"
           echo "" >> "${GITHUB_STEP_SUMMARY}"
           echo "| Property | Value |" >> "${GITHUB_STEP_SUMMARY}"
           echo "|----------|-------|" >> "${GITHUB_STEP_SUMMARY}"
