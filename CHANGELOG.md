@@ -10,6 +10,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.6] — 2026-10-24
+
+### Fixed
+
+- **ArcBox tool sandboxes stay usable across recycles, crashes and restarts.**
+  The manager trusted its in-memory lease map, and the agent graph pinned its
+  sandbox id at build time, so a guest that died behind a still-`ready` daemon
+  record (host sleep, idle recycle, daemon restart) left the worker talking to a
+  corpse: every file/shell tool failed and the agent reported an empty
+  workspace even though the host tree was fully staged. `open_workspace` now
+  probes readiness once per turn — a control-plane `info()` tier that catches a
+  record outliving its VM plus terminal states, then a guest round-trip that
+  catches a wedged guest — and kills, drops and replaces a lease that fails.
+  Every new guest, whether spawned or adopted, is seeded from the host
+  workspace, and in-flight run counts carry over so peer open/close pairs stay
+  balanced. The agent cache key is now workspace **+ sandbox id**, so a respawn
+  rebuilds the graph against the live guest.
+- **Crash and restart recovery.** VMs are created with a labelled orphan
+  deadline (`idle_timeout` + `on_idle=kill`) that the reaper re-arms every 60 s,
+  so a process that dies leaves nothing behind — the daemon reaps it, with no
+  cross-process coordination and no startup kill-list. On first use the manager
+  scans owner-scoped sandboxes and adopts a surviving VM, pulling guest state to
+  the host before pushing (recovering a crashed turn's artifacts) instead of
+  spawning a duplicate; a failed create reconnects the client and retries once.
+- **Every control-plane RPC is bounded** (`kill`/`set_lifecycle` 15 s, `connect`
+  by `connect_timeout`). The SDK's per-RPC deadline is opt-in and was
+  unconfigured: one wedged call stalled the reaper loop, and a stalled heartbeat
+  reads to the daemon exactly like a dead owner — which gets healthy, in-use VMs
+  reaped at their deadlines.
+
+### Changed
+
+- `sandbox.orphan_timeout_seconds` defaults to `max(900, 3 × idle_timeout_seconds)`
+  instead of a fixed 900, and an explicit value is validated only when the
+  sandbox is enabled — existing configs keep parsing unchanged. New keys:
+  `recover_orphans` (adopt surviving VMs after a restart) and `owner` (label
+  namespace, env `FLOWJET_SANDBOX_OWNER`) so planes sharing one ArcBox daemon
+  never adopt or reap each other's sandboxes. See RFC-005 §5.1/§5.2.
+
 ## [2.1.5] — 2026-10-24
 
 ### Fixed
