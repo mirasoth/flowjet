@@ -95,17 +95,75 @@ async def test_open_honors_config_backend_sqlite(
 
 
 @pytest.mark.asyncio
-async def test_open_warns_and_yields_none_for_unwired_backend(
+async def test_open_uses_shared_pool_for_postgresql(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A postgresql backend is not wired server-side: degrade, don't crash."""
+    """PostgreSQL is wired server-side: an AsyncPostgresSaver on the shared pool."""
+    import flowjet.core.agent.workspace as workspace_mod
     from flowjet.core.agent.workspace import Checkpointers
+
+    class FakePool:
+        def __init__(self) -> None:
+            self.opened = False
+
+        async def open(self) -> None:
+            self.opened = True
+
+    pool = FakePool()
+    monkeypatch.setattr(workspace_mod, "resolve_checkpointer", lambda _cfg: (None, pool))
+    setups: list[object] = []
+
+    async def fake_setup(cfg: object, saver: object) -> object:
+        setups.append(saver)
+        return saver
+
+    monkeypatch.setattr(workspace_mod, "_setup_postgres", fake_setup)
 
     cfg = SootheConfig()
     cfg = cfg.model_copy(
         update={
             "persistence": cfg.persistence.model_copy(update={"default_backend": "postgresql"}),
         }
+    )
+    async with Checkpointers.open(cfg) as cp:
+        assert cp is not None
+        assert type(cp).__name__ == "AsyncPostgresSaver"
+    assert pool.opened is True
+    assert len(setups) == 1
+
+
+@pytest.mark.asyncio
+async def test_open_degrades_to_none_when_postgres_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A PostgreSQL failure degrades to "no persistence" — it must not crash."""
+    import flowjet.core.agent.workspace as workspace_mod
+    from flowjet.core.agent.workspace import Checkpointers
+
+    def boom(_cfg: object) -> object:
+        raise RuntimeError("pool unavailable")
+
+    monkeypatch.setattr(workspace_mod, "resolve_checkpointer", boom)
+    cfg = SootheConfig()
+    cfg = cfg.model_copy(
+        update={
+            "persistence": cfg.persistence.model_copy(update={"default_backend": "postgresql"}),
+        }
+    )
+    async with Checkpointers.open(cfg) as cp:
+        assert cp is None
+
+
+@pytest.mark.asyncio
+async def test_open_warns_and_yields_none_for_unwired_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unknown backend degrades, doesn't crash."""
+    from flowjet.core.agent.workspace import Checkpointers
+
+    cfg = SootheConfig()
+    monkeypatch.setattr(
+        type(cfg), "resolve_checkpointer_backend", lambda _self: "mysql", raising=False
     )
     async with Checkpointers.open(cfg) as cp:
         assert cp is None
