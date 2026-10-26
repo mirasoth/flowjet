@@ -90,20 +90,43 @@ class Checkpointers:
 
         Server-surface counterpart of :meth:`open_sqlite`: honors
         ``agent.protocols.durability.checkpointer`` (which inherits
-        ``persistence.default_backend``), so a deployment that asks for sqlite
-        gets thread state that survives across turns, pool workers and
-        restarts. ``postgresql`` is not wired for the server surface yet — it
-        warns and yields ``None`` (no persistence) rather than failing
-        startup.
+        ``persistence.default_backend``), so a deployment that asks for
+        ``sqlite`` **or** ``postgresql`` gets thread state that survives across
+        turns, pool workers and restarts.
+
+        The PostgreSQL branch builds an ``AsyncPostgresSaver`` on nano's shared
+        checkpoints pool so every worker and every restart sees the same
+        threads — that is what makes ``conversation_key`` continuity (and
+        recovery from an executor restart) work on this surface. Setup runs
+        once per process under nano's advisory lock, so parallel workers cannot
+        race LangGraph's DDL. Failure is degraded, not fatal: a warning is
+        logged and ``None`` is yielded.
         """
         try:
             backend = str(config.resolve_checkpointer_backend()).strip().lower()
         except Exception:  # noqa: BLE001 - unknown config shape → sqlite default
             backend = "sqlite"
+
+        if backend == "postgresql":
+            try:
+                saver = await _connect_postgres(config)
+            except Exception:  # noqa: BLE001 - persistence is degraded, not fatal
+                logger.warning(
+                    "PostgreSQL checkpointer unavailable; thread state will not "
+                    "persist across turns",
+                    exc_info=True,
+                )
+                yield None
+                return
+            # The pool is a process-wide singleton shared by every worker:
+            # closing it here would break the next turn.
+            yield saver
+            return
+
         if backend != "sqlite":
             logger.warning(
                 "Checkpointer backend %r is not wired for the flowjet server "
-                "surface yet; thread state will not persist across turns",
+                "surface; thread state will not persist across turns",
                 backend,
             )
             yield None
@@ -121,6 +144,47 @@ class Checkpointers:
             yield saver
         finally:
             await saver.conn.close()
+
+
+async def _connect_postgres(config: Any) -> Any:
+    """Open an ``AsyncPostgresSaver`` on nano's shared checkpoints pool.
+
+    ``resolve_checkpointer`` returns ``(None, pool)`` for PostgreSQL: the
+    saver is built from that pool (not from a DSN), and the pool must be
+    opened explicitly before use.
+    """
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from soothe_nano.utils.serde import create_soothe_serde
+
+    result = resolve_checkpointer(config)
+    pool = result[1] if isinstance(result, tuple) else None
+    if pool is None:
+        raise RuntimeError("PostgreSQL checkpointer pool unresolved")
+
+    await pool.open()
+    saver = AsyncPostgresSaver(pool, serde=create_soothe_serde())
+    await _setup_postgres(pool, saver)
+    logger.debug("PostgreSQL checkpointer ready (shared pool)")
+    return saver
+
+
+async def _setup_postgres(pool: Any, saver: Any) -> None:
+    """Run ``saver.setup()`` once per process under nano's advisory lock.
+
+    Parallel `setup()` calls race LangGraph's DDL (``UniqueViolation`` on
+    checkpoint types), so nano's helper serializes them — and it is a no-op
+    after the first success in this process.
+    """
+    try:
+        from soothe_nano.persistence.shared_checkpointer_pool import (
+            SharedCheckpointerPool,
+        )
+
+        await SharedCheckpointerPool.setup_checkpointer(pool, saver.setup)
+        return
+    except (ImportError, AttributeError):  # pragma: no cover - older nano
+        # nano without the helper (or without the method): plain setup().
+        await saver.setup()
 
 
 def _sqlite_db_path(result: Any) -> str | None:
