@@ -1161,7 +1161,7 @@ wheels = [
 
 [[package]]
 name = "flowjet"
-version = "2.1.7"
+version = "2.1.8"
 source = { editable = "." }
 dependencies = [
     { name = "soothe" },

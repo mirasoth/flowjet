@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.8] — 2026-10-26
+
+### Fixed
+
+- **PostgreSQL checkpointer is now wired for the server surface.**
+  `Checkpointers.open()` (the `/v1/responses` + ACP server path) used to warn
+  “Checkpointer backend 'postgresql' is not wired for the flowjet server surface
+  yet” and yield `None`, so thread state never survived a turn — a deployment
+  whose `persistence.default_backend` is `postgresql` silently ran every turn as
+  a fresh conversation. It now builds an `AsyncPostgresSaver` on nano's shared
+  checkpoints pool (`resolve_checkpointer()` → `(None, pool)`), opens the pool,
+  and runs `setup()` once per process under nano's advisory lock
+  (`SharedCheckpointerPool.setup_checkpointer`), so concurrent workers cannot
+  race LangGraph's DDL. The shared pool is deliberately **not** closed on exit
+  (it is process-wide). Failure still degrades to “no persistence” with a
+  warning instead of failing startup; unknown backends keep the old behavior.
+
 ## [2.1.7] — 2026-10-25
 
 ### Added
