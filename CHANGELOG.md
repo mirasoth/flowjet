@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.9] — 2026-10-27
+
+### Changed
+
+- **Refreshed builtin skills bundle.** Shipped two new research skills and
+  retired a stale one: added `autoresearch` (an autonomous research loop with an
+  orchestrator, scoring, and a security checklist) and `oh-my-research` (a
+  structured evidence → synthesis pipeline with scripts and pattern presets),
+  and removed the superseded `research-bootstrap` skill. The `platonic-coding`
+  skill was reworked — its spec/IMPL/WORKFLOW references were tightened, a new
+  `specs-partition.md` reference added, and the old `coding-plan-template.md` /
+  `impl-guide-template.md` drafts dropped in favor of the consolidated template
+  namespace. The top-level `builtin_skills/README.md` (a stale pointer) was
+  removed; skills are still auto-registered via `register_builtin_skill_root`.
+
 ## [2.1.8] — 2026-10-26
 
 ### Fixed
