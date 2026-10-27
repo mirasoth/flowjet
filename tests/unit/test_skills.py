@@ -13,18 +13,18 @@ def test_builtin_skills_dir_has_skill_md() -> None:
     skill_mds = list(BUILTIN_SKILLS_DIR.glob("*/SKILL.md"))
     assert skill_mds, f"expected skills under {BUILTIN_SKILLS_DIR}"
     names = {p.parent.name for p in skill_mds}
-    assert "research-bootstrap" in names
+    assert "autoresearch" in names
 
 
 def test_register_fj_builtin_skills_indexes_package_skills() -> None:
     register_fj_builtin_skills()
     assert BUILTIN_SKILLS_DIR.resolve() in [p for p, _ in SkillRoots.roots()]
-    assert SkillRoots.is_builtin_directory(BUILTIN_SKILLS_DIR / "research-bootstrap")
+    assert SkillRoots.is_builtin_directory(BUILTIN_SKILLS_DIR / "autoresearch")
 
     entries = SkillIndex().rebuild_if_stale()
     names = {e.name for e in entries}
-    assert "research-bootstrap" in names
-    skill = next(e for e in entries if e.name == "research-bootstrap")
+    assert "autoresearch" in names
+    skill = next(e for e in entries if e.name == "autoresearch")
     assert skill.source == "builtin"
 
 
