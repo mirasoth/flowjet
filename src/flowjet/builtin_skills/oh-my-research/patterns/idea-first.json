@@ -1,0 +1,27 @@
+{
+  "name": "Idea-First",
+  "description": "Exploratory research starting from creative insight, then materials and deep analysis.",
+  "graph": {
+    "entry_points": ["idea"],
+    "nodes": ["collect", "analyze", "think", "synth"],
+    "edges": [
+      "idea → collect",
+      "collect → analyze",
+      "analyze → think",
+      "think → analyze",
+      "analyze → synth"
+    ]
+  },
+  "skill_gates": {
+    "collect": "gate_m",
+    "analyze": "gate_a",
+    "synth": "gate_d"
+  },
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "semi-automated",
+    "estimated_time": "2-4 days",
+    "synthesis_mode": "brief",
+    "description": "Best for speculative topics that still need a cited write-up."
+  }
+}

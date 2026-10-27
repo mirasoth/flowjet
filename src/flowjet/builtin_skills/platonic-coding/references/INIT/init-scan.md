@@ -9,9 +9,9 @@ Systematically analyze an existing codebase for spec recovery.
 | Project root | User-provided or current directory |
 | Language | Auto-detected from build files (or `.platonic.yml` if present) |
 | Framework | Auto-detected from dependencies (or `.platonic.yml` if present) |
-| Specs path | `.platonic.yml` if present, else default `docs/specs` |
-| Impl path | `.platonic.yml` if present, else default `docs/impl` |
-| Drafts path | `.platonic.yml` if present, else default `docs/drafts` |
+| Specs path | `.platonic.yml` if present, else default `.platonic/specs` |
+| Impl path | `.platonic.yml` if present, else default `.platonic/impl` |
+| Drafts path | `.platonic.yml` if present, else default `.platonic/drafts` |
 
 **Note**: `.platonic.yml` is optional. All inputs auto-detect or use defaults when it is absent.
 
@@ -41,6 +41,8 @@ Trace data flow from entry points. Extract invariants (assertions, validation, i
 
 ### Phase 5: Synthesis
 Group findings into conceptual clusters. Identify subsystem boundaries and API surfaces. Prepare summary: system overview, subsystems, patterns, data flows, terminology. **Present to user for validation**.
+
+Namespace inputs: flag whether the project shows ≥ 3 independent services (distinct manifests/deployment units) or enough expected specs to warrant namespaced mode — `init-plan-modular-specs` uses this to decide and to draft namespace/prefix candidates.
 
 ## Scan Guidelines
 

@@ -198,9 +198,14 @@ stateDiagram-v2
 
 ## Naming Conventions
 
-### Numbered RFCs
+Projects run in one of two modes, determined by whether `namespaces:` is declared in `.platonic.yml`:
 
-**Filename convention**: RFC spec files MUST be named `RFC-NNN-<brief-semantic-name>.md`.
+- **Single-namespace mode** (default): all RFCs use the root-level format below.
+- **Namespaced mode** (multi-service/monorepo): specs are partitioned by service or module. Cross-cutting RFCs stay at the specs root with the root-level format; everything else lives in a namespace subdirectory.
+
+### Root-Level (Cross-Cutting) RFCs
+
+**Filename convention**: RFC spec files at the specs root MUST be named `RFC-NNN-<brief-semantic-name>.md`.
 
 - `RFC`: Capital letters (literal)
 - `NNN`: Exactly **three numeric characters**, zero-padded (`001`–`999`). Not `1`, `01`, or `0001`.
@@ -213,25 +218,43 @@ stateDiagram-v2
 - `RFC-042-message-queue.md` - Forty-second RFC (architecture: message queue)
 - `RFC-100-api-gateway.md` - One hundredth RFC (impl-interface: API gateway)
 
+### Namespaced RFCs
+
+**Filename convention**: RFC spec files inside a namespace directory MUST be named `RFC-<PREFIX>-NNN-<brief-semantic-name>.md`.
+
+- `<PREFIX>`: 1–4 uppercase ASCII letters, declared per namespace in `.platonic.yml` (`^[A-Z]{1,4}$`). Unique across the project. `RFC` and `IG` are reserved and MUST NOT be used. Prefixes are proposed by the skill and **confirmed by the user via ask_user** — never auto-assigned silently.
+- `NNN`: Exactly three numeric characters, zero-padded, with an **independent strict sequence per namespace** (each namespace counts `001`, `002`, `003`, … from its own start; no cross-namespace coordination).
+- **Directory**: namespace `foo` uses `.platonic/specs/foo/` by default (overridable per namespace in `.platonic.yml`). Namespace membership is derived from the file's directory — there is no `Namespace` metadata field.
+- **Implementation guides mirror the same structure**: `IG-<PREFIX>-NNN-<name>.md` inside the namespace's impl directory, following their source RFC's namespace.
+
+**Examples** (namespaces: `auth` → prefix `AUTH`, `agentspace` → prefix `AGSP`):
+- `.platonic/specs/auth/RFC-AUTH-001-session.md` - First RFC in the auth namespace
+- `.platonic/specs/agentspace/RFC-AGSP-007-workspace.md` - Seventh RFC in the agentspace namespace
+- `.platonic/impl/auth/IG-AUTH-001-session.md` - Impl guide for RFC-AUTH-001
+
+**When to use namespaces**: total RFC count ≥ 10, or ≥ 3 independent services detected. Use `specs-partition` to migrate an existing flat layout.
+
 ### Special RFCs
 
 **Format**: `rfc-{name}.md`
 
-Used for cross-cutting RFCs: `rfc-namings.md`, `rfc-index.md`, etc.
+Used for cross-cutting RFCs: `rfc-namings.md`, `rfc-index.md`, etc. These live at the specs root only. Each namespace directory may additionally hold a local `rfc-index.md`.
 
 ### Versioned RFC Updates
 
-**Format**: `RFC-NNN-<brief-semantic-name>-<letter>.md`
+**Format**: `RFC-NNN-<brief-semantic-name>-<letter>.md` (root-level) or `RFC-<PREFIX>-NNN-<brief-semantic-name>-<letter>.md` (namespaced)
 
 - `NNN`: Original RFC number (exactly three numeric characters, zero-padded)
 - `<brief-semantic-name>`: Same semantic name from base RFC (preserved across versions)
 - `<letter>`: Single lowercase letter (a, b, c, ... z) for minor versions
 - Used only for updates to frozen RFCs
+- Versioned files live in the **same directory as their parent** (namespace membership is inherited)
 
 **Examples**:
 - `RFC-001-world-view-a.md` - First update to RFC-001-world-view.md
 - `RFC-001-world-view-b.md` - Second update to RFC-001-world-view.md
 - `RFC-042-message-queue-j.md` - Tenth update to RFC-042-message-queue.md
+- `auth/RFC-AUTH-001-session-a.md` - First update to namespaced RFC-AUTH-001
 
 ---
 
@@ -486,6 +509,13 @@ Use markdown links for all RFC references:
 - Link to sections: `[RFC-NNN-<name>, Section 4](RFC-NNN-<name>.md#4-design-principles)`
 - Link to versions: `[RFC-NNN-<name>-<letter>](RFC-NNN-<name>-<letter>.md)`
 
+Qualified IDs (`RFC-<PREFIX>-NNN`) are globally unique — reference them as-is.
+Links must resolve relative to the referencing file:
+
+- From specs root to a namespace: `[RFC-AUTH-001-session](auth/RFC-AUTH-001-session.md)`
+- From one namespace to another: `[RFC-AGSP-007-workspace](../agentspace/RFC-AGSP-007-workspace.md)`
+- From a namespace to the specs root: `[RFC-001-world-view](../RFC-001-world-view.md)`
+
 ### Terminology Management
 
 The [rfc-namings.md](rfc-namings.md) file **MUST** always reflect the latest terminology from active RFCs.
@@ -507,8 +537,8 @@ The [rfc-namings.md](rfc-namings.md) file **MUST** always reflect the latest ter
 | `Authors` | Free text | RFC author(s) |
 | `Created` | `YYYY-MM-DD` | Date RFC was created |
 | `Last Updated` | `YYYY-MM-DD` | Date of most recent change |
-| `Depends on` | `RFC-NNN-<name>, RFC-MMM-<name>` or `---` | RFC dependencies |
-| `Supersedes` | `RFC-NNN-<name>` or `---` | RFC this replaces |
+| `Depends on` | `RFC-NNN-<name>, RFC-MMM-<name>` or `---`; namespaced RFCs use qualified IDs (e.g., `RFC-AUTH-001-session`) | RFC dependencies |
+| `Supersedes` | `RFC-NNN-<name>` or `---` (qualified ID for namespaced RFCs) | RFC this replaces |
 
 ### Optional Fields
 
@@ -571,6 +601,14 @@ The [rfc-namings.md](rfc-namings.md) file **MUST** always reflect the latest ter
 - Provide migration guidance
 - Consider deprecation period if widely implemented
 - Update dependent RFCs if needed
+
+### Q: My project has many services and .platonic/specs is getting hard to navigate. What should I do?
+
+**A**: Declare namespaces in `.platonic.yml` (one per service or major module) and run `specs-partition` to migrate existing flat RFCs into namespace directories with `RFC-<PREFIX>-NNN` IDs. The threshold guidance is: ≥ 10 total RFCs or ≥ 3 independent services. A full old-ID → new-ID mapping is recorded in `rfc-history.md` during migration.
+
+### Q: A subsystem shares one RFC with another service. Which namespace does it go in?
+
+**A**: If an RFC genuinely spans two namespaces, it is cross-cutting — keep it at the specs root in `RFC-NNN` format. Do not duplicate RFCs across namespaces.
 
 ---
 

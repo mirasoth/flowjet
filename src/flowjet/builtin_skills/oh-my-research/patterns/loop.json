@@ -1,0 +1,42 @@
+{
+  "name": "Loop",
+  "description": "Intentional deepening for idea development or deep materials analysis until Gate L advances, then synthesize.",
+  "loop_modes": ["idea-dev", "deep-analyze"],
+  "graph": {
+    "entry_points": ["idea", "collect"],
+    "nodes": ["analyze", "synth"],
+    "edges": [
+      "idea → idea",
+      "collect → analyze",
+      "analyze → collect",
+      "analyze → synth"
+    ],
+    "cycles": [
+      {
+        "id": "idea-dev",
+        "nodes": ["idea"],
+        "gate": "gate_l",
+        "exit_to": "collect"
+      },
+      {
+        "id": "deep-analyze",
+        "nodes": ["collect", "analyze"],
+        "gate": "gate_l",
+        "exit_to": "synth"
+      }
+    ]
+  },
+  "skill_gates": {
+    "idea": "gate_l",
+    "collect": "gate_m",
+    "analyze": "gate_l",
+    "synth": "gate_d"
+  },
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "semi-automated",
+    "estimated_time": "3-7 days",
+    "synthesis_mode": "survey",
+    "description": "Use when evidence gaps require multiple collect/analyze cycles before report writing."
+  }
+}

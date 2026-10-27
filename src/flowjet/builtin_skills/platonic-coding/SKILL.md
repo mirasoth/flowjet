@@ -1,9 +1,9 @@
 ---
 name: platonic-coding
-description: Intelligent orchestrator for the Platonic Coding lifecycle. Auto-detects the user's intent and project state, then routes to the right next step—brainstorm a design, initialize a project, run the recovery flow for existing code, formalize drafts into RFCs, refine specs, implement from guides with tests, or review code compliance. Single entry point for the complete specification-driven development lifecycle, with structured design exploration built in.
+description: Intelligent orchestrator for the Platonic Coding lifecycle. Auto-detects the user's intent and project state, then routes to the right next step—brainstorm a design, initialize a project, run the recovery flow for existing code, formalize drafts into RFCs, refine specs, implement from guides with tests, or review code compliance. Single entry point for the complete specification-driven development lifecycle, with structured design exploration built in. Use when the user says "platonic coding", "brainstorm", "discuss", "investigate", "explore design", "spec-driven development", "RFC", "specs", "init-scaffold", "init-scan", "init-recover", "specs-refine", "impl-full", "spec compliance review", or "workflow".
 license: MIT
 metadata:
-  version: "2.5.0"
+  version: "3.1.0"
   author: "Xiaming Chen"
   category: "workflow"
   replaces:
@@ -42,19 +42,32 @@ Auto-detects intent and project state when invoked without specific instructions
 Before inspecting project state, scan the user's natural-language request for **intent keywords** that signal a desire to explore rather than immediately produce an artifact:
 
 - **Trigger words** (case-insensitive): `brainstorm`, `discuss`, `investigate`, `explore`, `deep analysis`, `deep dive`, `think through`, `design exploration`, `trade-offs`, `what's the best approach`.
-- **Match** → enter **BRAINSTORM mode** (`references/BRAINSTORM/brainstorm.md`), regardless of project state. The user wants to explore first; project-state detection resumes at handoff.
+- **Match** → enter **BRAINSTORM mode** (`references/brainstorm/brainstorm.md`), regardless of project state. The user wants to explore first; project-state detection resumes at handoff.
 - **Exception**: if the request uses a canonical operation name (`impl-full`, `review`, `specs-refine`, `init-scaffold`, `workflow --phase <N>`, `brainstorm`), the explicit operation wins — don't reroute it.
 
 ### Project-State Detection (when no intent keywords)
 
 **Quick Reference**:
-- No Platonic infrastructure (no `.platonic.yml` **and** no `docs/specs/`) → INIT mode (scaffold new or recover existing)
+- No Platonic infrastructure (no `.platonic.yml` **and** no `.platonic/specs/`) → INIT mode (scaffold new or recover existing)
 - RFCs but no guides → Phase 2 (implementation)
 - Guides + code → Phase 3 (review) or resume Phase 2
 
-**Note**: `.platonic.yml` is optional. The skill auto-detects project metadata (name, language, framework) from host manifests and uses built-in default paths (`docs/specs`, `docs/impl`, `docs/drafts`). A `.platonic.yml` is only needed to override defaults or set custom spec stages.
+**Note**: `.platonic.yml` is optional. The skill auto-detects project metadata (name, language, framework) from host manifests and uses built-in default paths (`.platonic/specs`, `.platonic/impl`, `.platonic/drafts`). A `.platonic.yml` is only needed to override defaults, set custom spec stages, or declare namespaces (multi-service projects).
 
 **Override** with canonical operations: `brainstorm`, `init-scaffold`, `init-scan`, `specs-refine`, `impl-full`, `review`, `workflow --phase <N>`.
+
+## Confirmation Gates & Clarifications
+
+Many operations pause for user input — design approval, confirmation gates, routing menus, ambiguity blockers. **At every such gate, call the `ask_user` tool** with the question(s). Do not write questions as plain text.
+
+Plain-text questions are invisible to the runtime clarification relay: the loop will not pause, the goal will finalize, and the user's reply will start a brand-new goal instead of resuming the paused one. The `ask_user` tool emits a structured interrupt that pauses the loop and resumes on the same turn once the user answers.
+
+- **One question per call** when the questions are independent (aligns with "one question at a time" in BRAINSTORM mode).
+- Present multiple-choice options as the *content* of a single question (e.g. "Which design: A) ... B) ... C) ...?") so the user picks one.
+- Skip the gate only when the user explicitly said "no confirmations" or auto/quick-pass mode is active — but even then, if ambiguity *blocks* progress, call `ask_user` rather than guessing.
+- **Fallback**: if the host runtime exposes no structured questioning tool (`ask_user` or equivalent such as `AskUserQuestion`), degrade gracefully — output the question as plain text with numbered options and stop, resuming on the user's reply. A degraded gate is better than guessing.
+
+See `references/brainstorm/brainstorm.md` for the full gate taxonomy.
 
 ## Core Workflow Phases
 
@@ -64,12 +77,12 @@ Before inspecting project state, scan the user's natural-language request for **
 | **2** | Implementation | Guide → Code + Tests | ✅ Optional (BRAINSTORM mode) |
 | **3** | Review | Compliance report | ❌ |
 
-Phases run sequentially (full workflow) or independently (explicit invocation). BRAINSTORM mode is an optional entry ramp to Phases 1 and 2. See `references/WORKFLOW/workflow-overview.md` for details.
+Phases run sequentially (full workflow) or independently (explicit invocation). BRAINSTORM mode is an optional entry ramp to Phases 1 and 2. See `references/workflow/workflow-overview.md` for details.
 
 ## Operation Modes
 
 ### BRAINSTORM Mode
-Structured design exploration through collaborative dialogue. Produces an approved design draft (`docs/drafts/`), then presents **post-draft alternative paths** (see below). Entered by intent keywords, or explicitly. No code, RFC, or scaffolding is produced until the design is approved.
+Structured design exploration through collaborative dialogue. Produces an approved design draft (`.platonic/drafts/`), then presents **post-draft alternative paths** (see below). Entered by intent keywords, or explicitly. No code, RFC, or scaffolding is produced until the design is approved.
 
 **Examples**: `brainstorm the message queue design`, `discuss how auth should work`, `investigate options for caching`.
 
@@ -81,14 +94,14 @@ Bootstrap Platonic Coding infrastructure. Operations: `init-scaffold`, `init-sca
 **Examples**: `init-scaffold for project "Acme"`, `init-scan then recover specs`.
 
 ### SPECS Mode
-Manage RFC specifications. Operations: `specs-refine` (comprehensive), `specs-generate-*`, `specs-validate-*`, `specs-check-*`.
+Manage RFC specifications. Operations: `specs-refine` (comprehensive), `specs-generate-*`, `specs-validate-*`, `specs-check-*`, `specs-partition` (migrate a flat layout into namespaces).
 
-**Examples**: `specs-refine`, `specs-generate-index`.
+**Examples**: `specs-refine`, `specs-generate-index`, `specs-partition`.
 
 ### IMPL Mode
 Translate RFCs to guides and code. Operations: `impl-full` (default), `impl-create-guide`, `impl-code`, `impl-validate-guide`, `impl-update-guide`.
 
-**Confirmation Gates**: Pauses after impl guide and coding plan. Override with "no confirmations".
+**Confirmation Gates**: Pauses after the impl guide (which includes the coding plan). Override with "no confirmations".
 
 **Examples**: `impl-full for RFC-042`, `impl-code from IG-001`.
 
@@ -98,24 +111,24 @@ Validate code against specs. Generates report-only by default (no code changes).
 **Examples**: `review src/auth/ against RFC-001`, `review for gap analysis`.
 
 ### WORKFLOW Mode
-Orchestrate full 3-phase flow. See `references/WORKFLOW/workflow-overview.md`.
+Orchestrate full 3-phase flow. See `references/workflow/workflow-overview.md`.
 
 **Examples**: `workflow --phase 1`, `workflow starting with brainstorm`.
 
 ---
 
-For detailed guides, see `references/REFERENCE.md`.
+For detailed guides, see `references/REFERENCE.md` — the reference documents are the **authoritative source**. Where a summary in this file differs from the detailed tables in `references/` (routing menu, naming conventions, decision tree), follow the reference.
 
 ## Post-Draft Alternative Paths
 
-After BRAINSTORM mode produces an approved design draft, the skill does **not** assume "create a new RFC" is the only next step. It checks `docs/specs/` and `docs/impl/` for related existing RFCs/IGs, then presents a routing menu (full table in `references/BRAINSTORM/brainstorm.md`):
+After BRAINSTORM mode produces an approved design draft, the skill does **not** assume "create a new RFC" is the only next step. It checks `.platonic/specs/` and `.platonic/impl/` for related existing RFCs/IGs, then presents a routing menu (full table in `references/brainstorm/brainstorm.md`):
 
 1. **Pause at each phase gate** — careful, default; approve every confirmation gate
 2. **Quick pass** — run multiple phases straight through, no further confirmations (quick fixes)
 3. **Update an existing RFC** — revise a related RFC instead of spawning a new one
-4. **Create a new RFC** — formalize the draft into a fresh `RFC-NNN` (next sequential `NNN` unless user overrides)
+4. **Create a new RFC** — formalize the draft into a fresh RFC (root-level `RFC-NNN` or namespaced `RFC-<PREFIX>-NNN`; next sequential number within the chosen scope unless user overrides)
 5. **Update an existing IG** — refine an existing implementation guide via `impl-update-guide`
-6. **Create a new IG** — generate a fresh `IG-XXX` via `impl-create-guide` (next sequential `XXX` unless user overrides)
+6. **Create a new IG** — generate a fresh IG in the source RFC's scope (`IG-XXX` or `IG-<PREFIX>-XXX`) via `impl-create-guide` (next sequential number within that scope unless user overrides)
 
 The menu leads with a recommendation based on what was found. The user picks by number; each path maps to existing canonical operations.
 
@@ -123,11 +136,24 @@ The menu leads with a recommendation based on what was found. The user picks by 
 
 | Artifact | Path | Naming |
 |----------|------|--------|
-| Drafts | `docs/drafts/` | `YYYY-MM-DD-<topic>-design.md` |
-| RFCs | `docs/specs/` | `RFC-NNN-<name>.md` (`NNN` = exactly 3 digits; strict sequence) |
-| Guides | `docs/impl/` | `IG-XXX-<name>.md` (`XXX` = exactly 3 digits; strict sequence) |
+| Drafts | `.platonic/drafts/` | `YYYY-MM-DD-<topic>-design.md` |
+| RFCs | `.platonic/specs/` | `RFC-NNN-<name>.md` (`NNN` = exactly 3 digits; strict sequence) |
+| Guides | `.platonic/impl/` | `IG-XXX-<name>.md` (`XXX` = exactly 3 digits; strict sequence) |
 
 Templates in `assets/` use `{{PLACEHOLDER}}` syntax.
+
+## Namespaces (Multi-Service / Monorepo Projects)
+
+When a project has multiple services or modules (or ≥ 10 RFCs), specs and impl guides can be partitioned into **namespaces** declared in `.platonic.yml`:
+
+- Each namespace = one directory pair (`.platonic/specs/<ns>/` + `.platonic/impl/<ns>/`) + an ID prefix (1–4 uppercase letters, **always confirmed by the user via `ask_user` with candidates proposed** — never auto-assigned)
+- Namespaced IDs: `RFC-<PREFIX>-NNN` / `IG-<PREFIX>-NNN`, each namespace with its **own independent sequence** from `001`
+- Cross-cutting RFCs stay at the specs root with the `RFC-NNN` format
+- The root `rfc-index.md` is a one-screen rollup; every namespace gets its own local `rfc-index.md`
+- Namespace membership is derived from the file's directory (no metadata field)
+- Run `specs-partition` to migrate an existing flat layout (records a full old-ID → new-ID mapping in `rfc-history.md`)
+
+Projects without namespaces behave exactly as before (single flat sequence).
 
 ## Best Practices
 

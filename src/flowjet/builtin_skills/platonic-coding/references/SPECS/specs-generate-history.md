@@ -11,18 +11,19 @@ Scan all RFC files in the specs directory and generate/update `rfc-history.md` w
 ## Steps
 
 1. **Scan RFC Files**
-   - Find all files matching pattern `RFC-*.md` in the specs directory (specs root only; skip `templates/`)
+   - Find all files matching pattern `RFC-*.md` in the specs root AND in every namespace directory declared in `.platonic.yml`
+   - Root files match `RFC-NNN-<name>.md`; namespaced files match `RFC-<PREFIX>-NNN-<name>.md`
    - Exclude: `rfc-history.md`, `rfc-index.md`, `rfc-namings.md`
-   - Include both base RFCs (e.g., `RFC-001-world-view.md`) and versioned RFCs (e.g., `RFC-001-world-view-001.md`)
+   - Include both base RFCs (e.g., `RFC-001-world-view.md`, `auth/RFC-AUTH-001-session.md`) and versioned RFCs (suffix `-<letter>.md`)
 
 2. **Extract Metadata from Each RFC**
    For each RFC file, extract:
-   - RFC number (from filename or title)
-   - Title (from `# RFC-NNN-<name>: Title`)
+   - RFC ID (from filename or title; qualified IDs like `RFC-AUTH-001` are self-describing — the namespace is implicit in the ID, no separate column needed)
+   - Title (from `# <RFC-ID>-<name>: Title`)
    - Status (from `**Status**: ...`)
    - Created date (from `**Created**: YYYY-MM-DD`)
    - Last Updated date (from `**Last Updated**: YYYY-MM-DD`)
-   - Version number (if versioned RFC, from filename `RFC-NNN-<name>-<letter>.md`)
+   - Version number (if versioned RFC, from filename `-<letter>.md` suffix)
 
 3. **Categorize Events**
    For each RFC, create events:

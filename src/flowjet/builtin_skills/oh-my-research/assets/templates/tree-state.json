@@ -1,0 +1,6 @@
+{
+  "unlocked": ["init", "collect", "idea", "think"],
+  "ready": [],
+  "locked": ["analyze", "synth", "decide", "reconcile"],
+  "completed": []
+}

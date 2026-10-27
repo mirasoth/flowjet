@@ -1,0 +1,19 @@
+{
+  "name": "Rapid",
+  "description": "Fastest path to a brief write-up. Gates off; THINK optional.",
+  "graph": {
+    "entry_points": ["collect"],
+    "nodes": ["analyze", "synth"],
+    "edges": ["collect → analyze", "analyze → synth"]
+  },
+  "skill_gates": {},
+  "contract_overrides": {
+    "agency": "fully-automated"
+  },
+  "recommendations": {
+    "agency": "fully-automated",
+    "estimated_time": "hours",
+    "synthesis_mode": "brief",
+    "description": "Time-boxed exploration; quality gates skipped."
+  }
+}

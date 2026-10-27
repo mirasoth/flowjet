@@ -1,0 +1,76 @@
+# {{PROJECT_NAME}}
+
+> Research project initialized with Oh-My-Research (report-first)
+
+## Project Overview
+
+**Research Question**: {{RESEARCH_QUESTION}}
+
+**Status**: {{STATUS}}
+
+**Active Pattern**: {{ACTIVE_PATTERN}}
+
+**Started**: {{CREATED_AT}}
+
+**Last Updated**: {{LAST_UPDATED}}
+
+## Workspace Structure
+
+INIT creates **only** the files below. Every other path appears when the first real file is written there — never as an empty folder.
+
+```
+{{PROJECT_NAME}}/
+├── AGENTS.md
+└── .omr/
+    ├── tree-state.json
+    ├── pattern.json
+    └── locale.json
+```
+
+**Preferred language**: {{PREFERRED_LANGUAGE}} (source: {{LANGUAGE_SOURCE}}; timezone: {{TIMEZONE}})
+
+Override anytime with `synth --language <tag>` (e.g. `en`, `zh-CN`, `ja`, `de`) or by editing `.omr/locale.json`. Policy: `references/LANGUAGE.md`.
+### Created on first write (examples)
+
+| When | Path created |
+|------|----------------|
+| Collect a paper | `materials/papers-raw/<ID>.<ext>` + `materials/papers/<ID>.md` (+ `docs/index/` when indexing) |
+| Collect a web page | `materials/web/<file>` |
+| Collect a GitHub URL | `materials/github/<file>` |
+| Search log / HF / failure | `materials/search|datasets|failed/<file>` only if used |
+| Idea note | `docs/ideas/<file>` |
+| Analyze / decide | `docs/plans/<file>` |
+| Synth drafts | `docs/<mode>/…` (outline, chapters, citation map, `_document.json`) |
+| QA / gates | `.omr/quality-gates/<file>` |
+| Version tag / backup | `.omr/versions/` or `.omr/backups/` |
+| Exported deliverable | `deliverables/<topic>-<mode>-<language>.{docx,pdf,md}` |
+| Wiki | `deliverables/wiki/` after Gate D if generated |
+
+**Public vs private:** `deliverables/` is the only surface a reader or collaborator sees. Everything else (`materials/`, `docs/`, `.omr/`) is private working state — never hand it over, and never write final deliverables outside `deliverables/`.
+
+## Ops (unified skill: oh-my-research)
+
+- `collect <url|query>` — gather materials
+- `analyze` — deep evidence + judgment (Gate A)
+- `think [method]` — first principles / Socratic / triangulation / …
+- `synth [--mode survey|report|…]` — deep research report (Gate D)
+- `idea "…"` — speculative note
+- `decide` — optional stance (Gate B)
+- `reconcile` — contradiction repair / archive
+- `version tag|history|backup|list`
+- `workflow [--pattern Evidence-Deep]`
+
+## Pattern
+
+Default **Evidence-Deep**: collect → analyze ⟲ think → synth (survey/report).
+
+## Gates
+
+- Gate A / QA1 after analyze
+- Gate D / QA2 / document lenses before publish
+- Gate L when Loop active
+- Gate B only if `decide` runs
+
+## Evidence boundaries
+
+Use `proven` / `suggests` / `inferred` correctly. Never upgrade weakly worded sources to proven.

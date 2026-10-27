@@ -16,7 +16,7 @@ Verify consistent use of terminology across all RFC files and check against cano
    - Create a list of canonical terms (normalize to lowercase for comparison)
 
 2. **Scan Active RFC Files**
-   - Find all RFC files matching `RFC-*.md`
+   - Find all RFC files matching `RFC-*.md` in the specs root AND in every namespace directory declared in `.platonic.yml` (root: `RFC-NNN-<name>.md`; namespaced: `RFC-<PREFIX>-NNN-<name>.md`)
    - Exclude supporting files and deprecated RFCs
    - Only process RFCs with Status: Draft, Review, or Frozen
 

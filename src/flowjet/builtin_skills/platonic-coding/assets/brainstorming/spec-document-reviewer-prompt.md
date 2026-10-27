@@ -4,7 +4,7 @@ Use this template when dispatching a design draft reviewer subagent.
 
 **Purpose:** Verify the design draft is complete, consistent, and ready for the next Platonic Coding stage.
 
-**Dispatch after:** Design draft is written to `docs/drafts/`
+**Dispatch after:** Design draft is written to `.platonic/drafts/`
 
 ```
 Task tool (general-purpose):

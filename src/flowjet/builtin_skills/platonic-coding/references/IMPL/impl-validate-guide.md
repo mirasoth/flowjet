@@ -10,7 +10,7 @@ Implementation guides **supersede** RFC specs in the sense that they provide con
 
 1. Implementation guide document exists
 2. Source RFC document(s) are available
-3. Project terminology reference is available (`docs/specs/rfc-namings.md`)
+3. Project terminology reference is available (`.platonic/specs/rfc-namings.md`)
 
 ## Input Requirements
 
@@ -18,7 +18,7 @@ Implementation guides **supersede** RFC specs in the sense that they provide con
 |-------|----------|-------------|
 | Implementation Guide | Yes | Path to the implementation guide |
 | Source RFC(s) | Yes | Path(s) to source RFC specification(s) |
-| Namings Reference | No | Path to terminology reference (default: `docs/specs/rfc-namings.md`) |
+| Namings Reference | No | Path to terminology reference (default: `.platonic/specs/rfc-namings.md`) |
 
 ## Validation Categories
 
@@ -135,8 +135,8 @@ Find statements that conflict with RFC.
 ## Example
 
 **Input**:
-- Guide: `docs/impl/IG-042-message-queue-protocol.md`
-- RFC: `docs/specs/RFC-042-message-queue.md`
+- Guide: `.platonic/impl/IG-042-message-queue-protocol.md`
+- RFC: `.platonic/specs/RFC-042-message-queue.md`
 
 **Validation**:
 1. Check RFC-042-message-queue invariants (at-least-once delivery, message ordering)

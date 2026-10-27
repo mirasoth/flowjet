@@ -1,0 +1,44 @@
+{
+  "_comment": "LLM-authored document spec. The exporter is a thin renderer: it applies THIS file, not hardcoded styling. Copy to docs/<mode>/_document.json, then edit any field to fit the report, audience, and language. Delete a field to fall back to the neutral default. Regenerate a fresh starter anytime with: python scripts/export_report.py --emit-spec --mode <mode>.",
+
+  "title": "{{DESCRIPTIVE_READER_FACING_TITLE}}",
+  "subtitle": null,
+  "author": "",
+  "date": null,
+
+  "page": { "size": "A4", "margin_mm": 22 },
+
+  "_fonts_note": "Font faces are filled per OS when omitted: macOS (Helvetica Neue + PingFang SC), Linux (DejaVu Sans + Noto Sans CJK SC), Windows (Calibri + Microsoft YaHei). PDF CJK uses reportlab CID fonts (no system install). Unicode symbols embed the best available system TTF (Arial Unicode / DejaVu / Noto / FreeFont). Override latin/eastasia/pdf_* here when you want fixed faces across machines.",
+  "fonts": {
+    "body": { "size": 10.5 },
+    "heading": {},
+    "mono": { "size": 9 },
+    "pdf_latin": "Helvetica",
+    "pdf_cjk": "STSong-Light"
+  },
+
+  "colors": {
+    "heading": ["#1F4E79", "#2F5597", "#44546A"],
+    "table_header_bg": "#D9EAF7"
+  },
+  "heading_sizes": [18, 14, 12],
+  "line_spacing": 1.25,
+
+  "cover": {
+    "enabled": true,
+    "elements": ["title", "subtitle", "author", "date"]
+  },
+  "toc": { "enabled": true, "title": null, "depth": 3 },
+  "header": { "enabled": true, "text": null },
+  "footer": { "enabled": true, "page_numbers": true, "attribution": true },
+
+  "_attribution_note": "Product credit appears only in the page footer (not the cover). Set attribution.enabled=false (or footer.attribution=false) to hide. Override attribution.text for a custom line; null uses the default ('Powered by oh-my-research').",
+  "attribution": { "enabled": true, "text": null },
+
+  "chapters": {
+    "order": null,
+    "include": null,
+    "exclude": []
+  },
+  "drop_first_h1_matching_title": true
+}

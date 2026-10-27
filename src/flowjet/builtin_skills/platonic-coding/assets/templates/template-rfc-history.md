@@ -31,6 +31,5 @@ _No versioned RFC updates yet._
 
 ## Related Documents
 
-- [rfc-standard.md](templates/rfc-standard.md) - RFC process and conventions
 - [rfc-index.md](rfc-index.md) - RFC index
 - [rfc-namings.md](rfc-namings.md) - Terminology reference

@@ -4,7 +4,7 @@ Write code from an existing implementation guide, including unit and integration
 
 ## Purpose
 
-When an implementation guide already exists, this operation takes it and produces working code. It skips the guide creation step and starts from coding plan generation.
+When an implementation guide already exists, this operation takes it and produces working code. It skips the guide creation step and starts from the guide's coding plan (Section 10).
 
 ## Prerequisites
 
@@ -26,21 +26,22 @@ When an implementation guide already exists, this operation takes it and produce
 ### Step 1: Read Guide and RFC
 
 - Read the implementation guide thoroughly
-- Read the source RFC for context and requirements
+- Read the source RFC for context and requirements (the guide's Source reference gives its path; in namespaced projects the RFC lives in `.platonic/specs/<ns>/` and the guide in `.platonic/impl/<ns>/`)
 - Treat both as source of truth: code is a **realization**, not a source of new requirements
+- Load **only the specs needed for this guide**: its source RFC (plus any RFCs it depends on) and the global `rfc-namings.md` — do not ingest other namespaces' specs
 
-### Step 2: Generate Coding Plan
+### Step 2: Read the Coding Plan
 
-Break the guide into ordered implementation tasks:
+The guide's coding plan (Section 10) already contains the ordered task breakdown. Review it to understand the implementation sequence:
 
-1. **Enumerate deliverables**: List all modules, types, interfaces, and tests from the guide
-2. **Define task order**: Order tasks by dependency (foundations first, then consumers)
+1. **Enumerate deliverables**: All modules, types, interfaces, and tests from the guide
+2. **Note task order**: Tasks are ordered by dependency (foundations first, then consumers)
 3. **Pair with tests**: Each functional task has a corresponding test task
-4. **Scope each task**: Describe what to create/modify, reference guide sections
+4. **Reference guide sections**: Each task points back to the relevant guide section
 
-Use the template from `assets/coding-plan-template.md`.
+If the guide lacks a coding plan, derive one and add it as Section 10 of the guide (never as a separate file).
 
-**Confirmation Gate**: Present the plan to the user unless auto mode is active.
+**Confirmation Gate**: Present the plan to the user by **calling the `ask_user` tool** with the plan summary and an approval question, unless auto mode is active. Plain-text questions do not pause the loop — `ask_user` ensures the goal resumes on the same turn once the user answers.
 
 ### Step 3: Execute Coding Tasks
 
@@ -86,15 +87,15 @@ If the implementation guide is incomplete or ambiguous:
 1. **Do not invent behavior**: Never add functionality not described in the guide or RFC
 2. **Document the gap**: Note what is missing and where
 3. **Suggest guide update**: Recommend updating the guide before implementing the missing piece
-4. **Ask the user**: When ambiguity blocks progress, ask for clarification
+4. **Ask the user**: When ambiguity blocks progress, **call the `ask_user` tool** for clarification. Plain-text questions do not pause the loop — `ask_user` pauses and resumes on the same turn once the user answers.
 
 ## Example
 
 **Input**:
-- Guide: `docs/impl/IG-001-user-authentication.md`
-- RFC: `docs/specs/RFC-001-user-authentication.md`
+- Guide: `.platonic/impl/IG-001-user-authentication.md`
+- RFC: `.platonic/specs/RFC-001-user-authentication.md`
 
-**Coding Plan** (simplified):
+**Coding Plan** (Section 10 of the guide, simplified):
 1. Create `src/auth/types.ts` — User, Session, Token types
 2. Create `src/auth/service.ts` — AuthService with login, logout, verify
 3. Create `src/auth/middleware.ts` — Express middleware for route protection

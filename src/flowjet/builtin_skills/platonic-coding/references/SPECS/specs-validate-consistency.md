@@ -11,12 +11,13 @@ Check consistency between RFC files, including cross-references, dependencies, a
 ## Steps
 
 1. **Scan All RFC Files**
-   - Find all files matching `RFC-*.md` pattern (convention: RFC-NNN-<name>.md, e.g. RFC-001-world-view.md; specs root only, skip `templates/`)
+   - Find all files matching `RFC-*.md` pattern in the specs root AND in every namespace directory declared in `.platonic.yml` (convention: root `RFC-NNN-<name>.md`, namespaced `RFC-<PREFIX>-NNN-<name>.md`; e.g. RFC-001-world-view.md, auth/RFC-AUTH-001-session.md)
    - Exclude supporting files: `rfc-history.md`, `rfc-index.md`, `rfc-namings.md`
 
 2. **Extract Metadata from Each RFC**
    For each RFC, extract:
-   - RFC number (from filename or title)
+   - RFC ID (root: `RFC-NNN`; namespaced: qualified `RFC-<PREFIX>-NNN`)
+   - Namespace (derived from the file's directory)
    - Status
    - Dependencies (from `**Depends on**: ...`)
    - Supersedes (from `**Supersedes**: ...`)
@@ -25,15 +26,16 @@ Check consistency between RFC files, including cross-references, dependencies, a
 3. **Check Dependencies**
    For each RFC:
    - Parse dependencies from "Depends on" field
-   - Check if each dependency exists as an RFC file
-   - Verify dependency format (should be RFC-NNN-<name>)
+   - Check if each dependency exists as an RFC file (search the whole specs tree — dependencies may cross namespaces)
+   - Verify dependency format (root `RFC-NNN-<name>` or qualified `RFC-<PREFIX>-NNN-<name>`)
    - Report missing dependencies
 
 4. **Check Cross-References**
    For each RFC:
-   - Scan content for RFC references (patterns: `RFC-XXXX`, `[RFC-XXXX](...)`)
-   - Extract all referenced RFC numbers
-   - Check if referenced RFCs exist
+   - Scan content for RFC references (patterns: `RFC-NNN`, `RFC-<PREFIX>-NNN`, `[RFC-XXXX](...)`)
+   - Extract all referenced RFC IDs (both formats)
+   - Check if referenced RFCs exist anywhere in the specs tree
+   - Verify link targets resolve relative to the referencing file (`../<ns>/...` from one namespace to another, `<ns>/...` from root)
    - Report broken references
 
 5. **Check Circular Dependencies**
@@ -56,25 +58,26 @@ Check consistency between RFC files, including cross-references, dependencies, a
 
 ### Dependency Validation
 
-- **Format**: Dependencies should be in format `RFC-XXXX` or `RFC-XXXX, RFC-YYYY`
-- **Existence**: Each dependency must exist as an RFC file
+- **Format**: Dependencies should be in format `RFC-XXXX` or `RFC-XXXX, RFC-YYYY` — either root-level (`RFC-NNN`) or qualified namespaced IDs (`RFC-<PREFIX>-NNN`); qualified IDs are globally unique and may reference any namespace
+- **Existence**: Each dependency must exist as an RFC file somewhere in the specs tree
 - **Status**: Prefer depending on Frozen RFCs over Draft RFCs (warning, not error)
 
 ### Cross-Reference Validation
 
 - **Patterns to find**: 
-  - `RFC-XXXX`
-  - `[RFC-XXXX](filename.md)`
-  - `RFC-XXXX-<letter>` (versioned references)
-- **Existence**: Referenced RFCs must exist
-- **Link validity**: Links should point to correct files
+  - `RFC-XXXX` (root-level)
+  - `RFC-<PREFIX>-XXXX` (namespaced)
+  - `[RFC-XXXX](filename.md)` and `[RFC-<PREFIX>-XXXX](...)`
+  - `RFC-XXXX-<letter>` / `RFC-<PREFIX>-XXXX-<letter>` (versioned references)
+- **Existence**: Referenced RFCs must exist anywhere in the specs tree
+- **Link validity**: Links should point to correct files with working relative paths across namespace directories
 
 ### Metadata Validation
 
 - **Required fields**: Status, Authors, Created, Last Updated
 - **Status values**: Must be one of: Draft, Review, Frozen, Deprecated
 - **Date format**: Must be YYYY-MM-DD
-- **RFC number**: Must match between filename and title
+- **RFC ID**: Must match between filename and title (root `RFC-NNN` or qualified `RFC-<PREFIX>-NNN`)
 
 ## Output Format
 

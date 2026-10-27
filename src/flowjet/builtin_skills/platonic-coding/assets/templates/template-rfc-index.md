@@ -1,14 +1,36 @@
 # {{PROJECT_NAME}} RFC Index
 
-Master index of all RFC specifications.
+Master rollup index of all RFC specifications. For projects with namespaces
+declared in `.platonic.yml`, this file stays **small**: one summary section
+per namespace plus the root-level RFC table. Detailed per-RFC tables live in
+each namespace's local `rfc-index.md`.
 
 ---
 
-## Active RFCs
+## Namespaces
+
+| Namespace | Prefix | Description | RFCs | Last Updated | Local Index |
+|-----------|---------|-------------|------|--------------|-------------|
+| _None declared_ | | | | | |
+
+> When namespaces are declared, each row links to `<namespace>/rfc-index.md`
+> and the skill regenerates those local indexes automatically
+> (`specs-generate-index`). Projects without namespaces have a single flat
+> table below.
+
+---
+
+## Root-Level RFCs (Cross-Cutting)
+
+RFCs that span services or define system-wide concepts. Format: `RFC-NNN`
+(global sequence).
 
 | RFC | Title | Kind | Status | Created | Last Updated |
 |-----|-------|------|--------|---------|--------------|
 | _None yet_ | | | | | |
+
+> In single-namespace mode (no `namespaces:` in `.platonic.yml`), this table
+> lists ALL RFCs and mirrors the pre-3.0 behavior.
 
 ---
 
@@ -16,9 +38,8 @@ Master index of all RFC specifications.
 
 | Document | Purpose |
 |----------|---------|
-| [rfc-standard.md](templates/rfc-standard.md) | RFC process and conventions |
-| [rfc-namings.md](rfc-namings.md) | Terminology reference |
-| [rfc-history.md](rfc-history.md) | Change history |
+| [rfc-namings.md](rfc-namings.md) | Terminology reference (global) |
+| [rfc-history.md](rfc-history.md) | Change history (global timeline) |
 | [rfc-index.md](rfc-index.md) | This document |
 
 ---
@@ -36,13 +57,13 @@ Master index of all RFC specifications.
 
 ## Quick Links
 
-### By Kind
+### By Kind (root-level RFCs)
 
 - **Conceptual Design**: _None yet_
 - **Architecture Design**: _None yet_
 - **Implementation Interface Design**: _None yet_
 
-### By Status
+### By Status (root-level RFCs)
 
 - **Draft**: _None yet_
 - **Review**: _None yet_
@@ -52,6 +73,5 @@ Master index of all RFC specifications.
 
 ## Related Documents
 
-- [rfc-standard.md](templates/rfc-standard.md) - RFC process and conventions
 - [rfc-history.md](rfc-history.md) - Change history
-- [rfc-namings.md](rfc-namings.md) - Terminology reference
+- [rfc-namings.md](rfc-namings.md) - Terminology

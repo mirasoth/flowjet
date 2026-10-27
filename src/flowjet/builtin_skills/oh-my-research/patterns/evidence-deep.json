@@ -1,0 +1,34 @@
+{
+  "name": "Evidence-Deep",
+  "description": "Default report-first path: collect materials, deep-analyze with THINK paradigms, synthesize a high-quality survey or report.",
+  "graph": {
+    "entry_points": ["collect"],
+    "nodes": ["analyze", "think", "synth"],
+    "edges": [
+      "collect → analyze",
+      "analyze → think",
+      "think → analyze",
+      "analyze → synth"
+    ],
+    "side_cycles": [
+      {
+        "id": "think-on-analyze",
+        "attach": "analyze",
+        "ops": ["think"],
+        "when": "low_confidence_or_high_gaps_or_user_request"
+      }
+    ]
+  },
+  "skill_gates": {
+    "collect": "gate_m",
+    "analyze": "gate_a",
+    "synth": "gate_d"
+  },
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "semi-automated",
+    "estimated_time": "2-5 days",
+    "synthesis_mode": "survey",
+    "description": "Best for deep literature surveys and structured research reports with evidence boundaries and thinking checkpoints."
+  }
+}

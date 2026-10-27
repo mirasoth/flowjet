@@ -17,9 +17,9 @@ Extract terminology from all active RFC files and update `rfc-namings.md` to ref
 ## Steps
 
 1. **Identify Active RFCs**
-   - Scan for files matching `RFC-*.md` pattern (specs root only; skip `templates/`)
+   - Scan for files matching `RFC-*.md` pattern in the specs root AND in every namespace directory declared in `.platonic.yml` (root: `RFC-NNN-<name>.md`; namespaced: `RFC-<PREFIX>-NNN-<name>.md`)
    - Exclude: `rfc-history.md`, `rfc-index.md`, `rfc-namings.md`
-   - Exclude versioned RFCs (RFC-NNN-<name>-<letter>.md format)
+   - Exclude versioned RFCs (suffix `-<letter>.md`)
    - Exclude RFCs with Status "Deprecated"
    - Only process RFCs with Status: Draft, Review, or Frozen
 
@@ -56,7 +56,7 @@ Extract terminology from all active RFC files and update `rfc-namings.md` to ref
 4. **Generate Terminology Index Table**
    Create a table with columns:
    - Term
-   - Source RFC (format: RFC-NNN-<name> or RFC-NNN-<name> §X.Y)
+   - Source RFC (format: `RFC-NNN-<name>`, qualified `RFC-<PREFIX>-NNN-<name>`, or with section `... §X.Y`)
    - Brief Description (first 100 characters of definition)
 
    Format:

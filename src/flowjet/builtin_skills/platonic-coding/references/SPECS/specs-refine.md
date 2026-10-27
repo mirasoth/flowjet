@@ -20,19 +20,19 @@ This is a comprehensive operation that performs multiple checks and updates:
 
 ## Step 1: Validate Consistency
 
-**Read**: `references/validate-consistency.md` and apply it to the specs directory.
+**Read**: `references/specs/specs-validate-consistency.md` and apply it to the specs directory.
 
 **Expected Output**: List of consistency errors and warnings
 
 ## Step 2: Check Taxonomy
 
-**Read**: `references/check-taxonomy.md` and apply it to the specs directory.
+**Read**: `references/specs/specs-check-taxonomy.md` and apply it to the specs directory.
 
 **Expected Output**: Taxonomy consistency report
 
 ## Step 3: Check Standard Compliance
 
-**Read**: `references/check-standard-compliance.md` and apply it to the specs directory.
+**Read**: `references/specs/specs-check-compliance.md` and apply it to the specs directory.
 
 **Expected Output**: Compliance report with errors and warnings
 
@@ -40,9 +40,9 @@ This is a comprehensive operation that performs multiple checks and updates:
 
 Perform these operations in order:
 
-1. **Generate History**: Read `references/generate-history.md` and update rfc-history.md
-2. **Generate Index**: Read `references/generate-index.md` and update rfc-index.md
-3. **Generate Namings**: Read `references/generate-namings.md` and update rfc-namings.md
+1. **Generate History**: Read `references/specs/specs-generate-history.md` and update rfc-history.md
+2. **Generate Index**: Read `references/specs/specs-generate-index.md` and update rfc-index.md
+3. **Generate Namings**: Read `references/specs/specs-generate-namings.md` and update rfc-namings.md
 
 ## Output Summary
 
@@ -52,6 +52,15 @@ After completing all steps, provide:
 2. **Warnings Found**: List all warnings (if verbose mode)
 3. **Files Updated**: List of files that were modified
 4. **Recommendations**: Any suggestions for improvement
+
+## Structural Recommendation: Namespaces
+
+When reporting recommendations, apply this health check:
+
+- **Total RFC count ≥ 10, OR ≥ 3 clearly independent services/modules detected** (multiple language manifests, compose services, distinct top-level packages), AND no `namespaces:` declared in `.platonic.yml` → recommend partitioning the specs/impl tree into namespaces. Point the user to `specs-partition` for migrating an existing flat layout (or to `init-plan-modular-specs` for planning new namespaced specs).
+- Existing namespaces but RFCs piling up in undeclared subdirectories → suggest either declaring those directories as namespaces or moving the files via `specs-partition`.
+
+Do not execute the migration as part of `specs-refine` — it is a separate, user-confirmed operation.
 
 ## Execution Order
 
@@ -74,7 +83,7 @@ After completion, verify:
 
 - All dynamic files (history, index, namings) are updated
 - No broken references exist
-- All RFCs comply with `templates/rfc-standard.md`
+- All RFCs comply with `assets/templates/template-rfc-standard.md`
 - Terminology is consistent across files
 
 ## Notes

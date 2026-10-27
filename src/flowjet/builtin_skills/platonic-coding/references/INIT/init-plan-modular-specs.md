@@ -1,6 +1,6 @@
 # Plan Modular Specs
 
-From scan results, propose a modular RFC dependency graph with a bounded number of specs.
+From scan results, propose a modular RFC dependency graph with a bounded number of specs. In multi-service projects, each subsystem additionally becomes a **namespace** (its own directory + ID prefix), so generated specs land in the right place from the start.
 
 ## Objective
 
@@ -13,6 +13,18 @@ Design a small, focused graph of Draft RFCs that captures the existing system's 
 | Scan synthesis | From scan-project.md Phase 5 |
 | Max RFC count | Default: 5. User may override |
 | RFC numbering start | Default: `001` (exactly three numeric characters). Continue in strict sequence unless the user explicitly overrides |
+
+## Namespace Decision
+
+Decide whether the project runs in **namespaced mode** before assigning IDs:
+
+- **Recommend namespaces when**: ≥ 3 independent services/modules detected in the scan (distinct top-level packages with separate deployment units, multiple language manifests), or the project already expects ≥ 10 RFCs
+- **Namespaced mode**: each subsystem (below) maps to one namespace (directory `.platonic/specs/<ns>/`, qualified IDs `RFC-<PREFIX>-NNN` with an independent sequence per namespace). The conceptual design RFC stays at the specs root as a cross-cutting `RFC-NNN`
+- **Single-namespace mode** (default): all RFCs are root-level `RFC-NNN` — identical to pre-3.0 behavior
+
+For each proposed namespace, present 2–4 **prefix candidates** (1–4 uppercase letters) and confirm with the user via `ask_user` — never auto-assign prefixes. Candidate heuristics: service name ≤ 4 letters → direct uppercase (`auth` → AUTH); multi-word → initials (`miracloud gateway` → MGW); long word → vowel-stripped compression (`agentspace` → AGSP). Rules: `^[A-Z]{1,4}$`, unique, `RFC`/`IG` reserved.
+
+If namespaces are adopted, record them in `.platonic.yml` (this is a legitimate reason to create the file) as part of plan confirmation.
 
 ## Modular Planning Principles
 
@@ -67,35 +79,38 @@ From the scan's structural analysis:
 
 ## Output Format
 
-Present the proposed RFC graph to the user as a table and dependency diagram:
+Present the proposed RFC graph to the user as a table and dependency diagram.
 
 ### Table Format
 
 ```markdown
-| RFC | Title | Kind | Summary | Depends On |
-|-----|-------|------|---------|------------|
-| RFC-001 | [System] Vision and Principles | Conceptual | System goals, core principles, taxonomy | — |
-| RFC-002 | [Subsystem A] Architecture | Architecture | Components, data flow, constraints for A | RFC-001 |
-| RFC-003 | [Subsystem B] Architecture | Architecture | Components, data flow, constraints for B | RFC-001 |
+| RFC | Title | Kind | Namespace | Summary | Depends On |
+|-----|-------|------|-----------|---------|------------|
+| RFC-001 | [System] Vision and Principles | Conceptual | — (root) | System goals, core principles, taxonomy | — |
+| RFC-AUTH-001 | [Subsystem A] Architecture | Architecture | auth (AUTH) | Components, data flow, constraints for A | RFC-001 |
+| RFC-AGSP-001 | [Subsystem B] Architecture | Architecture | agentspace (AGSP) | Components, data flow, constraints for B | RFC-001 |
 ```
+
+(Without namespaces, the Namespace column shows "—" for all rows and IDs are plain `RFC-NNN`.)
 
 ### Dependency Diagram
 
 ```
-RFC-001 (Conceptual: System Vision)
-├── RFC-002 (Architecture: Subsystem A)
-└── RFC-003 (Architecture: Subsystem B)
+RFC-001 (Conceptual: System Vision — root)
+├── auth/RFC-AUTH-001 (Architecture: Subsystem A)
+└── agentspace/RFC-AGSP-001 (Architecture: Subsystem B)
 ```
 
 ### Confirmation Prompt
 
-After presenting the plan, ask:
+After presenting the plan, ask via the `ask_user` tool:
 
 > "Here is the proposed RFC structure for your project. Before I generate the specs:
 > 1. Should any subsystems be merged or split?
 > 2. Should any RFC titles be adjusted?
 > 3. Would you like to add Implementation Interface Design specs?
 > 4. Should the total count change?
+> 5. (Namespaced mode) Are the namespace names and prefixes correct?
 >
 > Confirm to proceed, or suggest adjustments."
 
@@ -155,6 +170,6 @@ Total: 5 RFCs (at default max).
 ## Notes
 
 - The plan is a proposal, not a commitment. The user has full control.
-- RFC numbers assigned during planning may change if user adjusts.
-- Recovery proceeds in order: conceptual first, then architecture (by RFC number).
-- After generation, rfc-index.md, rfc-namings.md, and rfc-history.md are updated to reflect all generated specs.
+- RFC numbers assigned during planning may change if user adjusts. In namespaced mode, numbering is per-namespace (`RFC-<PREFIX>-001`, `RFC-<PREFIX>-002`, …) — each namespace starts its own strict sequence; only the root-level conceptual RFC uses the global root sequence
+- Recovery proceeds in order: conceptual first, then architecture (per namespace). Generated RFCs are written directly into their namespace directories
+- After generation, rfc-index.md (root rollup + one local index per namespace), rfc-namings.md, and rfc-history.md are updated to reflect all generated specs

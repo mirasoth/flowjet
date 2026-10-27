@@ -85,7 +85,7 @@ Add entry to guide's revision history (if present) or create one:
 
 ### Step 6: Re-validate
 
-Run `validate-guide.md` operation to ensure:
+Run `impl-validate-guide.md` operation to ensure:
 - No contradictions with updated RFC
 - All new requirements are addressed
 - No references to removed RFC content

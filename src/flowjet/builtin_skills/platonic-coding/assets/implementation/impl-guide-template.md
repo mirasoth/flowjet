@@ -232,15 +232,82 @@ Gate test-only code behind feature flags:
 
 ---
 
-## 10. Migration / Compatibility
+## 10. Coding Plan
+
+{{PLAN_SUMMARY}}
+
+**Total Tasks**: {{TOTAL_TASKS}}
+**Estimated Files**: {{ESTIMATED_FILES}} new / {{ESTIMATED_MODIFIED}} modified
+
+The coding plan breaks this guide into an ordered sequence of implementation tasks, each paired with its tests. It lives inside this guide (not as a separate artifact) and must stay consistent with the architecture above.
+
+### 10.1 Task Breakdown
+
+#### Task {{TASK_NUMBER}}: {{TASK_TITLE}}
+
+**Action**: Create / Modify
+**File(s)**: `{{FILE_PATH}}`
+**Guide Section**: Section {{GUIDE_SECTION}}
+**Description**: {{TASK_DESCRIPTION}}
+
+**Deliverables**:
+- {{DELIVERABLE_1}}
+- {{DELIVERABLE_2}}
+
+**Dependencies**: {{TASK_DEPENDENCIES}}
+
+#### Task {{TASK_NUMBER}}: Unit Tests for {{COMPONENT}}
+
+**Action**: Create
+**File(s)**: `{{TEST_FILE_PATH}}`
+**Guide Section**: Section 9.1
+**Description**: Unit tests for {{COMPONENT}}
+
+**Test Cases**:
+- {{TEST_CASE_1}}
+- {{TEST_CASE_2}}
+- {{TEST_CASE_3}}
+
+**Dependencies**: Task {{IMPL_TASK_NUMBER}}
+
+#### Task {{TASK_NUMBER}}: Integration Tests
+
+**Action**: Create
+**File(s)**: `{{INTEGRATION_TEST_PATH}}`
+**Guide Section**: Section 9.2
+**Description**: Integration tests for cross-component behavior
+
+**Test Scenarios**:
+- {{SCENARIO_1}}
+- {{SCENARIO_2}}
+
+**Dependencies**: {{ALL_IMPL_TASKS}}
+
+### 10.2 Execution Order
+
+1. {{ORDERED_TASK_1}}
+2. {{ORDERED_TASK_2}}
+3. {{ORDERED_TASK_3}}
+
+### 10.3 Verification Checklist
+
+- [ ] All tasks completed
+- [ ] Project builds without errors
+- [ ] Unit tests pass
+- [ ] Integration tests pass
+- [ ] All RFC requirements covered (see Appendix A)
+
+---
+
+## 11. Migration / Compatibility
 
 {{MIGRATION_DESCRIPTION}}
 
-### 10.1 Breaking Changes
+### 11.1 Breaking Changes
 
 {{BREAKING_CHANGES_DESCRIPTION}}
 
-### 10.2 Migration Path
+### 11.2 Migration Path
 
 {{MIGRATION_PATH_DESCRIPTION}}
 

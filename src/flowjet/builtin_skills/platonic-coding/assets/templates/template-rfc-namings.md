@@ -31,6 +31,5 @@ Authoritative terminology reference for {{PROJECT_NAME}} RFC specifications.
 
 ## Related Documents
 
-- [rfc-standard.md](templates/rfc-standard.md) - RFC process and conventions
 - [rfc-index.md](rfc-index.md) - RFC index
 - [rfc-history.md](rfc-history.md) - Change history

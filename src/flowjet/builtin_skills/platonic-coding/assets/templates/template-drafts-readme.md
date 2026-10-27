@@ -21,7 +21,7 @@ Design Draft (this directory)
 RFC Specification (specs/)
         |
         v
-Implementation Guide (docs/impl/)
+Implementation Guide (.platonic/impl/)
         |
         v
 Code
@@ -42,7 +42,7 @@ Or create a draft manually -- any markdown file in this directory works.
 Once a draft captures the shared understanding, continue Phase 1 to formalize it into an RFC:
 
 ```
-Use platonic-coding workflow to proceed with the draft at docs/drafts/<name>.md
+Use platonic-coding workflow to proceed with the draft at .platonic/drafts/<name>.md
 ```
 
 This converts the draft into a formal RFC specification within Phase 1.

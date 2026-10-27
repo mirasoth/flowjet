@@ -1,0 +1,21 @@
+{
+  "name": "Evidence-First",
+  "description": "Rigorous research from literature collection to survey; THINK optional.",
+  "graph": {
+    "entry_points": ["collect"],
+    "nodes": ["analyze", "synth"],
+    "edges": ["collect → analyze", "analyze → synth"]
+  },
+  "skill_gates": {
+    "collect": "gate_m",
+    "analyze": "gate_a",
+    "synth": "gate_d"
+  },
+  "contract_overrides": {},
+  "recommendations": {
+    "agency": "semi-automated",
+    "estimated_time": "2-4 days",
+    "synthesis_mode": "survey",
+    "description": "Systematic review without mandatory THINK checkpoints."
+  }
+}

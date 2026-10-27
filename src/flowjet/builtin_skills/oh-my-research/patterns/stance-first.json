@@ -1,0 +1,26 @@
+{
+  "name": "Stance-First",
+  "description": "Optional path: frame a research stance first, then collect and analyze into a report.",
+  "graph": {
+    "entry_points": ["decide"],
+    "nodes": ["collect", "analyze", "synth"],
+    "edges": ["decide → collect", "collect → analyze", "analyze → synth"]
+  },
+  "skill_gates": {
+    "decide": "gate_b",
+    "collect": "gate_m",
+    "analyze": "gate_a",
+    "synth": "gate_d"
+  },
+  "contract_overrides": {
+    "decide": {
+      "requires": []
+    }
+  },
+  "recommendations": {
+    "agency": "semi-automated",
+    "estimated_time": "2-3 days",
+    "synthesis_mode": "report",
+    "description": "Hypothesis-driven write-ups; decision is claim/stance framing, not coding."
+  }
+}
