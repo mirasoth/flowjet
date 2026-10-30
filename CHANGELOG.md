@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.11] — 2026-10-30
+
 ### Added
 
 - **Reserved-pad reclaim (`sandbox.reserved_pad_path`).** The guest image reserves 3 GiB as a sparse `/pad.img` so the ArcBox rootfs formatter sizes real headroom into every sandbox; capacity alone doesn't help (the pad occupies what it reserves), so `open_workspace` deletes it once per created or adopted sandbox, before the `min_free_bytes` probe, converting reserved capacity into free space. Absolute guest path; empty (default) disables. Idempotent and fail-open: a broken `rm` leaves image-capacity slack, never blocks a turn. Pair with `agentspaceFlowjet.sandbox.minFreeBytes` (512 MiB) and the ArcBox dmsetup CoW deployment in `deploy/README.md`.

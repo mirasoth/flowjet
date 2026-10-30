@@ -33,11 +33,16 @@ jobs:
 
       - name: Guard — soothe-nano must be on PyPI
         run: |
-          if ! curl -sf "https://pypi.org/pypi/soothe-nano/1.3.1/json" >/dev/null; then
-            echo "soothe-nano 1.3.1 must be available on PyPI before releasing flowjet"
+          SOOTHE_NANO_VERSION="$(uv tree --depth 1 2>/dev/null | grep -oE 'soothe-nano v[0-9.]+' | head -1 | cut -d'v' -f2)"
+          if [ -z "$SOOTHE_NANO_VERSION" ]; then
+            SOOTHE_NANO_VERSION="$(grep -A2 'name = "soothe-nano"' uv.lock | grep version | head -1 | sed 's/.*= "\(.*\)"/\1/')"
+          fi
+          echo "Resolved soothe-nano version from lockfile: $SOOTHE_NANO_VERSION"
+          if ! curl -sf "https://pypi.org/pypi/soothe-nano/${SOOTHE_NANO_VERSION}/json" >/dev/null; then
+            echo "soothe-nano ${SOOTHE_NANO_VERSION} must be available on PyPI before releasing flowjet"
             exit 1
           fi
-          echo "soothe-nano 1.3.1 is available on PyPI"
+          echo "soothe-nano ${SOOTHE_NANO_VERSION} is available on PyPI"
 
       - name: Read version
         id: version
