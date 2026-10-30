@@ -27,7 +27,7 @@ classifiers = [
 ]
 # Single-dependency CLI wheel; HTTP service deps live in the `server` extra.
 dependencies = [
-    "soothe>=1.2.4,<2.0.0",
+    "soothe>=1.2.6,<2.0.0",
     # TTY rendering for answers/tables; imported lazily, unused when piped.
     "rich>=13.0",
 ]
