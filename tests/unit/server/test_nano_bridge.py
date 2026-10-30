@@ -540,6 +540,103 @@ async def test_wire_tool_call_update_does_not_duplicate_tool_started():
 
 
 @pytest.mark.asyncio
+async def test_tool_arg_refreshes_stream_while_args_grow(monkeypatch):
+    """Partial args keep arriving; refreshes follow at a bounded rate.
+
+    The refresh gate is a per-call time throttle (one frame per
+    ``TOOL_ARGS_REFRESH_INTERVAL_S``), not a once-per-call set — otherwise a
+    long tool-arg stream shows its first parsed key and then goes dark until
+    completion. With the interval zeroed every parseable growth refreshes.
+    """
+    from flowjet.core.bridges.nano import mapping
+
+    monkeypatch.setattr(mapping, "TOOL_ARGS_REFRESH_INTERVAL_S", 0.0)
+    events = await collect(
+        [
+            message_chunk(
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[{"name": "write_file", "args": "", "id": "c1", "index": 0}],
+                )
+            ),
+            message_chunk(
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {"name": "", "args": '{"file_path": "a.txt",', "id": "c1", "index": 0}
+                    ],
+                )
+            ),
+            message_chunk(
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {"name": "", "args": '"content": "hi"}', "id": "c1", "index": 0}
+                    ],
+                )
+            ),
+            message_chunk(ToolMessage(content="ok", tool_call_id="c1", name="write_file")),
+        ]
+    )
+
+    refresh = [
+        e
+        for e in events
+        if isinstance(e, Progress) and (e.raw or {}).get("type") == "soothe.tool.started"
+    ]
+    assert len(refresh) == 2
+    assert refresh[0].raw["tool_call_id"] == "c1"
+    assert refresh[0].raw["args"] == {"file_path": "a.txt"}
+    assert refresh[1].raw["args"] == {"file_path": "a.txt", "content": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_tool_arg_refreshes_are_rate_limited_by_the_interval(monkeypatch):
+    """Back-to-back arg growth within one interval yields a single refresh.
+
+    Partial JSON grows on every token; without the throttle the event stream
+    would flood. One frame per ``TOOL_ARGS_REFRESH_INTERVAL_S`` per call.
+    """
+    events = await collect(
+        [
+            message_chunk(
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[{"name": "write_file", "args": "", "id": "c1", "index": 0}],
+                )
+            ),
+            message_chunk(
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {"name": "", "args": '{"file_path": "a.txt",', "id": "c1", "index": 0}
+                    ],
+                )
+            ),
+            message_chunk(
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {"name": "", "args": '"content": "hi"}', "id": "c1", "index": 0}
+                    ],
+                )
+            ),
+            message_chunk(ToolMessage(content="ok", tool_call_id="c1", name="write_file")),
+        ]
+    )
+
+    refresh = [
+        e
+        for e in events
+        if isinstance(e, Progress) and (e.raw or {}).get("type") == "soothe.tool.started"
+    ]
+    # The test runs well inside one 200 ms interval, so only the first
+    # parseable growth emits a frame.
+    assert len(refresh) == 1
+    assert refresh[0].raw["args"] == {"file_path": "a.txt"}
+
+
+@pytest.mark.asyncio
 async def test_wire_tool_call_update_skips_quiet_tools():
     """write_todos wire updates do not surface as tool calls (plan bookkeeping)."""
     events = await collect(

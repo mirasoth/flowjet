@@ -13,6 +13,7 @@ from flowjet.core.events import RunFailed, RunRequest
 from flowjet.core.ids import new_run_id
 from flowjet.core.protocol import RuntimeBackend
 from flowjet.core.runtime.isolation.errors import IsolationError
+from flowjet.server.clarification import ClarificationFormat
 from flowjet.server.openai_compat.errors import OpenAIError
 from flowjet.server.openai_compat.projection import ProjectionEngine
 from flowjet.server.openai_compat.schemas import (
@@ -36,9 +37,15 @@ def format_chat_sse(payload: dict[str, Any]) -> str:
 
 
 class ResponseService:
-    def __init__(self, backend: RuntimeBackend, store: InMemoryRunStore | None = None) -> None:
+    def __init__(
+        self,
+        backend: RuntimeBackend,
+        store: InMemoryRunStore | None = None,
+        clarification_format: ClarificationFormat = "markdown",
+    ) -> None:
         self.backend = backend
         self.store = store or InMemoryRunStore()
+        self.clarification_format = clarification_format
 
     async def list_models(self) -> dict[str, Any]:
         models = await self.backend.list_models()
@@ -109,7 +116,7 @@ class ResponseService:
         session = opts.session if opts else None
         metadata = merge_flowjet_metadata(opts)
         response_id = new_run_id()
-        engine = ProjectionEngine(projection, response_id, body.model)
+        engine = ProjectionEngine(projection, response_id, body.model, self.clarification_format)
 
         request = RunRequest(
             model=body.model,
@@ -209,7 +216,7 @@ class ResponseService:
         session = opts.session if opts else None
         metadata = merge_flowjet_metadata(opts)
         response_id = f"chatcmpl_{uuid4().hex}"
-        engine = ProjectionEngine(projection, response_id, body.model)
+        engine = ProjectionEngine(projection, response_id, body.model, self.clarification_format)
 
         request = RunRequest(
             model=body.model,

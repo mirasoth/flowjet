@@ -9,3 +9,10 @@ FLOWJET_API_KEY=
 # Optional: override published port / bind IP (defaults: 8618 / 127.0.0.1)
 # FLOWJET_PORT_PUBLISHED=8618
 # FLOWJET_BIND_IP=127.0.0.1
+
+# Optional: how an ask_user pause reaches clients (default: markdown).
+#   markdown — Markdown agent message (historical wire)
+#   json     — structured envelope (ACP: embedded JSON resource block;
+#              OpenAI surface: response.flowjet.clarification SSE event)
+#   both     — Markdown + structured payload
+# FLOWJET_CLARIFICATION_FORMAT=markdown

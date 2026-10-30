@@ -1,4 +1,4 @@
-"""Unit tests for the six ACP event-stream enhancements.
+"""Unit tests for the ACP event-stream enhancements.
 
 Covers:
 1. Narration → agent_thought_chunk (live reasoning)
@@ -7,6 +7,7 @@ Covers:
 4. Tool kind inference (read/edit/execute/search vs always "other")
 5. Progress.raw step payloads → AgentPlanUpdate (structured plan)
 6. Progress.raw → agent_thought_chunk _meta (richer rendering)
+7. In-flight tool-arg refreshes → tool_call_update (status="in_progress")
 """
 
 from __future__ import annotations
@@ -533,3 +534,71 @@ async def test_full_event_stream_exercises_all_enhancements():
     # Response carries correct output text and usage.
     assert response.stopReason == "end_turn"
     assert response.usage.totalTokens == 10
+
+
+# ---------------------------------------------------------------------------
+# Enhancement 7: in-flight tool-arg refreshes → tool_call_update
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tool_arg_refreshes_reach_clients_in_progress():
+    """In-flight tool-arg refreshes update the tool row while the tool runs.
+
+    The bridge emits Progress(``soothe.tool.started``) frames while partial
+    tool args stream (rate-limited per call). Each must project to a
+    ``tool_call_update`` with ``status="in_progress"`` and the streamed args
+    as ``raw_input`` so clients render the running tool call instead of a
+    silent row until completion.
+    """
+    events = [
+        RunStarted(run_id="r1", model="default"),
+        ToolStarted(tool="write_file", call_id="c1"),
+        Progress(
+            stage="Tool",
+            message="Writing a.txt",
+            raw={
+                "type": "soothe.tool.started",
+                "tool": "write_file",
+                "tool_call_id": "c1",
+                "args": {"file_path": "/tmp/a.txt"},
+            },
+        ),
+        Progress(
+            stage="Tool",
+            message="Writing a.txt",
+            raw={
+                "type": "soothe.tool.started",
+                "tool": "write_file",
+                "tool_call_id": "c1",
+                "args": {"file_path": "/tmp/a.txt", "content": "hi"},
+            },
+        ),
+        ToolCompleted(tool="write_file", ok=True, call_id="c1"),
+        RunCompleted(output_text="done"),
+    ]
+    _, client, _ = await _run_prompt(events)
+
+    tool_updates = [
+        u for u in client.updates if getattr(u, "session_update", None) == "tool_call_update"
+    ]
+    # Two in-flight refreshes + the terminal completion update.
+    assert len(tool_updates) == 3
+    first, second, terminal = tool_updates
+    assert first.tool_call_id == "c1"
+    assert first.status == "in_progress"
+    assert first.raw_input == {"file_path": "/tmp/a.txt"}
+    assert first.locations[0].path == "/tmp/a.txt"
+    assert second.status == "in_progress"
+    assert second.raw_input == {"file_path": "/tmp/a.txt", "content": "hi"}
+    assert terminal.status == "completed"
+
+    # Only the first refresh of the call becomes a thought chunk; later
+    # refreshes must not flood the thought log with repeated summaries.
+    refresh_thoughts = [
+        u
+        for u in client.updates
+        if getattr(u, "session_update", None) == "agent_thought_chunk"
+        and (u.field_meta or {}).get("type") == "soothe.tool.started"
+    ]
+    assert len(refresh_thoughts) == 1

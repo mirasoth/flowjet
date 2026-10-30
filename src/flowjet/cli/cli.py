@@ -35,6 +35,33 @@ _BROWSER_USE_SETUP_LOGGING = "BROWSER_USE_SETUP_LOGGING"
 _FJ_CONSOLE_HANDLER = "fj-console"
 _FJ_FILE_HANDLER = "fj-file"
 _LOG_FILE_ENV = "FJ_LOG_FILE"
+_LOG_LEVEL_ENV = "FJ_LOG_LEVEL"
+
+_LEVEL_NAMES = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "warn": logging.WARNING,
+    "error": logging.ERROR,
+}
+
+
+def _log_level_from_env() -> int | None:
+    """Resolve ``FJ_LOG_LEVEL`` to a stdlib level; None keeps the default.
+
+    ``debug`` (or any standard name, case-insensitive) lifts the WARNING
+    floor for the console, the ``FJ_LOG_FILE`` mirror, and the root logger —
+    used to observe per-tool stream latency from the nano bridge
+    (``flowjet.core.bridges.nano.mapping`` DEBUG records).
+    """
+    raw = os.environ.get(_LOG_LEVEL_ENV, "").strip().lower()
+    if not raw:
+        return None
+    level = _LEVEL_NAMES.get(raw)
+    if level is None:
+        _logger.warning("FJ_LOG_LEVEL=%r is not a standard level name; ignored", raw)
+        return None
+    return level
 
 
 class _CompactConsoleFormatter(logging.Formatter):
@@ -70,21 +97,31 @@ def configure_cli_logging(*, verbose: bool = False) -> None:
     - When ``verbose``, show WARNING+ as single-line messages on stderr.
     - When ``FJ_LOG_FILE`` is set, mirror WARNING+ (with full tracebacks) to
       that rotating file for post-mortem diagnosis of silent failures.
+    - When ``FJ_LOG_LEVEL`` is set to a standard level name (e.g. ``debug``),
+      the WARNING floor is lifted for root, the ``FJ_LOG_FILE`` mirror, and
+      (with ``-v``) the console — DEBUG records such as the nano bridge's
+      per-tool stream timings then become observable. Recommended pairing:
+      ``FJ_LOG_LEVEL=debug FJ_LOG_FILE=<path>`` so the console progress
+      line stays clean.
     """
     os.environ.setdefault(_BROWSER_USE_SETUP_LOGGING, "false")
     _remove_root_console_handlers()
     root = logging.getLogger()
+    env_level = _log_level_from_env()
+    console_level = env_level if env_level is not None else logging.WARNING
     if verbose:
         handler = logging.StreamHandler(sys.stderr)
         handler.set_name(_FJ_CONSOLE_HANDLER)
-        handler.setLevel(logging.WARNING)
+        handler.setLevel(console_level)
         handler.setFormatter(_CompactConsoleFormatter("%(message)s"))
         root.addHandler(handler)
     elif not root.handlers:
         null = logging.NullHandler()
         null.set_name(_FJ_CONSOLE_HANDLER)
         root.addHandler(null)
-    if root.level < logging.WARNING:
+    if env_level is not None:
+        root.setLevel(env_level)
+    elif root.level < logging.WARNING:
         root.setLevel(logging.WARNING)
     _attach_file_log_handler(root)
 
@@ -95,6 +132,11 @@ def _attach_file_log_handler(root: logging.Logger) -> None:
     Unlike the compact console formatter, the file keeps full tracebacks, so
     ``logger.exception`` records from soothe/plugins stay diagnosable after a
     crash — including for deaths the CLI itself cannot report (SIGKILL).
+
+    ``FJ_LOG_LEVEL`` (e.g. ``debug``) lowers this handler's level so the
+    same file captures DEBUG records — the recommended way to observe the
+    nano bridge's tool stream timings without smashing the console
+    progress line.
     """
     if any(getattr(h, "name", None) == _FJ_FILE_HANDLER for h in root.handlers):
         return
@@ -107,7 +149,8 @@ def _attach_file_log_handler(root: logging.Logger) -> None:
         _logger.warning("FJ_LOG_FILE is not writable: %s", path)
         return
     handler.set_name(_FJ_FILE_HANDLER)
-    handler.setLevel(logging.WARNING)
+    env_level = _log_level_from_env()
+    handler.setLevel(env_level if env_level is not None else logging.WARNING)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-8s [%(name)s] %(message)s"))
     root.addHandler(handler)
 

@@ -1194,6 +1194,159 @@ async def test_open_skips_probe_when_watermark_disabled(
         await manager.shutdown()
 
 
+# ---------------------------------------------------------------------------
+# Reserved-pad reclaim (sandbox disk headroom)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingExecute:
+    """Patch target recording ``ArcBoxBackend.execute`` commands."""
+
+    def __init__(self, *, exit_code: int = 0, error: Exception | None = None) -> None:
+        self.commands: list[str] = []
+        self._exit_code = exit_code
+        self._error = error
+
+    def __call__(self, command: str) -> object:
+        from types import SimpleNamespace
+
+        self.commands.append(command)
+        if self._error is not None:
+            raise self._error
+        return SimpleNamespace(output="", exit_code=self._exit_code)
+
+
+def _patch_execute(monkeypatch: pytest.MonkeyPatch, recorder: _RecordingExecute) -> None:
+    from soothe_nano.sandbox import ArcBoxBackend
+
+    monkeypatch.setattr(ArcBoxBackend, "execute", recorder, raising=False)
+
+
+@pytest.mark.asyncio
+async def test_open_reclaims_reserved_pad_once_per_sandbox(
+    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = make_workspace(tmp_path)
+    manager = ArcBoxToolSandboxManager(
+        ToolSandboxSettings(enabled=True, image="img:1", reserved_pad_path="/pad.img")
+    )
+    recorder = _RecordingExecute()
+    _patch_execute(monkeypatch, recorder)
+    try:
+        await manager.open_workspace(str(ws))
+        await manager.open_workspace(str(ws))  # reused lease: no second reclaim
+        assert recorder.commands == ["rm -f -- /pad.img"]
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_open_skips_reclaim_when_unconfigured(
+    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = make_workspace(tmp_path)
+    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    recorder = _RecordingExecute()
+    _patch_execute(monkeypatch, recorder)
+
+    def unexpected_probe(self: object, path: str | None = None) -> int | None:
+        raise AssertionError("probe must not run when min_free_bytes is 0")
+
+    _patch_probe(monkeypatch, unexpected_probe)
+    try:
+        await manager.open_workspace(str(ws))
+        assert recorder.commands == []
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_reclaim_failure_fails_open(
+    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = make_workspace(tmp_path)
+    manager = ArcBoxToolSandboxManager(
+        ToolSandboxSettings(enabled=True, image="img:1", reserved_pad_path="/pad.img")
+    )
+    recorder = _RecordingExecute(error=RuntimeError("transport gone"))
+    _patch_execute(monkeypatch, recorder)
+    try:
+        # A broken reclaim must never block a turn.
+        await manager.open_workspace(str(ws))
+        assert manager._leases[str(ws)].active_runs == 1
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_reclaim_nonzero_exit_fails_open(
+    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = make_workspace(tmp_path)
+    manager = ArcBoxToolSandboxManager(
+        ToolSandboxSettings(enabled=True, image="img:1", reserved_pad_path="/pad.img")
+    )
+    recorder = _RecordingExecute(exit_code=1)
+    _patch_execute(monkeypatch, recorder)
+    try:
+        await manager.open_workspace(str(ws))
+        assert manager._leases[str(ws)].active_runs == 1
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_reclaimed_sandbox_passes_watermark_probe(
+    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pad is gone before the probe: the watermark sees reclaimed space."""
+    ws = make_workspace(tmp_path)
+    manager = ArcBoxToolSandboxManager(
+        ToolSandboxSettings(
+            enabled=True, image="img:1", min_free_bytes=1024, reserved_pad_path="/pad.img"
+        )
+    )
+    recorder = _RecordingExecute()
+    _patch_execute(monkeypatch, recorder)
+    order: list[str] = []
+
+    def fake_probe(self: object, path: str | None = None) -> int | None:
+        # Reclaimed space: without the pad the guest has 3 GiB free.
+        order.append("probe")
+        return 3 * 1024**3
+
+    def probing_execute(backend: object, command: str) -> object:
+        order.append(command)
+        return recorder(command)
+
+    _patch_execute(monkeypatch, probing_execute)
+    _patch_probe(monkeypatch, fake_probe)
+    try:
+        await manager.open_workspace(str(ws))
+        assert order == ["rm -f -- /pad.img", "probe"]
+    finally:
+        await manager.shutdown()
+
+
+def test_reserved_pad_path_defaults_to_disabled() -> None:
+    assert ToolSandboxSettings().reserved_pad_path == ""
+    assert (
+        SandboxSettingsLoader.parse_section({"enabled": True, "image": "img"}).reserved_pad_path
+        == ""
+    )
+    assert (
+        SandboxSettingsLoader.parse_section(
+            {"enabled": True, "image": "img", "reserved_pad_path": "/pad.img"}
+        ).reserved_pad_path
+        == "/pad.img"
+    )
+
+
+def test_reserved_pad_path_relative_rejected() -> None:
+    with pytest.raises(ValueError, match="reserved_pad_path"):
+        _ = ToolSandboxSettings(reserved_pad_path="pad.img")
+
+
 def test_probe_prefers_nano_helper_over_execute_fallback() -> None:
 
     class HelperBackend:

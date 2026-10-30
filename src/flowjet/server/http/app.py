@@ -97,7 +97,11 @@ def create_app(
     settings = settings or Settings()
     backend = backend or build_backend(settings)
     store = InMemoryRunStore()
-    service = ResponseService(backend=backend, store=store)
+    service = ResponseService(
+        backend=backend,
+        store=store,
+        clarification_format=settings.clarification_format,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -151,7 +155,9 @@ def create_app(
     # ACP (Agent Client Protocol) over WebSocket at /acp.
     from acp.http.server import AcpServer
 
-    acp_agent_factory = build_acp_agent_factory(backend)
+    acp_agent_factory = build_acp_agent_factory(
+        backend, clarification_format=settings.clarification_format
+    )
     acp_server = AcpServer(acp_agent_factory)
     app.state.acp_server = acp_server
     app.include_router(create_acp_router(acp_server))

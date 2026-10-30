@@ -19,9 +19,12 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from acp.helpers import (
+    embedded_text_resource,
     plan_entry,
+    resource_block,
     start_tool_call,
     text_block,
+    update_agent_message,
     update_agent_message_text,
     update_agent_thought,
     update_agent_thought_text,
@@ -44,6 +47,13 @@ from flowjet.core.events import (
 )
 from flowjet.core.protocol import RuntimeBackend
 from flowjet.server import __version__ as flowjet_version
+from flowjet.server.clarification import (
+    CLARIFICATION_URI_PREFIX,
+    ClarificationFormat,
+    build_clarification_payload,
+    clarification_json_text,
+    render_clarification_markdown,
+)
 
 if TYPE_CHECKING:
     from acp import Client
@@ -228,6 +238,31 @@ def _tool_raw_input(args: dict[str, Any] | None) -> dict[str, Any] | None:
     return args
 
 
+def _clarification_message_chunk(
+    questions: tuple[dict[str, Any], ...],
+    interrupt_ids: tuple[str, ...],
+) -> Any:
+    """Build the structured ``ask_user`` chunk for the ACP surface.
+
+    An ``agent_message_chunk`` whose content is an embedded JSON resource
+    block — the ACP-native structured channel. Frontends discriminate on
+    ``content.type == "resource"`` plus the ``application/json`` mime type
+    (the ``flowjet://clarification/`` URI prefix carries the primary interrupt
+    id for correlation); generic hosts render it as an embedded resource.
+    """
+    payload = build_clarification_payload(questions, interrupt_ids)
+    primary_id = payload["interrupt_ids"][0] if payload["interrupt_ids"] else uuid4().hex
+    return update_agent_message(
+        resource_block(
+            embedded_text_resource(
+                uri=f"{CLARIFICATION_URI_PREFIX}{primary_id}",
+                text=clarification_json_text(payload),
+                mime_type="application/json",
+            )
+        )
+    )
+
+
 class FlowJetAcpAgent:
     """ACP ``Agent`` backed by a flowjet ``RuntimeBackend``.
 
@@ -243,9 +278,15 @@ class FlowJetAcpAgent:
     ``RunRequest.metadata["workspace"]`` on every turn.
     """
 
-    def __init__(self, backend: RuntimeBackend, client: Client | None = None) -> None:
+    def __init__(
+        self,
+        backend: RuntimeBackend,
+        client: Client | None = None,
+        clarification_format: ClarificationFormat = "markdown",
+    ) -> None:
         self._backend = backend
         self._client = client
+        self._clarification_format: ClarificationFormat = clarification_format
         self._sessions: set[str] = set()
         # Session id → the cwd the client asked that session to run in.
         self._session_cwd: dict[str, str] = {}
@@ -374,6 +415,9 @@ class FlowJetAcpAgent:
         )
 
         output_text = ""
+        # Tool calls whose in-flight arg refresh already produced one
+        # agent_thought_chunk (see the Progress branch in _drive).
+        tool_refresh_thoughts: set[str] = set()
         # ACP PromptResponse.stop_reason is a closed Literal — keep the local
         # typed the same way so assignments cannot drift outside the enum.
         stop_reason: Literal[
@@ -402,10 +446,45 @@ class FlowJetAcpAgent:
                             session_id,
                             update_plan(plan_entries),
                         )
+                    raw = event.raw if isinstance(event.raw, dict) else None
+                    tool_refresh = raw is not None and raw.get("type") == "soothe.tool.started"
+                    if tool_refresh and raw is not None and client is not None:
+                        # Enhancement 7: project in-flight tool-arg refreshes
+                        # into ToolCallProgress (status="in_progress",
+                        # raw_input=streamed args) so clients render the tool
+                        # call while it streams/executes — not only at
+                        # completion. The bridge rate-limits refreshes per
+                        # call, so this fires a bounded number of times.
+                        args = raw.get("args") if isinstance(raw.get("args"), dict) else None
+                        call_id = str(raw.get("tool_call_id") or "").strip()
+                        tool_name = str(raw.get("tool") or "").strip()
+                        if call_id or tool_name:
+                            await client.session_update(
+                                session_id,
+                                update_tool_call(
+                                    tool_call_id=call_id or tool_name,
+                                    status="in_progress",
+                                    locations=_tool_locations(args),
+                                    raw_input=_tool_raw_input(args),
+                                ),
+                            )
                     # Enhancement 6: pass the raw payload through to the
                     # agent_thought_chunk _meta so ACP clients that understand
                     # the soothe vocabulary can render richer status lines.
+                    # Tool-arg refreshes skip this after the first one per
+                    # call: the ToolCallProgress above already carries the
+                    # args, and repeating the one-line summary would flood
+                    # the thought log at refresh cadence.
                     if client is not None:
+                        thought_key = (
+                            str((raw or {}).get("tool_call_id") or (raw or {}).get("tool") or "")
+                            if tool_refresh
+                            else None
+                        )
+                        if thought_key is not None and thought_key in tool_refresh_thoughts:
+                            continue
+                        if thought_key is not None:
+                            tool_refresh_thoughts.add(thought_key)
                         thought = update_agent_thought(text_block(event.message))
                         if event.raw:
                             thought.field_meta = event.raw
@@ -473,16 +552,29 @@ class FlowJetAcpAgent:
                         # just a thought: hosts accumulate message chunks as the
                         # turn's reply, so a clarification turn would otherwise
                         # end with no content at all (thoughts are intermediate
-                        # narration). The CLI renders the same block.
+                        # narration). Which chunk(s) travel is governed by
+                        # FLOWJET_CLARIFICATION_FORMAT:
+                        #   markdown — the Markdown text chunk (historical wire)
+                        #   json     — one embedded JSON resource block carrying
+                        #              the structured questions for frontends
+                        #   both     — Markdown chunk + resource block (frontends
+                        #              dedupe via the envelope interrupt_ids)
                         if event.questions:
-                            from flowjet.cli.stream import format_questions_markdown
-
-                            block = format_questions_markdown(event.questions)
-                            await client.session_update(
-                                session_id,
-                                update_agent_message_text(block),
-                            )
-                            output_text += block
+                            fmt = self._clarification_format
+                            if fmt in ("markdown", "both"):
+                                block = render_clarification_markdown(event.questions)
+                                await client.session_update(
+                                    session_id,
+                                    update_agent_message_text(block),
+                                )
+                                output_text += block
+                            if fmt in ("json", "both"):
+                                await client.session_update(
+                                    session_id,
+                                    _clarification_message_chunk(
+                                        event.questions, event.interrupt_ids
+                                    ),
+                                )
                 elif isinstance(event, RunCompleted):
                     output_text = event.output_text or output_text
                     usage_info = event.usage
@@ -576,10 +668,17 @@ class FlowJetAcpAgent:
         pass
 
 
-def build_acp_agent_factory(backend: RuntimeBackend):
+def build_acp_agent_factory(
+    backend: RuntimeBackend,
+    clarification_format: ClarificationFormat = "markdown",
+):
     """Return an ``AgentFactory``: ``Client → FlowJetAcpAgent``."""
 
     def factory(client: Client) -> FlowJetAcpAgent:
-        return FlowJetAcpAgent(backend=backend, client=client)
+        return FlowJetAcpAgent(
+            backend=backend,
+            client=client,
+            clarification_format=clarification_format,
+        )
 
     return factory

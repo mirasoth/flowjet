@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -79,6 +80,18 @@ class Settings(BaseSettings):
     # restarts — and ``ask_user`` pauses become resumable. "off" restores the
     # legacy behavior (every turn starts a fresh conversation).
     server_checkpointer: str = "auto"
+
+    # Clarification (``ask_user`` pause) egress format. ``markdown`` (default)
+    # renders the questions as a Markdown agent message — byte-identical to
+    # the historical wire, so generic ACP hosts see no change. ``json``
+    # delivers the structured payload instead (ACP: embedded JSON resource
+    # block in an ``agent_message_chunk``; OpenAI-compatible surface:
+    # ``response.flowjet.clarification`` SSE event) so frontends can render
+    # interactive option widgets. ``both`` sends the Markdown block plus the
+    # structured payload (frontends dedupe via the envelope ``interrupt_ids``).
+    # The answer direction never changes: the next prompt text resumes the
+    # paused graph.
+    clarification_format: Literal["markdown", "json", "both"] = "markdown"
 
     def model_ids(self) -> list[str]:
         return [m.strip() for m in self.models.split(",") if m.strip()]

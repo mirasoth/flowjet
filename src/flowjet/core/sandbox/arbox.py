@@ -680,6 +680,11 @@ class ArcBoxToolSandboxManager:
                 seeded = True
             if seeded:
                 lease.active_runs = carried_runs
+            if seeded and self._settings.reserved_pad_path:
+                # A fresh (or adopted) sandbox still carries the image's
+                # reserved pad file; reclaim it once so the watermark probe
+                # sees the real free space and the agent gets the headroom.
+                await self._reclaim_reserved_pad(workspace, lease)
             lease.active_runs += 1
             lease.last_used = time.monotonic()
             if lease.active_runs > 1 and not seeded:
@@ -698,6 +703,49 @@ class ArcBoxToolSandboxManager:
                 lease.adopted = False
             lease.manifest = await self._stager.push(workspace, lease.sandbox, lease.manifest)
             await self._ensure_free_disk(workspace, lease)
+
+    async def _reclaim_reserved_pad(self, workspace: str, lease: _SandboxLease) -> None:
+        """Delete the image's reserved pad file once, on a fresh sandbox.
+
+        The guest image reserves disk headroom as a sparse pad file so the
+        ArcBox rootfs formatter sizes the template's capacity to fit; the pad
+        itself occupies that space, so the capacity is not usable until it is
+        deleted. Runs once per sandbox (``seeded`` only — a reused lease was
+        already reclaimed), is idempotent (``rm -f``), and fails open: a broken
+        reclaim only leaves the sandbox at the image-capacity slack, never
+        blocks a turn.
+        """
+        backend = self.backend_for(workspace)
+        pad = self._settings.reserved_pad_path
+        command = f"rm -f -- {shlex.quote(pad)}"
+        try:
+            response = await asyncio.to_thread(backend.execute, command)
+        except Exception:  # noqa: BLE001 -- reclaim is best effort by contract
+            logger.warning(
+                "ArcBox reserved-pad reclaim failed (workspace=%s, sandbox=%s, pad=%s); "
+                "continuing with image-capacity slack",
+                workspace,
+                lease.sandbox.id,
+                pad,
+                exc_info=True,
+            )
+            return
+        if getattr(response, "exit_code", 0) not in (0, None):
+            logger.warning(
+                "ArcBox reserved-pad reclaim failed (workspace=%s, sandbox=%s, pad=%s, "
+                "exit=%s); continuing with image-capacity slack",
+                workspace,
+                lease.sandbox.id,
+                pad,
+                response.exit_code,
+            )
+            return
+        logger.info(
+            "ArcBox reserved pad reclaimed (workspace=%s, sandbox=%s, pad=%s)",
+            workspace,
+            lease.sandbox.id,
+            pad,
+        )
 
     async def _ensure_free_disk(self, workspace: str, lease: _SandboxLease) -> None:
         """Refuse the turn when the guest disk is below the free-space watermark.

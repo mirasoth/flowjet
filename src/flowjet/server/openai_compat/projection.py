@@ -18,6 +18,11 @@ from flowjet.core.events import (
     ToolStarted,
     UsageInfo,
 )
+from flowjet.server.clarification import (
+    ClarificationFormat,
+    build_clarification_payload,
+    render_clarification_markdown,
+)
 from flowjet.server.openai_compat.schemas import ProjectionMode
 
 
@@ -66,10 +71,17 @@ def message_item(
 
 
 class ProjectionEngine:
-    def __init__(self, mode: ProjectionMode, response_id: str, model: str) -> None:
+    def __init__(
+        self,
+        mode: ProjectionMode,
+        response_id: str,
+        model: str,
+        clarification_format: ClarificationFormat = "markdown",
+    ) -> None:
         self.mode = mode
         self.response_id = response_id
         self.model = model
+        self.clarification_format = clarification_format
         self.item_id = f"msg_{uuid4().hex}"
         self.created_at = int(time.time())
         self._seq = 0
@@ -145,6 +157,39 @@ class ProjectionEngine:
                             "type": "response.flowjet.progress",
                             "stage": "Waiting",
                             "message": event.message or "Waiting for input…",
+                        }
+                    )
+                )
+            # Structured clarification channel (``json`` / ``both`` formats).
+            # Emitted in every projection mode — a clarification is turn
+            # content the client must answer, not developer detail.
+            if event.questions and self.clarification_format in ("json", "both"):
+                events.append(
+                    self._next(
+                        {
+                            "type": "response.flowjet.clarification",
+                            "clarification": build_clarification_payload(
+                                event.questions, event.interrupt_ids
+                            ),
+                        }
+                    )
+                )
+            # In ``both`` mode also emit the Markdown block as reply text so
+            # generic OpenAI clients (no clarification-widget support) still
+            # see the questions in the message they render.
+            if event.questions and self.clarification_format == "both":
+                block = render_clarification_markdown(event.questions)
+                events.extend(self._ensure_text_headers())
+                self._output_text += block
+                events.append(
+                    self._next(
+                        {
+                            "type": "response.output_text.delta",
+                            "item_id": self.item_id,
+                            "output_index": 0,
+                            "content_index": 0,
+                            "delta": block,
+                            "logprobs": [],
                         }
                     )
                 )

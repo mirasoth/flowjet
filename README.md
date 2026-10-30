@@ -111,6 +111,8 @@ Per-request options go in `extra_body.flowjet`:
 | `interaction_mode` | `agent` (default) \| `ask` | `ask` is hard read-only |
 | `projection` | `report` \| `progress` \| `developer` | How much SSE detail to expose |
 
+Server-level `FLOWJET_CLARIFICATION_FORMAT` selects how an `ask_user` pause reaches clients: `markdown` (default, the historical wire), `json` (structured envelope — ACP: embedded `application/json` resource block; OpenAI surface: `response.flowjet.clarification` SSE event), or `both`. Answers stay plain text: the next prompt resumes the paused graph.
+
 Full configuration, environment variables and the security model: [docs/server.md](docs/server.md) · deployment: [deploy/README.md](deploy/README.md).
 
 ---

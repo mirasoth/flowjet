@@ -94,6 +94,7 @@ class ToolSandboxSettings:
           api_url: null            # daemon connection; env fallback ARCBOX_API_URL
           api_key: null            # daemon credential; env fallback ARCBOX_API_KEY
           min_free_bytes: 0        # refuse turns when guest free space < this (0 = off)
+          reserved_pad_path: ""    # guest pad file reclaimed once per new sandbox ("" = off)
 
     The remaining ``sandbox:`` keys (``on_deny`` / ``placement_overrides`` /
     ``max_shuttle_bytes``) belong to soothe-nano's placement policy and are
@@ -151,6 +152,17 @@ class ToolSandboxSettings:
     # ``0`` (the default) disables the probe.
     min_free_bytes: int = 0
 
+    # Reserved-pad reclaim (sandbox disk headroom). The guest image may ship a
+    # sparse pad file (e.g. ``truncate -s 3G /pad.img`` in the soothe-nano-prod
+    # template) so the ArcBox rootfs formatter — which grows the template's
+    # disk capacity to fit its content — sizes real headroom into the image.
+    # Capacity alone does not help: the pad occupies the space it reserves, so
+    # before the watermark probe on a freshly created (or adopted) sandbox this
+    # file is deleted once, converting the reserved capacity into free space.
+    # Empty (the default) disables the reclaim; when set it must be an
+    # absolute guest path.
+    reserved_pad_path: str = ""
+
     api_url: str | None = None
     api_key: str | None = None
 
@@ -166,6 +178,8 @@ class ToolSandboxSettings:
             )
         if self.min_free_bytes < 0:
             raise ValueError("sandbox.min_free_bytes must be a non-negative int (0 = disabled)")
+        if self.reserved_pad_path and not self.reserved_pad_path.startswith("/"):
+            raise ValueError("sandbox.reserved_pad_path must be an absolute guest path when set")
         if self.vcpus < 1:
             raise ValueError("sandbox.vcpus must be >= 1")
         if self.mem_mib < 128:

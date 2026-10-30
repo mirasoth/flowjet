@@ -8,6 +8,8 @@ tool summaries, step labels, delta chunking, AI text extraction) live in
 
 from __future__ import annotations
 
+import logging
+import time
 import traceback as _traceback
 from collections.abc import AsyncIterator
 from typing import Any
@@ -32,6 +34,15 @@ from flowjet.core.streaming.presentation import (
 )
 from flowjet.core.streaming.tool_results import ToolResultInspector
 from flowjet.core.streaming.tool_stream import ToolCallArgAccumulator
+
+logger = logging.getLogger(__name__)
+
+#: Minimum interval between in-flight arg refreshes for one tool call.
+#: Streamed partial tool-arg JSON grows on every token, so unlimited
+#: refreshes would flood the event stream; the status line / ACP tool row
+#: re-renders at most once per interval per call. The first refresh after
+#: ``ToolStarted`` always passes (no prior timestamp).
+TOOL_ARGS_REFRESH_INTERVAL_S = 0.2
 
 _SKIP_CUSTOM_TYPES = frozenset(
     {
@@ -221,12 +232,28 @@ def map_custom(data: dict[str, Any]) -> Progress | None:
     return Progress(stage=str(stage), message=str(message or "Working"), raw=data)
 
 
+def _refresh_due(refreshed_at: dict[str, float], tc_id: str) -> bool:
+    """True when an in-flight arg refresh may be emitted for this call.
+
+    Rate-limits per tool call (``TOOL_ARGS_REFRESH_INTERVAL_S``) so streamed
+    partial args update the status line at most once per interval instead of
+    once per call. The first refresh after ``ToolStarted`` always passes.
+    """
+    now = time.monotonic()
+    last = refreshed_at.get(tc_id)
+    if last is not None and (now - last) < TOOL_ARGS_REFRESH_INTERVAL_S:
+        return False
+    refreshed_at[tc_id] = now
+    return True
+
+
 def _wire_tool_call_update(
     data: dict[str, Any],
     *,
     emitted_calls: set[str],
-    refreshed_calls: set[str],
+    refreshed_at: dict[str, float],
     tool_args: ToolCallArgAccumulator,
+    started_at: dict[str, float],
 ) -> list[RuntimeEvent]:
     """Convert a ``soothe.stream.tool_call.update`` into ToolStarted / Progress.
 
@@ -257,9 +284,9 @@ def _wire_tool_call_update(
         return []
     if tc_id in emitted_calls:
         # Already started via the messages path; refresh the status line with
-        # the parsed args (Writing a.txt, not bare Writing).
-        if args and tc_id not in refreshed_calls:
-            refreshed_calls.add(tc_id)
+        # the parsed args (Writing a.txt, not bare Writing), rate-limited per
+        # call so repeated wire updates do not flood the event stream.
+        if args and _refresh_due(refreshed_at, tc_id):
             return [
                 Progress(
                     stage="Tool",
@@ -267,12 +294,14 @@ def _wire_tool_call_update(
                     raw={
                         "type": "soothe.tool.started",
                         "tool": name,
+                        "tool_call_id": tc_id,
                         "args": args,
                     },
                 )
             ]
         return []
     emitted_calls.add(tc_id)
+    started_at[tc_id] = time.monotonic()
     return [ToolStarted(tool=name or "tool", call_id=tc_id, args=args or None)]
 
 
@@ -378,7 +407,10 @@ async def iter_nano_runtime_events(
     open_args: dict[str, dict[str, Any]] = {}
     tool_args = ToolCallArgAccumulator()
     emitted_calls: set[str] = set()
-    refreshed_calls: set[str] = set()
+    # Per-call clock for in-flight arg refreshes (rate-limited, not once-only)
+    # and for the DEBUG wall-clock diagnostics below.
+    refreshed_at: dict[str, float] = {}
+    started_at: dict[str, float] = {}
     last_step_key = ""
 
     try:
@@ -400,8 +432,9 @@ async def iter_nano_runtime_events(
                     for event in _wire_tool_call_update(
                         data,
                         emitted_calls=emitted_calls,
-                        refreshed_calls=refreshed_calls,
+                        refreshed_at=refreshed_at,
                         tool_args=tool_args,
+                        started_at=started_at,
                     ):
                         yield event
                     continue
@@ -454,16 +487,28 @@ async def iter_nano_runtime_events(
                             # Tool args stream as partial JSON, so ToolStarted
                             # usually carries none — refresh the status line
                             # once they parse (Writing b1.txt, not Writing).
-                            # Once per call: partial JSON grows on every token,
-                            # and re-emitting it would flood the event stream.
-                            if args and name not in _QUIET_TOOLS and tc_id not in refreshed_calls:
-                                refreshed_calls.add(tc_id)
+                            # Rate-limited per call: partial JSON grows on
+                            # every token, and re-emitting each one would
+                            # flood the event stream.
+                            if (
+                                args
+                                and name not in _QUIET_TOOLS
+                                and _refresh_due(refreshed_at, tc_id)
+                            ):
+                                started = started_at.get(tc_id)
+                                if started is not None:
+                                    logger.debug(
+                                        "tool %s in-flight args after %.0f ms",
+                                        name,
+                                        (time.monotonic() - started) * 1000,
+                                    )
                                 yield Progress(
                                     stage="Tool",
                                     message=ToolCallSummarizer.summarize(str(name), args),
                                     raw={
                                         "type": "soothe.tool.started",
                                         "tool": name,
+                                        "tool_call_id": tc_id,
                                         "args": args,
                                     },
                                 )
@@ -471,6 +516,7 @@ async def iter_nano_runtime_events(
                         emitted_calls.add(tc_id)
                         open_tools[tc_id] = str(name)
                         open_args[tc_id] = args
+                        started_at[tc_id] = time.monotonic()
                         yield ToolStarted(tool=str(name), call_id=tc_id, args=args or None)
                     continue
                 if getattr(message_obj, "tool_calls", None) or getattr(
@@ -514,6 +560,13 @@ async def iter_nano_runtime_events(
                 if str(resolved_name) in _QUIET_TOOLS and ok:
                     # Plan bookkeeping already surfaced as a step event.
                     continue
+                started = started_at.pop(call or "", None)
+                if started is not None:
+                    logger.debug(
+                        "tool %s completed after %.0f ms",
+                        resolved_name,
+                        (time.monotonic() - started) * 1000,
+                    )
                 yield ToolCompleted(
                     tool=str(resolved_name),
                     ok=ok,
