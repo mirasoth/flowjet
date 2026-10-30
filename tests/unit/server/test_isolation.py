@@ -305,6 +305,52 @@ async def test_isolating_backend_stream(tmp_path: Path):
         await backend.shutdown()
 
 
+@pytest.mark.asyncio
+async def test_isolating_backend_open_failure_becomes_run_failed(tmp_path: Path):
+    """A failed workspace open (e.g. the sandbox disk watermark) must surface
+    as a terminal RunFailed — not as a raw exception escaping the stream with
+    no terminal event for clients to hang their turn state on."""
+
+    class FailingResolver:
+        def __init__(self) -> None:
+            self.closes = 0
+
+        def resolve(self, _session: str, _metadata: dict[str, object] | None = None) -> Path:
+            return tmp_path / "ws"
+
+        async def open_session(self, _session: str, _workspace: Path) -> None:
+            raise RuntimeError("guest disk full: /workspace has 1.2 MB free")
+
+        async def close_session(self, _session: str, _workspace: Path) -> None:
+            self.closes += 1
+
+    resolver = FailingResolver()
+    backend = IsolatingRuntimeBackend(
+        models=["default"],
+        adapter_factory=FakeAgentAdapter,
+        pool_settings=PoolSettings(min_size=1, max_size=2),
+        home=tmp_path,
+        workspace_resolver=resolver,  # type: ignore[arg-type]
+    )
+    try:
+        events = [
+            e
+            async for e in backend.stream_run(
+                RunRequest(model="default", input_text="ping", session="fj-open-err")
+            )
+        ]
+        assert len(events) == 1
+        failure = events[0]
+        assert isinstance(failure, RunFailed)
+        assert failure.code == "workspace_open_error"
+        assert "guest disk full" in failure.message
+        assert failure.exc_type == "RuntimeError"
+        # The resolver's open/close pairing stays balanced.
+        assert resolver.closes == 1
+    finally:
+        await backend.shutdown()
+
+
 # NOTE: test_isolating_backend_via_http (HTTP integration across the ASGI app,
 # IsolatingRuntimeBackend, and FakeAgentAdapter) has been moved to
 # tests/integration/test_isolation_http.py.

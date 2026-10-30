@@ -341,11 +341,18 @@ class AnswerWriter:
         self._last_preview_at = 0.0
 
     def finish(self) -> str:
-        """Print the complete answer buffer once (progress is cleared by ``stop``)."""
+        """Print the complete answer buffer once (progress is cleared by ``stop``).
+
+        On a TTY the markdown answer is rendered with rich (lazy import);
+        piped/scripted output stays raw so downstream tooling is unaffected.
+        """
         if self.buf:
-            self._stdout.write(self.buf)
-            if not self.buf.endswith("\n"):
-                self._stdout.write("\n")
+            from flowjet.cli.render import write_answer_markdown
+
+            if not write_answer_markdown(self.buf, self._stdout):
+                self._stdout.write(self.buf)
+                if not self.buf.endswith("\n"):
+                    self._stdout.write("\n")
             self._stdout.flush()
         return self.buf
 

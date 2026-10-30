@@ -14,6 +14,7 @@ import pytest
 from flowjet.core.sandbox import (
     ArcBoxToolSandboxManager,
     SandboxAwareWorkspaceResolver,
+    SandboxDiskFullError,
     SandboxSettingsLoader,
     ToolSandboxSettings,
 )
@@ -236,6 +237,24 @@ def test_network_defaults_to_off() -> None:
     assert SandboxSettingsLoader.parse_section({"enabled": True, "image": "img"}).network is False
     # Explicit opt-in still works.
     assert SandboxSettingsLoader.parse_section({"network": True}).network is True
+
+
+def test_disk_watermark_defaults_to_disabled() -> None:
+    assert ToolSandboxSettings().min_free_bytes == 0
+    assert (
+        SandboxSettingsLoader.parse_section({"enabled": True, "image": "img"}).min_free_bytes == 0
+    )
+    assert (
+        SandboxSettingsLoader.parse_section(
+            {"enabled": True, "image": "img", "min_free_bytes": 524288000}
+        ).min_free_bytes
+        == 524288000
+    )
+
+
+def test_disk_watermark_negative_rejected() -> None:
+    with pytest.raises(ValueError, match="min_free_bytes"):
+        _ = ToolSandboxSettings(min_free_bytes=-1)
 
 
 def test_parse_reads_flowjet_keys_and_ignores_nano_keys() -> None:
@@ -1080,6 +1099,144 @@ async def test_validate_runtime_fails_without_sdk(monkeypatch: pytest.MonkeyPatc
     manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
     with pytest.raises(RuntimeError, match="arcbox SDK"):
         manager.validate_runtime()
+
+
+# ---------------------------------------------------------------------------
+# Disk watermark guard (SandboxDiskFullError)
+# ---------------------------------------------------------------------------
+
+
+def _patch_probe(monkeypatch: pytest.MonkeyPatch, probe: object) -> None:
+    """Patch ``ArcBoxBackend.free_space_bytes`` (may not exist on older nano)."""
+    from soothe_nano.sandbox import ArcBoxBackend
+
+    monkeypatch.setattr(ArcBoxBackend, "free_space_bytes", probe, raising=False)
+
+
+@pytest.mark.asyncio
+async def test_open_refuses_below_disk_watermark(
+    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = make_workspace(tmp_path)
+    manager = ArcBoxToolSandboxManager(
+        ToolSandboxSettings(enabled=True, image="img:1", min_free_bytes=1024)
+    )
+    probe_calls: list[str | None] = []
+
+    def fake_probe(self: object, path: str | None = None) -> int | None:
+        probe_calls.append(path)
+        return 512  # below the 1024-byte watermark
+
+    _patch_probe(monkeypatch, fake_probe)
+    try:
+        with pytest.raises(SandboxDiskFullError, match="guest disk full"):
+            await manager.open_workspace(str(ws))
+        # The run count taken by this open is rolled back: the failed open
+        # never reaches the run, so close_workspace will not fire for it.
+        lease = manager._leases[str(ws)]
+        assert lease.active_runs == 0
+    finally:
+        await manager.shutdown()
+    assert probe_calls == [None]  # default probe path: the workspace root
+
+
+@pytest.mark.asyncio
+async def test_open_passes_above_disk_watermark(
+    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = make_workspace(tmp_path)
+    manager = ArcBoxToolSandboxManager(
+        ToolSandboxSettings(enabled=True, image="img:1", min_free_bytes=1024)
+    )
+    _patch_probe(monkeypatch, lambda self, path=None: 2048)
+    try:
+        await manager.open_workspace(str(ws))
+        assert manager._leases[str(ws)].active_runs == 1
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_open_fails_open_when_probe_raises(
+    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = make_workspace(tmp_path)
+    manager = ArcBoxToolSandboxManager(
+        ToolSandboxSettings(enabled=True, image="img:1", min_free_bytes=1024)
+    )
+
+    def broken_probe(self: object, path: str | None = None) -> int | None:
+        raise RuntimeError("transport gone")
+
+    _patch_probe(monkeypatch, broken_probe)
+    try:
+        # A broken probe must never block a turn.
+        await manager.open_workspace(str(ws))
+        assert manager._leases[str(ws)].active_runs == 1
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_open_skips_probe_when_watermark_disabled(
+    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = make_workspace(tmp_path)
+    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+
+    def unexpected_probe(self: object, path: str | None = None) -> int | None:
+        raise AssertionError("probe must not run when min_free_bytes is 0")
+
+    _patch_probe(monkeypatch, unexpected_probe)
+    try:
+        await manager.open_workspace(str(ws))
+    finally:
+        await manager.shutdown()
+
+
+def test_probe_prefers_nano_helper_over_execute_fallback() -> None:
+
+    class HelperBackend:
+        workspace_root = "/workspace"
+
+        def free_space_bytes(self, path: str | None = None) -> int | None:
+            return 8192
+
+        def execute(self, command: str) -> object:
+            raise AssertionError("fallback must not run when the helper exists")
+
+    assert ArcBoxToolSandboxManager._probe_free_bytes(HelperBackend()) == 8192
+
+
+def test_probe_falls_back_to_execute_parsing() -> None:
+    from types import SimpleNamespace
+
+    class LegacyBackend:
+        """nano without ``free_space_bytes`` (≤ 2.0.3): df via ``execute``."""
+
+        workspace_root = "/workspace"
+
+        def execute(self, command: str) -> SimpleNamespace:
+            assert command == "df -B1 -P /workspace"
+            return SimpleNamespace(
+                output=(
+                    "Filesystem 1B-blocks Used Available Use% Mounted-on\n"
+                    "/dev/root 1288490188 1100585369 187904819 97% /workspace\n"
+                ),
+                exit_code=0,
+            )
+
+    assert ArcBoxToolSandboxManager._probe_free_bytes(LegacyBackend()) == 187904819
+
+
+def test_probe_fallback_fails_open() -> None:
+    class BrokenBackend:
+        workspace_root = "/workspace"
+
+        def execute(self, command: str) -> object:
+            raise RuntimeError("transport gone")
+
+    assert ArcBoxToolSandboxManager._probe_free_bytes(BrokenBackend()) is None
 
 
 # ---------------------------------------------------------------------------

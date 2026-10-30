@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Rich terminal rendering for `fj` CLI output (TTY-only, minimal landing).**
+  Final agent answers are now rendered as Markdown (headings, lists, tables,
+  syntax-highlighted code blocks) and `fj threads -l` renders as a styled
+  table when stdout is a terminal. Rendering lives in the new
+  `flowjet.cli.render` module; `rich` is imported lazily (never on `fj -V`,
+  `-h`, or completion paths) and every helper degrades to the existing
+  plain-text output when stdout is piped or rich is unavailable, so scripted
+  and piped output stays byte-identical. Progress-line rendering (ephemeral
+  status, tool verbs) is unchanged.
+
+- **Sandbox disk-watermark guard (`sandbox.min_free_bytes`).** A new
+  `min_free_bytes` setting (bytes, default `0` = disabled) makes the ArcBox
+  sandbox manager probe guest free space at session open and refuse the turn
+  with a readable `SandboxDiskFullError` when it falls below the watermark —
+  turning a write-heavy turn's mid-run ENOSPC spiral (whose cleanup commands
+  hit the approval gate) into one upfront failure. The probe is fail-open: a
+  broken probe warns but never blocks a turn. Separately, a failed workspace
+  open (this guard or any other) now surfaces as a terminal `RunFailed` event
+  (`code="workspace_open_error"`) with a best-effort `close_session`, instead
+  of a raw exception escaping the stream with no terminal event for clients.
+
 ## [2.1.9] — 2026-10-27
 
 ### Changed

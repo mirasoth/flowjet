@@ -381,4 +381,9 @@ def format_thread_list(threads: list[ThreadInfo]) -> str:
 
 
 def write_thread_list(threads: list[ThreadInfo], out: TextIO) -> None:
+    """Write the thread list: rich table on a TTY, plain columns when piped."""
+    from flowjet.cli.render import write_thread_table
+
+    if write_thread_table(threads, out):
+        return
     out.write(format_thread_list(threads))

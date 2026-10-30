@@ -19,7 +19,11 @@ Package layout:
 See ``sandbox/settings`` for the flowjet-owned ``sandbox:`` keys.
 """
 
-from flowjet.core.sandbox.arbox import ArcBoxToolSandboxManager, WorkspaceStager
+from flowjet.core.sandbox.arbox import (
+    ArcBoxToolSandboxManager,
+    SandboxDiskFullError,
+    WorkspaceStager,
+)
 from flowjet.core.sandbox.resolver import SandboxAwareWorkspaceResolver
 from flowjet.core.sandbox.settings import (
     SandboxSettingsLoader,
@@ -29,6 +33,7 @@ from flowjet.core.sandbox.settings import (
 __all__ = [
     "ArcBoxToolSandboxManager",
     "SandboxAwareWorkspaceResolver",
+    "SandboxDiskFullError",
     "SandboxSettingsLoader",
     "ToolSandboxSettings",
     "WorkspaceStager",

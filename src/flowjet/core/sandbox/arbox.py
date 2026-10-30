@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import shlex
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -97,6 +98,39 @@ class _SandboxLease:
     # Adopted from a previous process: pull the guest once before pushing, so
     # artifacts written by the crashed turn are recovered instead of clobbered.
     adopted: bool = False
+
+
+def _format_bytes(n: int) -> str:
+    """Human-readable byte count for operator-facing error messages."""
+    if n >= 1024**3:
+        return f"{n / 1024**3:.1f} GB"
+    if n >= 1024**2:
+        return f"{n / 1024**2:.1f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n} B"
+
+
+def _parse_df_available(output: str, root: str) -> int | None:
+    """Available bytes from POSIX ``df`` output (``None`` when unparseable)."""
+    for line in output.splitlines():
+        fields = line.split()
+        # POSIX df format: Filesystem 1B-blocks Used Available Use% Mounted-on
+        if len(fields) >= 4 and fields[-1] == root:
+            try:
+                return int(fields[3])
+            except ValueError:
+                return None
+    return None
+
+
+class SandboxDiskFullError(RuntimeError):
+    """The guest sandbox disk is below the configured free-space watermark.
+
+    Raised by :meth:`ArcBoxToolSandboxManager.open_workspace` before the turn
+    starts, so the failure surfaces as one readable turn error instead of a
+    mid-run ENOSPC spiral the agent cannot fix on its own.
+    """
 
 
 class WorkspaceStager:
@@ -663,6 +697,73 @@ class ArcBoxToolSandboxManager:
                 lease.manifest = await self._stager.pull(workspace, lease.sandbox, {})
                 lease.adopted = False
             lease.manifest = await self._stager.push(workspace, lease.sandbox, lease.manifest)
+            await self._ensure_free_disk(workspace, lease)
+
+    async def _ensure_free_disk(self, workspace: str, lease: _SandboxLease) -> None:
+        """Refuse the turn when the guest disk is below the free-space watermark.
+
+        The ArcBox daemon sizes the sandbox root disk from the guest image
+        (content plus a small constant margin), so a write-heavy turn can
+        fill the guest and leave the agent flailing in ENOSPC errors it
+        cannot fix — its cleanup commands (`rm -rf /...`) hit the approval
+        gate, and the turn dies with an opaque "tool failed". Failing fast
+        here surfaces one readable error instead. The probe failing itself
+        is warn-only (fail open): a broken probe must never block a turn.
+
+        Accountancy note: ``active_runs`` was already incremented for this
+        open, and a raise here means the caller's ``close_workspace`` never
+        runs (``stream_run`` only closes after a successful open), so the
+        increment is rolled back before raising.
+        """
+        threshold = self._settings.min_free_bytes
+        if threshold <= 0:
+            return
+        backend = self.backend_for(workspace)
+        free = await asyncio.to_thread(self._probe_free_bytes, backend)
+        if free is None:
+            logger.warning(
+                "ArcBox guest disk probe failed (workspace=%s, sandbox=%s); "
+                "continuing without the watermark check",
+                workspace,
+                lease.sandbox.id,
+            )
+            return
+        if free >= threshold:
+            return
+        lease.active_runs = max(0, lease.active_runs - 1)
+        message = (
+            f"guest disk full: {self._settings.workspace_root} has "
+            f"{_format_bytes(free)} free, below the {_format_bytes(threshold)} minimum "
+            f"(sandbox.min_free_bytes). The ArcBox daemon sizes the sandbox root "
+            f"disk from the guest image, so the workspace must be cleaned or the "
+            f"sandbox disk enlarged before this turn can run."
+        )
+        raise SandboxDiskFullError(message)
+
+    @staticmethod
+    def _probe_free_bytes(backend: Any) -> int | None:
+        """Guest free space at the workspace root, or ``None`` (fail open).
+
+        Prefers soothe-nano's :meth:`ArcBoxBackend.free_space_bytes`; falls
+        back to one ``df -B1 -P`` through ``execute`` for nano releases
+        without the helper, so the watermark works against any nano ≥ 2.0.
+        Never raises.
+        """
+        probe = getattr(backend, "free_space_bytes", None)
+        if callable(probe):
+            try:
+                return probe()
+            except Exception:  # noqa: BLE001 -- probe is best effort by contract
+                logger.debug("ArcBox guest disk probe errored", exc_info=True)
+                return None
+        try:
+            response = backend.execute(f"df -B1 -P {shlex.quote(backend.workspace_root)}")
+        except Exception:  # noqa: BLE001 -- probe is best effort by contract
+            logger.debug("ArcBox guest disk probe errored", exc_info=True)
+            return None
+        if response.exit_code not in (0, None):
+            return None
+        return _parse_df_available(response.output, backend.workspace_root)
 
     async def close_workspace(self, workspace: str) -> None:
         """Pull guest files back to the host workspace when the last run ends."""
@@ -775,4 +876,8 @@ class ArcBoxToolSandboxManager:
         return self._settings.workspace_root
 
 
-__all__ = ["ArcBoxToolSandboxManager", "WorkspaceStager"]
+__all__ = [
+    "ArcBoxToolSandboxManager",
+    "SandboxDiskFullError",
+    "WorkspaceStager",
+]

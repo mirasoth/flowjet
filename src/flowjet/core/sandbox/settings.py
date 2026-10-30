@@ -93,6 +93,7 @@ class ToolSandboxSettings:
           owner: flowjet           # sandbox label namespace; env FLOWJET_SANDBOX_OWNER
           api_url: null            # daemon connection; env fallback ARCBOX_API_URL
           api_key: null            # daemon credential; env fallback ARCBOX_API_KEY
+          min_free_bytes: 0        # refuse turns when guest free space < this (0 = off)
 
     The remaining ``sandbox:`` keys (``on_deny`` / ``placement_overrides`` /
     ``max_shuttle_bytes``) belong to soothe-nano's placement policy and are
@@ -141,6 +142,15 @@ class ToolSandboxSettings:
     # recover or reap each other's sandboxes.
     owner: str = "flowjet"
 
+    # Disk watermark: refuse to open a sandbox whose guest has less free
+    # space than this (bytes) at session open. The ArcBox daemon sizes the
+    # sandbox root disk from the guest image plus a small constant margin,
+    # so a write-heavy turn can fill the guest and leave the agent flailing
+    # in ENOSPC errors it cannot fix (its cleanup commands hit the approval
+    # gate). Guarding here turns that spiral into one readable turn error.
+    # ``0`` (the default) disables the probe.
+    min_free_bytes: int = 0
+
     api_url: str | None = None
     api_key: str | None = None
 
@@ -154,6 +164,8 @@ class ToolSandboxSettings:
             raise ValueError(
                 "sandbox.max_sandboxes must be a non-negative int (0 = unlimited) or None"
             )
+        if self.min_free_bytes < 0:
+            raise ValueError("sandbox.min_free_bytes must be a non-negative int (0 = disabled)")
         if self.vcpus < 1:
             raise ValueError("sandbox.vcpus must be >= 1")
         if self.mem_mib < 128:
