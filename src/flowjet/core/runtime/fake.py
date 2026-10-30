@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from uuid import uuid4
 
 from flowjet.core.events import (
     ModelInfo,
@@ -17,6 +16,7 @@ from flowjet.core.events import (
     ToolStarted,
     UsageInfo,
 )
+from flowjet.core.ids import new_run_id, new_session_id
 
 
 class FakeRuntimeBackend:
@@ -32,8 +32,8 @@ class FakeRuntimeBackend:
         return None
 
     async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEvent]:
-        run_id = request.run_id or f"resp_{uuid4().hex}"
-        session = request.session or f"fj-{uuid4()}"
+        run_id = request.run_id or new_run_id()
+        session = request.session or new_session_id()
         yield RunStarted(run_id=run_id, model=request.model, session=session)
         yield Progress(stage="Working", message="Thinking…")
 

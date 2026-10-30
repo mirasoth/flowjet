@@ -9,12 +9,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from flowjet.core.bridges.base import IsolatingBackendBuilder
 from flowjet.core.bridges.nano.adapter import NanoAgentAdapter
 from flowjet.core.bridges.nano.mapping import iter_nano_runtime_events
 from flowjet.core.events import ModelInfo, RunRequest, RuntimeEvent
+from flowjet.core.ids import new_run_id, new_session_id
 from flowjet.core.modes import InteractionMode
 
 
@@ -47,8 +47,8 @@ class NanoRuntimeBackend:
 
     async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEvent]:
         agent = self._ensure_agent()
-        run_id = request.run_id or f"resp_{uuid4().hex}"
-        session = request.session or f"fj-{uuid4()}"
+        run_id = request.run_id or new_run_id()
+        session = request.session or new_session_id()
         workspace = None
         if request.metadata and isinstance(request.metadata.get("workspace"), str):
             workspace = request.metadata["workspace"]

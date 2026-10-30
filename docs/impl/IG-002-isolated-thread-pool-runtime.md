@@ -151,7 +151,7 @@ class IsolatingRuntimeBackend:
     def __init__(self, *, models, adapter_factory, pool_settings, workspace_resolver, ...): ...
     async def list_models(self) -> list[ModelInfo]: ...
     async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEvent]:
-        session = request.session or f"fj-{uuid4()}"
+        session = request.session or new_session_id()  # fj-<16 hex chars>
         ws = self._workspaces.resolve(session, request.metadata)
         isolated = IsolatedRunRequest(...)
         async with self._admission.admit(session):

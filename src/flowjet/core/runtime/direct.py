@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from typing import Any
-from uuid import uuid4
 
 from flowjet.core.bridges.nano.mapping import iter_nano_runtime_events
 from flowjet.core.events import ModelInfo, RunRequest, RuntimeEvent
+from flowjet.core.ids import new_run_id, new_session_id
 
 
 class DirectRuntimeBackend:
@@ -37,8 +37,8 @@ class DirectRuntimeBackend:
         return None
 
     async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEvent]:
-        run_id = request.run_id or f"resp_{uuid4().hex}"
-        session = request.session or f"fj-{uuid4()}"
+        run_id = request.run_id or new_run_id()
+        session = request.session or new_session_id()
         workspace = self._workspace
         metadata = request.metadata or {}
         if workspace is None and isinstance(metadata.get("workspace"), str):

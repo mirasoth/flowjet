@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from flowjet.core.events import ModelInfo, RunRequest, RuntimeEvent
+from flowjet.core.ids import new_run_id, new_session_id
 from flowjet.core.runtime.isolation.adapter import AdapterFactory
 from flowjet.core.runtime.isolation.admission import SessionAdmission
 from flowjet.core.runtime.isolation.mode_gate import InteractionModeGate
@@ -89,8 +89,8 @@ class IsolatingRuntimeBackend:
 
     async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEvent]:
         await self._ensure_started()
-        session = request.session or f"fj-{uuid4()}"
-        run_id = request.run_id or f"resp_{uuid4().hex}"
+        session = request.session or new_session_id()
+        run_id = request.run_id or new_run_id()
         metadata = dict(request.metadata or {})
         mode = await self._mode_gate.resolve(session, metadata)
         metadata["interaction_mode"] = mode
