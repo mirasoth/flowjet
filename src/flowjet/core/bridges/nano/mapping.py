@@ -64,6 +64,11 @@ _HOST_PHASE_EVENTS: dict[str, str] = {
 # Plan bookkeeping: the todo list already drives the step line.
 _QUIET_TOOLS = frozenset({"write_todos", "todo_write", "write_todo_list"})
 
+# soothe host AutoModeMiddleware rejected a gated tool call (deny rule or
+# safety escalation). The generic mapping below would collapse this event to
+# a bare "rejected" Progress — one unexplained word on every client.
+_TOOL_AUTO_GATE_REJECTED = "soothe.internal.tool.auto_gate.rejected"
+
 # Fires on every turn with no user-visible content.
 _SKIP_UPDATE_NODES = frozenset(
     {
@@ -167,6 +172,29 @@ def update_progress(data: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
+def _auto_gate_rejected_progress(data: dict[str, Any]) -> Progress:
+    """Surface the auto-approval gate's rejection with its reason.
+
+    The raw payload (``TOOL_AUTO_GATE_REJECTED``) carries ``tool`` / ``stage``
+    / ``rule_id`` / ``reason`` / ``signature``; none of it survives the
+    generic event-type mapping, leaving users with a bare "rejected" step.
+    The bounded one-line message below becomes the thinking step every
+    downstream client (ACP agents, SSE consumers) records.
+    """
+    tool = str(data.get("tool") or "tool")
+    stage = str(data.get("stage") or "gate")
+    rule = str(data.get("rule_id") or "")
+    reason = " ".join(str(data.get("reason") or "").split())
+    signature = " ".join(str(data.get("signature") or "").split())
+    detail = f"stage={stage}" + (f", rule={rule}" if rule else "")
+    message = f"{tool} blocked by the approval gate ({detail})"
+    if reason:
+        message += f": {reason[:200]}"
+    if signature:
+        message += f" [command: {signature[:120]}]"
+    return Progress(stage=tool, message=message, raw=data)
+
+
 def map_custom(data: dict[str, Any]) -> Progress | None:
     event_type = str(data.get("type") or "").strip()
     if not event_type or event_type in _SKIP_CUSTOM_TYPES:
@@ -175,6 +203,8 @@ def map_custom(data: dict[str, Any]) -> Progress | None:
         # Handled in ``iter_nano_runtime_events`` — yields a ToolStarted /
         # Progress refresh with the pre-parsed args, never a generic Progress.
         return None
+    if event_type == _TOOL_AUTO_GATE_REJECTED:
+        return _auto_gate_rejected_progress(data)
     if event_type.startswith("soothe.output."):
         return None
     short = event_type[7:] if event_type.startswith("soothe.") else event_type

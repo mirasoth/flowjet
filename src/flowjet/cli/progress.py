@@ -655,6 +655,22 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
             label = head
         return _fit(label), "red"
 
+    if event_type == "soothe.internal.tool.auto_gate.rejected":
+        gated = _compact(data.get("tool")) or "tool"
+        stage = _compact(data.get("stage"))
+        rule = _compact(data.get("rule_id"))
+        detail = "stage=" + stage if stage else ""
+        if rule:
+            detail = f"{detail}, rule={rule}" if detail else f"rule={rule}"
+        head = f"Gate rejected {gated}" + (f" · {detail}" if detail else "")
+        reason = _compact(data.get("reason") or data.get("message"))
+        if reason:
+            reason_limit = _detail_budget(prefix=f"{head} · ", fraction=0.55, floor=20)
+            label = f"{head} · {_truncate_middle(reason, reason_limit)}"
+        else:
+            label = head
+        return _fit(label), "red"
+
     if event_type == "soothe.internal.memory.recalled":
         count = data.get("count")
         query = _compact(data.get("query"))

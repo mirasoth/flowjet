@@ -354,6 +354,33 @@ def test_friendly_tool_failed_event() -> None:
     assert "Failed" in label
 
 
+def test_friendly_auto_gate_rejected_includes_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "240")
+    label, color = friendly_progress(
+        {
+            "type": "soothe.internal.tool.auto_gate.rejected",
+            "tool": "run_command",
+            "stage": "safety_check",
+            "reason": "Command blocked by security rule: (?<!git\\s)rm\\s+-rf\\s+/",
+            "rule_id": "command.dangerous.rm_root",
+        }
+    )
+    assert color == "red"
+    assert "Gate rejected run_command" in label
+    assert "stage=safety_check" in label
+    assert "rule=command.dangerous.rm_root" in label
+    assert "Command blocked by security rule" in label
+
+
+def test_friendly_auto_gate_rejected_minimal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "240")
+    label, color = friendly_progress({"type": "soothe.internal.tool.auto_gate.rejected"})
+    assert color == "red"
+    assert label == "Gate rejected tool"
+
+
 def test_friendly_skips_output_and_empty() -> None:
     assert friendly_progress({"type": "soothe.output.token"}) is None
     assert friendly_progress({"type": ""}) is None

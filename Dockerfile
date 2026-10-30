@@ -16,6 +16,32 @@
 
 ARG PYTHON_BASE=registry.cn-hangzhou.aliyuncs.com/lacogito/python:3.12-bookworm
 
+# Reference skills baked into the flowjet user's ~/.agents/skills (a
+# soothe-nano SkillRoots location, scanned ahead of built-ins). These are the
+# research-bootstrap backends `fj doctor` otherwise installs on demand.
+ARG PLATONIC_CODING_REPO=https://github.com/caesar0301/platonic-coding.git
+ARG PLATONIC_CODING_REF=main
+ARG OH_MY_RESEARCH_REPO=https://github.com/caesar0301/oh-my-research.git
+ARG OH_MY_RESEARCH_REF=main
+
+# =============================================================================
+# Stage 0: fetch reference skills (shallow clones, no .git shipped)
+# =============================================================================
+FROM ${PYTHON_BASE} AS skills
+
+ARG PLATONIC_CODING_REPO
+ARG PLATONIC_CODING_REF
+ARG OH_MY_RESEARCH_REPO
+ARG OH_MY_RESEARCH_REF
+
+RUN sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch "${PLATONIC_CODING_REF}" "${PLATONIC_CODING_REPO}" /tmp/platonic-coding \
+    && git clone --depth 1 --branch "${OH_MY_RESEARCH_REF}" "${OH_MY_RESEARCH_REPO}" /tmp/oh-my-research
+
 # =============================================================================
 # Stage 1: install deps + package into a venv
 # =============================================================================
@@ -101,6 +127,13 @@ RUN sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/source
 
 RUN useradd --create-home --system flowjet \
     && chown -R flowjet:flowjet /flowjet
+
+# Bake reference skills into the flowjet user's ~/.agents/skills (the flowjet
+# user's $HOME, scanned by soothe-nano's SkillRoots).
+COPY --from=skills --chown=flowjet:flowjet \
+    /tmp/platonic-coding/skills/platonic-coding /home/flowjet/.agents/skills/platonic-coding
+COPY --from=skills --chown=flowjet:flowjet \
+    /tmp/oh-my-research/skills/oh-my-research /home/flowjet/.agents/skills/oh-my-research
 
 USER flowjet
 WORKDIR /flowjet
