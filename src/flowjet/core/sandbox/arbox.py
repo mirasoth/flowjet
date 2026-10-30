@@ -752,7 +752,8 @@ class ArcBoxToolSandboxManager:
         probe = getattr(backend, "free_space_bytes", None)
         if callable(probe):
             try:
-                return probe()
+                result: int | None = probe()
+                return result
             except Exception:  # noqa: BLE001 -- probe is best effort by contract
                 logger.debug("ArcBox guest disk probe errored", exc_info=True)
                 return None
