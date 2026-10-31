@@ -112,7 +112,7 @@ Conceptual fields:
 | Field | Meaning |
 |-------|---------|
 | `run_id` | Response / run id (`resp_…`) |
-| `session` | Opaque session id (`flowjet.session` or allocated `fj-<16 hex chars>`) |
+| `session` | Opaque session id (`flowjet.session` or allocated 16-hex-char token) |
 | `thread_id` | Checkpoint / conversation id; **defaults to `session`** |
 | `input_text` | User input |
 | `model` | Logical model id |
@@ -157,7 +157,7 @@ weaken this invariant.
 ### 5.7 Session Identity
 
 * HTTP `flowjet.session` → `RunRequest.session` → `IsolatedRunRequest.session` / `thread_id`.
-* If omitted, allocate `fj-<16 hex chars>` (RFC-001).
+* If omitted, allocate a bare 16-hex-char token (RFC-001).
 * Reusing a session continues checkpoint history **when** the underlying nano graph’s checkpointer persists. Isolation does not require persistence to be correct for FS/runner safety.
 
 ### 5.8 Cancellation

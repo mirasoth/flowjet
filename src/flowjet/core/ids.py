@@ -9,6 +9,10 @@ while staying readable in logs and UIs.
 The full ``uuid4()`` string (36 chars with dashes) and the untruncated
 ``uuid4().hex`` (32 chars) carried no extra entropy and were needlessly long
 in logs/UI, so they are no longer used anywhere in the project.
+
+Session/thread ids carry no prefix: they are the bare 16-hex token itself
+(e.g. ``550e8400e29b7800``), which is what ``fjf`` reads from the active-thread
+pointer to continue a session.
 """
 
 from __future__ import annotations
@@ -21,9 +25,6 @@ from uuid import uuid4
 #: at ~1.8e19 ids (birthday bound), which is far beyond any single FlowJet
 #: deployment's lifetime.
 _HEX_LEN = 16
-
-#: Prefix for FlowJet-allocated session/thread ids.
-_SESSION_PREFIX = "fj-"
 
 #: Prefix for FlowJet-allocated run/response ids.
 _RUN_PREFIX = "resp_"
@@ -48,8 +49,13 @@ def short_hex() -> str:
 
 
 def new_session_id() -> str:
-    """Allocate a fresh session/thread id, e.g. ``fj-550e8400e29b7800``."""
-    return f"{_SESSION_PREFIX}{short_hex()}"
+    """Allocate a fresh session/thread id, e.g. ``550e8400e29b7800``.
+
+    The id is the bare 16-hex token with no prefix — the same value the CLI
+    shows in the ``Done · <duration> · <thread_id>`` footer and ``fjf`` reads
+    from the active-thread pointer to continue a session.
+    """
+    return short_hex()
 
 
 def new_run_id() -> str:

@@ -261,7 +261,7 @@ Events **MUST NOT** carry CoT, prompts, or tool arguments.
 ### 8.3 Session Identity
 
 * `flowjet.session` on the HTTP request maps to the runtime `session` string.
-* If omitted, the nano bridge allocates a new id (e.g. `fj-<16 hex chars>`, matching flowjet-agent).
+* If omitted, the nano bridge allocates a new id (e.g. a bare 16-hex-char token, matching flowjet-agent).
 * Session is opaque to `openai_compat`.
 
 ---
@@ -347,7 +347,7 @@ Compatible core fields:
   "stream": true,
   "flowjet": {
     "projection": "progress",
-    "session": "fj-abc123",
+    "session": "abc123def4567890",
     "metadata": { "project": "demo" }
   }
 }

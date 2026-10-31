@@ -91,13 +91,13 @@ def write_active_thread_id(
 
 
 def new_thread_id() -> str:
-    """Allocate a fresh short thread id (``fj-<16 hex>``).
+    """Allocate a fresh short thread id (bare 16 hex chars).
 
     Delegates to :func:`flowjet.core.ids.new_session_id` so the CLI's thread
     id — the value shown in the ``Done · <duration> · <thread_id>`` footer and
     reused by ``fjf`` to continue a session — matches the short, opaque,
-    filesystem-safe format used everywhere else (``fj-`` + 16 hex chars,
-    ~64 bits of entropy) instead of a full 36-char UUID with dashes.
+    filesystem-safe format used everywhere else (16 hex chars, ~64 bits of
+    entropy) instead of a full 36-char UUID with dashes.
     """
     from flowjet.core.ids import new_session_id
 

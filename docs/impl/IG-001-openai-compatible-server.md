@@ -297,7 +297,7 @@ If `settings.api_key` is set, require `Authorization: Bearer <key>`; else allow 
 
 - If `soothe_nano` is not installed, constructing `NanoRuntimeBackend` raises a clear error; app defaults to `fake`.
 - When available: `stream_run` calls `agent.astream` with modes `messages`, `updates`, `custom`; map per RFC-001 §9 with a minimal progress mapper (skip `soothe.output.*`, `soothe.internal.policy.checked`, etc.).
-- Allocate `fj-<16 hex chars>` session when request session is None.
+- Allocate a bare 16-hex-char session when request session is None.
 
 ### 6.4 ID allocation
 

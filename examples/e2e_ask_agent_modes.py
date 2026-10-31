@@ -32,13 +32,13 @@ from openai import APIStatusError, BadRequestError
 
 
 def _session(prefix: str) -> str:
-    """Allocate a session id ``fj-<prefix>-<16 hex>`` using the shared generator.
+    """Allocate a session id ``<prefix>-<16 hex>`` using the shared generator.
 
     The 16-hex token (~64 bits of entropy) matches the format the server and CLI
     use everywhere (see :mod:`flowjet.core.ids`); the prefix is kept only so this
     demo can tell its own sessions apart in logs.
     """
-    return f"fj-{prefix}-{short_hex()}"
+    return f"{prefix}-{short_hex()}"
 
 
 def _stream_mode(
