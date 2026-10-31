@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 import types
 from collections.abc import AsyncIterator, Callable
@@ -708,7 +709,7 @@ async def test_wedged_heartbeat_drops_lease_instead_of_stalling_reaper(
         # Stop the background reaper so it cannot race with the direct
         # _heartbeat() call below (it would update _last_heartbeat and trip
         # the rate-limit early-return, flaking on slow/loaded CI runners).
-        crash(manager)
+        await stop_reaper(manager)
         sandbox = fake_arcbox.instances[0].sandboxes[0]
         sandbox.hangs = True  # set_lifecycle() sleeps 30s
         manager._last_heartbeat = 0.0
@@ -725,6 +726,24 @@ def crash(manager: ArcBoxToolSandboxManager) -> None:
     task = manager._reaper_task
     if task is not None:
         task.cancel()
+
+
+async def stop_reaper(manager: ArcBoxToolSandboxManager) -> None:
+    """Cancel and await the background reaper so it cannot race with direct
+    ``_heartbeat()`` calls in tests that exercise that method in isolation.
+
+    ``crash()`` only schedules cancellation; the task can still run once more
+    before the ``CancelledError`` lands, which on slow/loaded CI runners lets
+    it update ``_last_heartbeat`` and trip the rate-limit early-return in the
+    test's own ``_heartbeat()`` call. Awaiting the cancellation closes the
+    window deterministically.
+    """
+    task = manager._reaper_task
+    manager._reaper_task = None
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
 
 
 @pytest.mark.asyncio
@@ -835,7 +854,7 @@ async def test_heartbeat_rearms_daemon_orphan_deadline(
         await manager.open_workspace(str(ws))
         # Stop the background reaper so it cannot race with the direct
         # _heartbeat() calls below (see test_wedged_heartbeat_drops_lease...).
-        crash(manager)
+        await stop_reaper(manager)
         sandbox = fake_arcbox.instances[0].sandboxes[0]
         sandbox.set_lifecycle_calls.clear()
         manager._last_heartbeat = 0.0
@@ -863,7 +882,7 @@ async def test_heartbeat_failure_drops_idle_lease(
         await manager.close_workspace(str(ws))
         # Stop the background reaper so it cannot race with the direct
         # _heartbeat() call below (see test_wedged_heartbeat_drops_lease...).
-        crash(manager)
+        await stop_reaper(manager)
         fake_arcbox.instances[0].sandboxes[0].dead = True
         manager._last_heartbeat = 0.0
 
@@ -884,7 +903,7 @@ async def test_heartbeat_failure_keeps_lease_with_run_in_flight(
         await manager.open_workspace(str(ws))
         # Stop the background reaper so it cannot race with the direct
         # _heartbeat() call below (see test_wedged_heartbeat_drops_lease...).
-        crash(manager)
+        await stop_reaper(manager)
         fake_arcbox.instances[0].sandboxes[0].dead = True
         manager._last_heartbeat = 0.0
 
