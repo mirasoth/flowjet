@@ -398,6 +398,6 @@ def write_thread_list(threads: list[ThreadInfo], out: TextIO) -> None:
     except ImportError:
         write_thread_table = None  # type: ignore[assignment]
 
-    if write_thread_table and write_thread_table(threads, out):
+    if write_thread_table is not None and write_thread_table(threads, out):
         return
     out.write(format_thread_list(threads))

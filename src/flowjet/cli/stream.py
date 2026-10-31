@@ -356,7 +356,7 @@ class AnswerWriter:
             except ImportError:
                 write_answer_markdown = None  # type: ignore[assignment]
 
-            if not write_answer_markdown or not write_answer_markdown(self.buf, self._stdout):
+            if write_answer_markdown is None or not write_answer_markdown(self.buf, self._stdout):
                 self._stdout.write(self.buf)
                 if not self.buf.endswith("\n"):
                     self._stdout.write("\n")

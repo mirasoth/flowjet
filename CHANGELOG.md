@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.12] — 2026-10-31
+
+### Fixed
+
+- **Defensive `flowjet.cli.render` imports.** The lazy `from flowjet.cli.render import …` calls in `cli/stream.py` (`AnswerWriter.finish`) and `cli/threads.py` (`write_thread_list`) raised `ModuleNotFoundError: No module named 'flowjet.cli.render'` on stale or partial installs (e.g. wheels predating 2.1.10 that don't ship `render.py`), killing the run after output was already buffered. Both imports are now wrapped in `try/except ImportError` and degrade to the existing plain-text path — the documented contract that every rendering helper falls back to plain text. Regression tests in `tests/unit/test_render.py` block the module via `sys.modules` and assert the fallback content.
+
+### Changed
+
+- **Centralized id generation.** Every site that called `uuid4()` directly (ACP session/run ids, OpenAI-compat message/chatcmpl ids, sandbox instance ids, isolation-pool worker/request ids, CLI thread ids, e2e demo) now routes through shared helpers in `flowjet.core.ids`. All emitted ids are uniformly 16 hex chars (64 bits) under their respective prefixes; the full 32/36-char uuid forms are no longer used.
+- **Session/thread ids drop the `fj-` prefix.** Ids are now bare 16-hex tokens (e.g. `550e8400e29b7800`). The prefix carried no entropy and was redundant — the token alone is what the CLI footer and `fjf` active-thread pointer use to continue a session.
+- **Pause-question title no longer bold in markdown egress.** `format_questions_markdown` keeps the question title in normal font so it reads as prose, while the ⏸ heading and option labels stay bold.
+
 ## [2.1.11] — 2026-10-30
 
 ### Added
