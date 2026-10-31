@@ -712,7 +712,7 @@ async def test_wedged_heartbeat_drops_lease_instead_of_stalling_reaper(
         await stop_reaper(manager)
         sandbox = fake_arcbox.instances[0].sandboxes[0]
         sandbox.hangs = True  # set_lifecycle() sleeps 30s
-        manager._last_heartbeat = 0.0
+        manager._last_heartbeat = float("-inf")
 
         await manager._heartbeat()
 
@@ -857,7 +857,7 @@ async def test_heartbeat_rearms_daemon_orphan_deadline(
         await stop_reaper(manager)
         sandbox = fake_arcbox.instances[0].sandboxes[0]
         sandbox.set_lifecycle_calls.clear()
-        manager._last_heartbeat = 0.0
+        manager._last_heartbeat = float("-inf")
 
         await manager._heartbeat()
         assert sandbox.set_lifecycle_calls == [
@@ -884,7 +884,7 @@ async def test_heartbeat_failure_drops_idle_lease(
         # _heartbeat() call below (see test_wedged_heartbeat_drops_lease...).
         await stop_reaper(manager)
         fake_arcbox.instances[0].sandboxes[0].dead = True
-        manager._last_heartbeat = 0.0
+        manager._last_heartbeat = float("-inf")
 
         await manager._heartbeat()
         assert manager.lease_count == 0
@@ -905,7 +905,7 @@ async def test_heartbeat_failure_keeps_lease_with_run_in_flight(
         # _heartbeat() call below (see test_wedged_heartbeat_drops_lease...).
         await stop_reaper(manager)
         fake_arcbox.instances[0].sandboxes[0].dead = True
-        manager._last_heartbeat = 0.0
+        manager._last_heartbeat = float("-inf")
 
         await manager._heartbeat()
         assert manager.lease_count == 1

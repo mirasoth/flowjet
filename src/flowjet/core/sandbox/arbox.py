@@ -303,7 +303,11 @@ class ArcBoxToolSandboxManager:
         self._instance_id = short_hex()
         # Workspace key -> orphaned sandbox id, populated once at startup.
         self._recoverable: dict[str, str] = {}
-        self._last_heartbeat = 0.0
+        # Sentinel that guarantees the first heartbeat always fires: using 0.0
+        # would skip it whenever time.monotonic() < _HEARTBEAT_INTERVAL_SECONDS,
+        # which happens on freshly-booted CI runners (and any host under 60s of
+        # uptime). -inf makes the elapsed check always exceed the interval.
+        self._last_heartbeat = float("-inf")
 
     @property
     def settings(self) -> ToolSandboxSettings:
