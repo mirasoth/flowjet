@@ -439,9 +439,18 @@ def format_questions_markdown(questions: tuple[dict[str, Any], ...]) -> str:
 
     Same content as :func:`format_questions_block` (the CLI renders that block
     to a terminal), but in Markdown so ACP/UI hosts show a bold pause heading
-    with bulleted, bolded options. The plain-text block cannot be reused here:
-    its space indentation collapses under Markdown rendering and the whole
-    block displays as one run-on paragraph.
+    with bulleted, bolded options. The question title itself stays in normal
+    font (not bold) so it reads as prose, e.g.::
+
+        **⏸ Paused for input**
+
+        Approve tool: run_command (command=cd /tmp && …)
+        - **Yes (Recommended) ★** — proceed
+        - **No** — cancel
+
+    The plain-text block cannot be reused here: its space indentation
+    collapses under Markdown rendering and the whole block displays as one
+    run-on paragraph.
     """
     if not questions:
         return "**⏸ Paused for input**\n"
@@ -451,7 +460,7 @@ def format_questions_markdown(questions: tuple[dict[str, Any], ...]) -> str:
         question = str(q.get("question") or "").strip()
         label = f"[{header}] {question}" if header else question
         prefix = f"Q{qi}: " if len(questions) > 1 else ""
-        lines.append(f"\n**{prefix}{label}**")
+        lines.append(f"\n{prefix}{label}")
         options = q.get("options")
         if isinstance(options, list):
             for opt in options:

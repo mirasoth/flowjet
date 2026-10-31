@@ -711,7 +711,9 @@ def test_format_questions_markdown_renders_bold_options() -> None:
 
     block = format_questions_markdown(tuple(_QUESTIONS))
     assert block.startswith("**⏸ Paused for input**")
-    assert "**[Auth method] Which auth method should I use?**" in block
+    # Question title stays in normal font (not bold).
+    assert "[Auth method] Which auth method should I use?" in block
+    assert "**[Auth method] Which auth method should I use?**" not in block
     assert "- **API Key (Recommended) ★** — Use an API key" in block
     assert "- **OAuth** — Use OAuth flow" in block
     # ACP hosts answer in their own input: no CLI resume hint.
@@ -726,8 +728,8 @@ def test_format_questions_markdown_multiple_questions_numbered() -> None:
         {"question": "What is the deadline?", "header": "", "options": []},
     )
     block = format_questions_markdown(questions)
-    assert "**Q1: [Auth method] Which auth method should I use?**" in block
-    assert "**Q2: What is the deadline?**" in block
+    assert "Q1: [Auth method] Which auth method should I use?" in block
+    assert "Q2: What is the deadline?" in block
 
 
 def test_format_questions_markdown_empty_questions() -> None:
