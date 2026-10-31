@@ -330,7 +330,17 @@ def live_server() -> Iterator[LiveServer]:
 def openai_client(live_server: LiveServer) -> Any:
     from openai import OpenAI
 
-    return OpenAI(api_key="local-test-key", base_url=live_server.base_url)
+    client = OpenAI(api_key="local-test-key", base_url=live_server.base_url)
+    # Warm up the SDK's lazy pydantic model construction with a single
+    # serialized request before any test fires concurrent requests. The SDK
+    # builds response model classes on first parse; if that first parse races
+    # across threads, pydantic raises "BaseModel cannot be instantiated
+    # directly" (a class-registry init race that flakes on slow/loaded CI
+    # runners). One non-stream + one stream request covers both code paths.
+    client.responses.create(model="default", input="warmup")
+    for _ in client.responses.create(model="default", input="warmup", stream=True):
+        pass
+    return client
 
 
 @pytest.fixture
