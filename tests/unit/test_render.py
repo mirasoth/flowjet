@@ -92,3 +92,41 @@ def test_thread_table_falls_back_when_rich_missing(monkeypatch: Any) -> None:
     buf = TTYBuffer()
     assert not write_thread_table([ThreadInfo(thread_id="tid-1")], buf)
     assert buf.getvalue() == ""
+
+
+def test_write_thread_list_falls_back_when_render_module_missing(monkeypatch: Any) -> None:
+    """A missing ``flowjet.cli.render`` module must not crash ``fj threads -l``.
+
+    Regression guard for ``ModuleNotFoundError: No module named
+    'flowjet.cli.render'`` observed with stale/partial installs: the caller
+    falls back to plain columns instead of raising.
+    """
+    from flowjet.cli.threads import ThreadInfo, write_thread_list
+
+    # Force the lazy ``from flowjet.cli.render import ...`` to fail.
+    monkeypatch.setitem(sys.modules, "flowjet.cli.render", None)
+    buf = io.StringIO()
+    write_thread_list(
+        [ThreadInfo(thread_id="tid-1", updated_at="2026-10-31 09:00", preview="hello")],
+        buf,
+    )
+    out = buf.getvalue()
+    assert "tid-1" in out and "hello" in out
+
+
+def test_answer_finish_falls_back_when_render_module_missing(monkeypatch: Any) -> None:
+    """A missing ``flowjet.cli.render`` module must not crash answer finishing.
+
+    The finalized answer text is written raw instead of raising
+    ``ModuleNotFoundError`` after the answer is already buffered.
+    """
+    from flowjet.cli.progress import ProgressLine
+    from flowjet.cli.stream import AnswerWriter
+
+    monkeypatch.setitem(sys.modules, "flowjet.cli.render", None)
+    buf = io.StringIO()
+    writer = AnswerWriter(stdout=buf, status=ProgressLine(enabled=False), live=False)
+    writer.set("# Title\n\nsome **bold** text")
+    writer.finish()
+    out = buf.getvalue()
+    assert "# Title" in out and "bold" in out
