@@ -143,7 +143,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **ArcBox tool sandbox (RFC-005).** Shell and workspace file tools run in a per-workspace ArcBox microVM via soothe-nano 2.0's `ArcBoxBackend`, enabled by a `sandbox:` section (`enabled`, `image`, `vcpus`, `mem_mib`, `network`, `workspace_root`, `default_timeout`, `idle_timeout_seconds`, `max_sandboxes`); placement-policy keys (`on_deny`, `placement_overrides`, `max_shuttle_bytes`) pass through unchanged. Runtime isolation stays the thread pool — agent loop and credentials remain on the host, only execution moves into the guest. `SandboxAwareWorkspaceResolver` stages host→guest at open and guest→host at close (before workspace sync), skipping unchanged files via a size/mtime manifest. See [RFC-005](docs/specs/RFC-005-arcbox-tool-sandbox.md).
+- **ArcBox tool sandbox (RFC-005).** Shell and workspace file tools run in a per-workspace ArcBox microVM via soothe-nano 2.0's `ArcBoxBackend`, enabled by a `sandbox:` section (`enabled`, `image`, `vcpus`, `mem_mib`, `network`, `workspace_root`, `default_timeout`, `idle_timeout_seconds`, `max_sandboxes`); placement-policy keys (`on_deny`, `placement_overrides`, `max_shuttle_bytes`) pass through unchanged. Runtime isolation stays the thread pool — agent loop and credentials remain on the host, only execution moves into the guest. `SandboxAwareWorkspaceResolver` stages host→guest at open and guest→host at close (before workspace sync), skipping unchanged files via a size/mtime manifest. See [RFC-005](.platonic/specs/RFC-005-arcbox-tool-sandbox.md).
 - **Dynamic `max_sandboxes` compute-sizing.** Accepts `None`: 70% of logical CPUs ÷ per-sandbox `vcpus`, hard minimum 8 (small hosts and CI runners stay usable). An explicit int still pins the cap; startup logs which path was taken.
 - **`max_sandboxes: 0` (unlimited) + env overrides.** `0` disables LRU eviction entirely — idle reaper and shutdown still reclaim. `FLOWJET_SANDBOX_MAX` pins the cap (`0` = unlimited); `FLOWJET_SANDBOX_MAX_PERCENT` (1–100, default 70) tunes the usable CPU fraction when the cap is computed. The field is also declared on soothe-nano's `SandboxConfig` (`int | None`, `ge=0`, default `8`) as the single source of truth.
 
@@ -229,7 +229,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0] — 2026-09-17 — unified CLI + server
 
-**Breaking.** `flowjet-server` is merged into this repository and ships as one distribution, `flowjet`. See [RFC-004](docs/specs/RFC-004-unified-package.md).
+**Breaking.** `flowjet-server` is merged into this repository and ships as one distribution, `flowjet`. See [RFC-004](.platonic/specs/RFC-004-unified-package.md).
 
 ### Added
 
