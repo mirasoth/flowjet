@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Literal
-from uuid import uuid4
 
 from acp.helpers import (
     embedded_text_resource,
@@ -45,6 +44,7 @@ from flowjet.core.events import (
     ToolStarted,
     UsageInfo,
 )
+from flowjet.core.ids import new_acp_id, short_hex
 from flowjet.core.protocol import RuntimeBackend
 from flowjet.server import __version__ as flowjet_version
 from flowjet.server.clarification import (
@@ -251,7 +251,7 @@ def _clarification_message_chunk(
     id for correlation); generic hosts render it as an embedded resource.
     """
     payload = build_clarification_payload(questions, interrupt_ids)
-    primary_id = payload["interrupt_ids"][0] if payload["interrupt_ids"] else uuid4().hex
+    primary_id = payload["interrupt_ids"][0] if payload["interrupt_ids"] else short_hex()
     return update_agent_message(
         resource_block(
             embedded_text_resource(
@@ -336,7 +336,7 @@ class FlowJetAcpAgent:
     ) -> Any:
         from acp.schema import NewSessionResponse
 
-        session_id = f"acp-{uuid4().hex}"
+        session_id = new_acp_id()
         self._sessions.add(session_id)
         self._remember_cwd(session_id, cwd)
         return NewSessionResponse(session_id=session_id)
@@ -410,7 +410,7 @@ class FlowJetAcpAgent:
             model=model,
             input_text=input_text,
             session=session_id,
-            run_id=f"acp-{uuid4().hex}",
+            run_id=new_acp_id(),
             metadata=metadata,
         )
 
@@ -623,7 +623,7 @@ class FlowJetAcpAgent:
     ) -> Any:
         from acp.schema import ForkSessionResponse
 
-        new_id = f"acp-{uuid4().hex}"
+        new_id = new_acp_id()
         self._sessions.add(new_id)
         self._remember_cwd(new_id, cwd)
         return ForkSessionResponse(session_id=new_id)

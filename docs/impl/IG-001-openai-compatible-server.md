@@ -301,8 +301,8 @@ If `settings.api_key` is set, require `Authorization: Bearer <key>`; else allow 
 
 ### 6.4 ID allocation
 
-- Response ids: `resp_` + uuid4 hex
-- Message/item ids: `msg_` + uuid4 hex
+- Response ids: `resp_` + 16 hex chars (`uuid4().hex[:16]`)
+- Message/item ids: `msg_` + 16 hex chars (`uuid4().hex[:16]`)
 
 ---
 

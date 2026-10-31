@@ -7,10 +7,9 @@ import time
 import traceback
 from collections.abc import AsyncIterator
 from typing import Any
-from uuid import uuid4
 
 from flowjet.core.events import RunFailed, RunRequest
-from flowjet.core.ids import new_run_id
+from flowjet.core.ids import new_chatcmpl_id, new_run_id
 from flowjet.core.protocol import RuntimeBackend
 from flowjet.core.runtime.isolation.errors import IsolationError
 from flowjet.server.clarification import ClarificationFormat
@@ -215,7 +214,7 @@ class ResponseService:
         projection = opts.projection if opts else "report"
         session = opts.session if opts else None
         metadata = merge_flowjet_metadata(opts)
-        response_id = f"chatcmpl_{uuid4().hex}"
+        response_id = new_chatcmpl_id()
         engine = ProjectionEngine(projection, response_id, body.model, self.clarification_format)
 
         request = RunRequest(

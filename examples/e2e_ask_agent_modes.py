@@ -22,17 +22,23 @@ Then::
 from __future__ import annotations
 
 import sys
-import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _client import event_extra, make_client, output_text, section
+from flowjet.core.ids import short_hex
 from openai import APIStatusError, BadRequestError
 
 
 def _session(prefix: str) -> str:
-    return f"fj-{prefix}-{uuid.uuid4().hex[:8]}"
+    """Allocate a session id ``fj-<prefix>-<16 hex>`` using the shared generator.
+
+    The 16-hex token (~64 bits of entropy) matches the format the server and CLI
+    use everywhere (see :mod:`flowjet.core.ids`); the prefix is kept only so this
+    demo can tell its own sessions apart in logs.
+    """
+    return f"fj-{prefix}-{short_hex()}"
 
 
 def _stream_mode(

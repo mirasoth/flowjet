@@ -9,7 +9,6 @@ import logging
 import queue
 import threading
 import traceback
-import uuid
 from collections.abc import AsyncIterator
 from concurrent.futures import Future
 from dataclasses import dataclass, field
@@ -18,6 +17,7 @@ from enum import StrEnum
 from typing import Any
 
 from flowjet.core.events import RunFailed, RuntimeEvent
+from flowjet.core.ids import short_hex
 from flowjet.core.runtime.isolation.adapter import AdapterFactory, AgentAdapter
 from flowjet.core.runtime.isolation.request import IsolatedRunRequest
 
@@ -376,7 +376,7 @@ class ThreadPool:
             )
 
     def _spawn_worker_unlocked(self, *, is_baseline: bool) -> WorkerState:
-        worker_id = f"w_{self._next_index}_{uuid.uuid4().hex[:6]}"
+        worker_id = f"w_{self._next_index}_{short_hex()[:6]}"
         self._next_index += 1
         request_queue: queue.Queue[Any] = queue.Queue()
         cancel_event = threading.Event()
@@ -518,7 +518,7 @@ class ThreadPool:
         assert self._main_loop is not None
         assert self._worker_available is not None
 
-        request_id = request.request_id or uuid.uuid4().hex[:16]
+        request_id = request.request_id or short_hex()
         req = IsolatedRunRequest(
             run_id=request.run_id,
             session=request.session,

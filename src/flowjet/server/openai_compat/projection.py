@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from typing import Any
-from uuid import uuid4
 
 from flowjet.core.events import (
     InterruptWaiting,
@@ -18,6 +17,7 @@ from flowjet.core.events import (
     ToolStarted,
     UsageInfo,
 )
+from flowjet.core.ids import new_message_id
 from flowjet.server.clarification import (
     ClarificationFormat,
     build_clarification_payload,
@@ -82,7 +82,7 @@ class ProjectionEngine:
         self.response_id = response_id
         self.model = model
         self.clarification_format = clarification_format
-        self.item_id = f"msg_{uuid4().hex}"
+        self.item_id = new_message_id()
         self.created_at = int(time.time())
         self._seq = 0
         self._started = False

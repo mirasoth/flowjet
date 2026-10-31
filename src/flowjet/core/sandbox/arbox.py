@@ -7,11 +7,11 @@ import hashlib
 import logging
 import shlex
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from flowjet.core.ids import short_hex
 from flowjet.core.sandbox.settings import ToolSandboxSettings
 
 logger = logging.getLogger(__name__)
@@ -300,7 +300,7 @@ class ArcBoxToolSandboxManager:
         self._started = False
         # Identity of *this* process on the daemon: sandboxes carrying a
         # different instance id were left behind by a previous process.
-        self._instance_id = uuid.uuid4().hex
+        self._instance_id = short_hex()
         # Workspace key -> orphaned sandbox id, populated once at startup.
         self._recoverable: dict[str, str] = {}
         self._last_heartbeat = 0.0

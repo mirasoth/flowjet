@@ -6,7 +6,6 @@ import contextlib
 import hashlib
 import os
 import re
-import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
@@ -92,8 +91,17 @@ def write_active_thread_id(
 
 
 def new_thread_id() -> str:
-    """Allocate a fresh ``<uuid>`` thread id."""
-    return str(uuid.uuid4())
+    """Allocate a fresh short thread id (``fj-<16 hex>``).
+
+    Delegates to :func:`flowjet.core.ids.new_session_id` so the CLI's thread
+    id — the value shown in the ``Done · <duration> · <thread_id>`` footer and
+    reused by ``fjf`` to continue a session — matches the short, opaque,
+    filesystem-safe format used everywhere else (``fj-`` + 16 hex chars,
+    ~64 bits of entropy) instead of a full 36-char UUID with dashes.
+    """
+    from flowjet.core.ids import new_session_id
+
+    return new_session_id()
 
 
 def _lock_holder_pid(lock_path: Path) -> int | None:
@@ -382,8 +390,14 @@ def format_thread_list(threads: list[ThreadInfo]) -> str:
 
 def write_thread_list(threads: list[ThreadInfo], out: TextIO) -> None:
     """Write the thread list: rich table on a TTY, plain columns when piped."""
-    from flowjet.cli.render import write_thread_table
+    # Lazy import is wrapped so a missing/unavailable ``render`` module (e.g. a
+    # partial or stale install without ``cli/render.py``) falls back to the
+    # plain-text columns instead of raising ``ModuleNotFoundError``.
+    try:
+        from flowjet.cli.render import write_thread_table
+    except ImportError:
+        write_thread_table = None  # type: ignore[assignment]
 
-    if write_thread_table(threads, out):
+    if write_thread_table and write_thread_table(threads, out):
         return
     out.write(format_thread_list(threads))

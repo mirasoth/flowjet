@@ -347,9 +347,16 @@ class AnswerWriter:
         piped/scripted output stays raw so downstream tooling is unaffected.
         """
         if self.buf:
-            from flowjet.cli.render import write_answer_markdown
+            # Lazy import is wrapped so a missing/unavailable ``render`` module
+            # (e.g. a partial or stale install without ``cli/render.py``) falls
+            # back to raw text instead of raising ``ModuleNotFoundError`` and
+            # killing the run after the answer is already buffered.
+            try:
+                from flowjet.cli.render import write_answer_markdown
+            except ImportError:
+                write_answer_markdown = None  # type: ignore[assignment]
 
-            if not write_answer_markdown(self.buf, self._stdout):
+            if not write_answer_markdown or not write_answer_markdown(self.buf, self._stdout):
                 self._stdout.write(self.buf)
                 if not self.buf.endswith("\n"):
                     self._stdout.write("\n")
