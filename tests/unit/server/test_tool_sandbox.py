@@ -705,6 +705,10 @@ async def test_wedged_heartbeat_drops_lease_instead_of_stalling_reaper(
     try:
         await manager.open_workspace(str(ws))
         await manager.close_workspace(str(ws))
+        # Stop the background reaper so it cannot race with the direct
+        # _heartbeat() call below (it would update _last_heartbeat and trip
+        # the rate-limit early-return, flaking on slow/loaded CI runners).
+        crash(manager)
         sandbox = fake_arcbox.instances[0].sandboxes[0]
         sandbox.hangs = True  # set_lifecycle() sleeps 30s
         manager._last_heartbeat = 0.0
@@ -829,6 +833,9 @@ async def test_heartbeat_rearms_daemon_orphan_deadline(
     manager = ArcBoxToolSandboxManager(settings)
     try:
         await manager.open_workspace(str(ws))
+        # Stop the background reaper so it cannot race with the direct
+        # _heartbeat() calls below (see test_wedged_heartbeat_drops_lease...).
+        crash(manager)
         sandbox = fake_arcbox.instances[0].sandboxes[0]
         sandbox.set_lifecycle_calls.clear()
         manager._last_heartbeat = 0.0
@@ -854,6 +861,9 @@ async def test_heartbeat_failure_drops_idle_lease(
     try:
         await manager.open_workspace(str(ws))
         await manager.close_workspace(str(ws))
+        # Stop the background reaper so it cannot race with the direct
+        # _heartbeat() call below (see test_wedged_heartbeat_drops_lease...).
+        crash(manager)
         fake_arcbox.instances[0].sandboxes[0].dead = True
         manager._last_heartbeat = 0.0
 
@@ -872,6 +882,9 @@ async def test_heartbeat_failure_keeps_lease_with_run_in_flight(
     manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
     try:
         await manager.open_workspace(str(ws))
+        # Stop the background reaper so it cannot race with the direct
+        # _heartbeat() call below (see test_wedged_heartbeat_drops_lease...).
+        crash(manager)
         fake_arcbox.instances[0].sandboxes[0].dead = True
         manager._last_heartbeat = 0.0
 
