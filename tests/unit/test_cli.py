@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import io
+import sys
+
 import pytest
 
 from flowjet.cli.cli import main_follow, parse_args, split_argv
@@ -1002,3 +1005,67 @@ async def test_detect_pending_interrupt_soft_fails_on_error() -> None:
 
     result = await _detect_pending_interrupt(_Agent(), "t-5")
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# fjf resume — pending ask_user questions use the shared questions renderer
+# ---------------------------------------------------------------------------
+
+_FJF_QUESTIONS = (
+    {
+        "header": "Auth method",
+        "question": "Which method should I use?",
+        "options": [{"label": "API Key (Recommended)", "description": "Use an API key"}],
+    },
+)
+
+
+@pytest.mark.asyncio
+async def test_run_async_pending_interrupt_plain_block_on_non_tty(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Piped/scripted output stays byte-identical to the historical block."""
+    from flowjet.cli import cli as cli_mod
+    from flowjet.cli.cli import parse_args, run_async
+    from flowjet.cli.stream import format_questions_block
+
+    _patch_run_async_env(monkeypatch, stream_result="ok")
+
+    async def fake_pending(*_a: object, **_k: object) -> dict[str, object]:
+        return {"type": "ask_user", "questions": list(_FJF_QUESTIONS)}
+
+    monkeypatch.setattr(cli_mod, "_detect_pending_interrupt", fake_pending)
+    assert await run_async(parse_args(["my answer"])) == 0
+    assert capsys.readouterr().out == format_questions_block(_FJF_QUESTIONS, "fj-test")
+
+
+@pytest.mark.asyncio
+async def test_run_async_pending_interrupt_partitioned_panel_on_tty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Before any dashboard exists, the resume path uses the shared TTY renderer."""
+    from flowjet.cli import cli as cli_mod
+    from flowjet.cli.cli import parse_args, run_async
+
+    class TTYBuffer(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    _patch_run_async_env(monkeypatch, stream_result="ok")
+
+    async def fake_pending(*_a: object, **_k: object) -> dict[str, object]:
+        return {"type": "ask_user", "questions": list(_FJF_QUESTIONS)}
+
+    monkeypatch.setattr(cli_mod, "_detect_pending_interrupt", fake_pending)
+    buf = TTYBuffer()
+    monkeypatch.setattr(sys, "stdout", buf)
+    assert await run_async(parse_args(["my answer"])) == 0
+    out = buf.getvalue()
+    assert "⏸ Paused for input" in out
+    assert "[Auth method]" in out
+    assert "Which method should I use?" in out
+    assert "★" in out
+    assert "Resume with: fjf -t fj-test <your answer>" in out
+    assert "\n⏸ Paused for input:" not in out  # plain block is NOT used on a TTY
+    assert "Q1" not in out  # single question is not numbered

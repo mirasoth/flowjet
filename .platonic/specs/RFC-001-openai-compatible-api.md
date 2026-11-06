@@ -277,7 +277,7 @@ Informed by flowjet-agent `stream_query` / `friendly_progress` — **not** part 
 | Tool call activity (name known; args discarded) | `ToolStarted` |
 | `ToolMessage` completion / error | `ToolCompleted` (`ok` false on error) |
 | Final AI answer text accumulation | `OutputTextDelta` (and final text on `RunCompleted`) |
-| Intermediate AI narration before tools | **Dropped** (fj default: progress line only, not answer) |
+| Intermediate AI narration before tools | **Not forwarded** (fj CLI shows it only as a live answer-preview row in the progress dashboard; not part of the final answer) |
 | `updates` with `__interrupt__` | `InterruptWaiting` |
 | Successful end | `RunCompleted` |
 | Uncaught failure | `RunFailed` |

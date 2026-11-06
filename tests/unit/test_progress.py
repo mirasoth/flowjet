@@ -1,14 +1,16 @@
-"""Tests for ephemeral progress formatting."""
+"""Tests for the CLI dashboard's event-to-label formatting helpers.
+
+The live renderer is covered by ``tests/unit/test_dashboard.py``; this module
+holds the pure ``progress.py`` helpers shared by the reducer and the renderer.
+"""
 
 from __future__ import annotations
 
-import asyncio
 from io import StringIO
 
 import pytest
 
 from flowjet.cli.progress import (
-    ProgressLine,
     format_args_preview,
     format_tool_activity,
     format_tool_done,
@@ -65,10 +67,10 @@ def test_format_run_command_activity() -> None:
 
 def test_format_grep_activity() -> None:
     label, _color = format_tool_activity(
-        "grep", {"pattern": "ProgressLine", "path": "src/flowjet.cli"}
+        "grep", {"pattern": "DashboardPanel", "path": "src/flowjet.cli"}
     )
     assert "Grepping" in label
-    assert "ProgressLine" in label
+    assert "DashboardPanel" in label
     assert "flowjet.cli" in label or "src/flowjet.cli" in label
 
 
@@ -182,43 +184,6 @@ def test_truncate_cols_mixed_ascii_cjk() -> None:
     assert "通过" in out
 
 
-def test_progress_line_update_tail_prefers_latest_clause(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from flowjet.cli.progress import _display_width, _line_budget
-
-    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "24")
-    buf = StringIO()
-    line = ProgressLine(buf, enabled=True)
-    long = "前面很长说明。现在创建 GitHub Release v1.0.8。"
-    line.update(long, color="green", tail=True)
-    rendered = buf.getvalue()
-    assert "\r" in rendered
-    plain = rendered.split("\r")[-1].replace("\033[2K", "")
-    for code in ("\033[0m", "\033[1m", "\033[32m"):
-        plain = plain.replace(code, "")
-    plain = plain.lstrip("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ").strip()
-    assert _display_width(plain) <= _line_budget()
-    assert "Release" in plain or "v1.0.8" in plain
-    assert "前面" not in plain
-
-
-def test_progress_line_cjk_paint_respects_display_width(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from flowjet.cli.progress import _display_width, _line_budget
-
-    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "24")
-    buf = StringIO()
-    line = ProgressLine(buf, enabled=True)
-    line.update("中" * 20, color="cyan")
-    plain = buf.getvalue().split("\r")[-1].replace("\033[2K", "")
-    for esc in ("\033[0m", "\033[1m", "\033[36m"):
-        plain = plain.replace(esc, "")
-    plain = plain.lstrip("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ").strip()
-    assert _display_width(plain) <= _line_budget()
-
-
 def test_format_tool_done_keeps_context() -> None:
     label, color = format_tool_done(
         "read_file", {"file_path": "src/flowjet.cli/progress.py"}, is_error=False
@@ -241,39 +206,6 @@ def test_friendly_tool_completed_keeps_context() -> None:
     assert "read_file" in label
     assert "Makefile" in label
     assert color == "cyan"
-
-
-def test_progress_line_ephemeral_clear() -> None:
-    buf = StringIO()
-    line = ProgressLine(buf, enabled=True)
-    line.update("Thinking", color="cyan")
-    assert "\r" in buf.getvalue()
-    assert "Thinking" in buf.getvalue()
-    line.clear()
-    assert buf.getvalue().endswith("\033[2K") or "\033[2K" in buf.getvalue()
-
-
-@pytest.mark.asyncio
-async def test_progress_line_blank_repaint_for_verbose() -> None:
-    buf = StringIO()
-    line = ProgressLine(buf, enabled=True, tick_seconds=0.05)
-    async with line:
-        line.update("Thinking", color="cyan")
-        line.blank()
-        assert buf.getvalue().endswith("\033[2K")
-        line.repaint()
-        assert "Thinking" in buf.getvalue()
-
-
-@pytest.mark.asyncio
-async def test_progress_line_spins_between_updates() -> None:
-    buf = StringIO()
-    line = ProgressLine(buf, enabled=True, tick_seconds=0.02)
-    async with line:
-        line.update("Thinking", color="cyan")
-        await asyncio.sleep(0.07)
-    frames = sum(1 for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" if ch in buf.getvalue())
-    assert frames >= 2
 
 
 def test_friendly_step_events() -> None:
@@ -493,10 +425,10 @@ def test_wide_budget_keeps_long_pattern(monkeypatch: pytest.MonkeyPatch) -> None
     from flowjet.cli.progress import _display_width
 
     monkeypatch.setenv("FJ_PROGRESS_WIDTH", "120")
-    pattern = "ProgressLine_and_format_args_preview_density"
+    pattern = "DashboardPanel_and_format_args_preview_density"
     label, _ = format_tool_activity("grep", {"pattern": pattern, "path": "src/flowjet.cli"})
     assert _display_width(label) <= 120
-    assert "ProgressLine_and_format_args" in label
+    assert "DashboardPanel_and_format_args" in label
     assert "src/flowjet.cli" in label
 
 
@@ -573,45 +505,3 @@ def test_short_path_keeps_two_segments() -> None:
 
     out = _short_path("/Users/me/Workspace/fj-ai/src/flowjet.cli/cli.py", 40)
     assert out == "flowjet.cli/cli.py"
-
-
-def test_progress_line_timer_hidden_under_one_second(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    times = iter([100.0, 100.0, 100.4])
-    monkeypatch.setattr("flowjet.cli.progress.time.monotonic", lambda: next(times))
-    buf = StringIO()
-    line = ProgressLine(buf, enabled=True)
-    line.update("Reading cli.py", color="yellow")
-    plain = buf.getvalue().split("\r")[-1]
-    assert " · " not in plain or "s" not in plain.split("cli.py")[-1]
-
-
-def test_progress_line_timer_shows_after_one_second(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from flowjet.cli.progress import _display_width, _line_budget
-
-    monkeypatch.setenv("FJ_PROGRESS_WIDTH", "48")
-    clock = {"t": 100.0}
-    monkeypatch.setattr("flowjet.cli.progress.time.monotonic", lambda: clock["t"])
-    buf = StringIO()
-    line = ProgressLine(buf, enabled=True)
-    line.update("Reading cli.py", color="yellow")
-    clock["t"] = 103.2
-    line._paint()
-    plain = buf.getvalue().split("\r")[-1].replace("\033[2K", "")
-    for code in ("\033[0m", "\033[1m", "\033[2m", "\033[33m"):
-        plain = plain.replace(code, "")
-    plain = plain.lstrip("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ").strip()
-    assert " · 3s" in plain
-    assert _display_width(plain) <= _line_budget()
-
-
-def test_progress_line_clear_after_update() -> None:
-    buf = StringIO()
-    line = ProgressLine(buf, enabled=True)
-    line.update("Thinking", color="cyan")
-    line.clear()
-    assert "\033[2K" in buf.getvalue()
-    assert line._active is False

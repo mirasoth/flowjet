@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
-from flowjet.cli.progress import ProgressLine
+from flowjet.cli.dashboard import ProgressDashboard
 from flowjet.cli.stream import (
     INTERRUPTED,
     AnswerWriter,
@@ -116,7 +116,7 @@ def test_status_preview_splits_em_dash() -> None:
 
 def test_answer_writer_live_buffers_until_finish() -> None:
     out = StringIO()
-    status = ProgressLine(out, enabled=False)
+    status = ProgressDashboard(out, enabled=False)
     writer = AnswerWriter(out, status, live=True)
 
     writer.set("Hello")
@@ -128,7 +128,7 @@ def test_answer_writer_live_buffers_until_finish() -> None:
 
 def test_answer_writer_buffered_waits_until_finish() -> None:
     out = StringIO()
-    status = ProgressLine(out, enabled=False)
+    status = ProgressDashboard(out, enabled=False)
     writer = AnswerWriter(out, status, live=False)
 
     writer.set("Hello")
@@ -140,7 +140,7 @@ def test_answer_writer_buffered_waits_until_finish() -> None:
 
 def test_answer_writer_reset_for_tools_drops_intermediate() -> None:
     out = StringIO()
-    status = ProgressLine(out, enabled=False)
+    status = ProgressDashboard(out, enabled=False)
     writer = AnswerWriter(out, status, live=True)
 
     writer.set("Looking around")
@@ -152,7 +152,7 @@ def test_answer_writer_reset_for_tools_drops_intermediate() -> None:
 
 def test_answer_writer_divergent_replace_keeps_latest_only() -> None:
     out = StringIO()
-    status = ProgressLine(out, enabled=False)
+    status = ProgressDashboard(out, enabled=False)
     writer = AnswerWriter(out, status, live=True)
 
     writer.set("First draft")
@@ -163,48 +163,68 @@ def test_answer_writer_divergent_replace_keeps_latest_only() -> None:
 
 def test_answer_writer_live_updates_progress_preview() -> None:
     out = StringIO()
-    status = ProgressLine(out, enabled=True)
+    status = ProgressDashboard(out, enabled=False)
     writer = AnswerWriter(out, status, live=True)
     writer.set("I'll fetch the latest stock news")
-    assert "fetch the latest" in out.getvalue() or "stock news" in out.getvalue()
+    assert status.state.answer_preview is not None
+    assert "fetch the latest" in status.state.answer_preview
     assert writer.buf == "I'll fetch the latest stock news"
-    assert not out.getvalue().endswith("I'll fetch the latest stock news\n")
+    # Non-TTY: the dashboard maintains state but emits nothing.
+    assert out.getvalue() == ""
 
 
 def test_answer_writer_throttles_rapid_preview_updates(monkeypatch: pytest.MonkeyPatch) -> None:
     out = StringIO()
-    status = ProgressLine(out, enabled=True)
+    status = ProgressDashboard(out, enabled=False)
     writer = AnswerWriter(out, status, live=True)
     clock = {"t": 0.0}
     monkeypatch.setattr("flowjet.cli.stream.time.monotonic", lambda: clock["t"])
+    previews: list[str | None] = []
+    original_preview = ProgressDashboard.set_answer_preview
+
+    def capture_preview(self: ProgressDashboard, text: str | None) -> None:
+        previews.append(text)
+        original_preview(self, text)
+
+    monkeypatch.setattr(ProgressDashboard, "set_answer_preview", capture_preview)
 
     writer.set("a")
     clock["t"] = 0.01
     writer.set("ab")
     clock["t"] = 0.02
     writer.set("abc")
-    paints_before = out.getvalue().count("\r")
+    assert len(previews) == 1
     clock["t"] = 0.20
     writer.set("abcd")
-    paints_after = out.getvalue().count("\r")
-    assert paints_before == 1
-    assert paints_after == 2
+    assert len(previews) == 2
+    assert out.getvalue() == ""
 
 
 def test_answer_writer_reset_clears_throttle_state(monkeypatch: pytest.MonkeyPatch) -> None:
     out = StringIO()
-    status = ProgressLine(out, enabled=True)
+    status = ProgressDashboard(out, enabled=False)
     writer = AnswerWriter(out, status, live=True)
     clock = {"t": 0.0}
     monkeypatch.setattr("flowjet.cli.stream.time.monotonic", lambda: clock["t"])
+    clears = 0
+    original_clear = ProgressDashboard.clear_answer_preview
+
+    def capture_clear(self: ProgressDashboard) -> None:
+        nonlocal clears
+        clears += 1
+        original_clear(self)
+
+    monkeypatch.setattr(ProgressDashboard, "clear_answer_preview", capture_clear)
 
     writer.set("before tools")
-    paints_after_first = out.getvalue().count("\r")
+    assert status.state.answer_preview
     writer.reset_for_tools()
+    assert clears == 1
+    assert status.state.answer_preview is None
     clock["t"] = 0.01
     writer.set("after tools")
-    paints_after_reset = out.getvalue().count("\r")
-    assert paints_after_reset == paints_after_first + 1
+    assert status.state.answer_preview
+    assert out.getvalue() == ""
 
 
 def test_status_preview_skips_trailing_marker_without_tail() -> None:
@@ -213,10 +233,10 @@ def test_status_preview_skips_trailing_marker_without_tail() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_query_cjk_narration_preview_uses_tail(
+async def test_stream_query_cjk_narration_preview_uses_latest_clause(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from flowjet.cli.progress import ProgressLine, _display_width, _line_budget
+    from flowjet.cli.progress import _display_width, _line_budget
 
     monkeypatch.setenv("FJ_PROGRESS_WIDTH", "36")
     clock = {"t": 0.0}
@@ -227,17 +247,16 @@ async def test_stream_query_cjk_narration_preview_uses_tail(
 
     monkeypatch.setattr("flowjet.cli.stream.time.monotonic", fake_monotonic)
     out = StringIO()
-    progress = ProgressLine(out, enabled=True)
-    updates: list[tuple[str, bool]] = []
-    original_update = ProgressLine.update
+    progress = ProgressDashboard(out, enabled=False)
+    previews: list[str] = []
+    original_preview = ProgressDashboard.set_answer_preview
 
-    def capture_update(
-        self: ProgressLine, message: str, *, color: str = "cyan", tail: bool = False
-    ) -> None:
-        updates.append((message, tail))
-        original_update(self, message, color=color, tail=tail)
+    def capture_preview(self: ProgressDashboard, text: str | None) -> None:
+        if text:
+            previews.append(text)
+        original_preview(self, text)
 
-    monkeypatch.setattr(ProgressLine, "update", capture_update)
+    monkeypatch.setattr(ProgressDashboard, "set_answer_preview", capture_preview)
 
     prefix = "最近一次 CI 运行全部绿色通过。"
     suffix = "现在创建 GitHub Release v1.0.8。"
@@ -259,11 +278,11 @@ async def test_stream_query_cjk_narration_preview_uses_tail(
     assert result == full
     assert full + "\n" in out.getvalue()
     assert out.getvalue().endswith(" · t1\n")
-    tail_updates = [msg for msg, used_tail in updates if used_tail]
-    assert tail_updates
-    assert any("现在创建" in msg for msg in tail_updates)
-    assert tail_updates[-1] == suffix or "现在创建" in tail_updates[-1]
-    assert _display_width(tail_updates[-1]) <= _line_budget()
+    assert previews
+    assert any("现在创建" in msg for msg in previews)
+    assert "现在创建" in previews[-1]
+    assert prefix not in previews[-1]
+    assert _display_width(previews[-1]) <= _line_budget()
 
 
 @pytest.mark.asyncio
@@ -296,14 +315,14 @@ async def test_stream_query_many_chunks_throttles_narration_updates(
         thread_id="t1",
         live_answer=True,
         out=out,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     assert narration_updates < 40
 
 
 def test_answer_writer_finish_prints_complete_buffer() -> None:
     out = StringIO()
-    status = ProgressLine(out, enabled=False)
+    status = ProgressDashboard(out, enabled=False)
     writer = AnswerWriter(out, status, live=True)
     writer.buf = (
         "The external boundary to `soothe_nano`/`langchain`/`aiosqlite`, "
@@ -348,7 +367,7 @@ async def test_stream_query_live_answer_and_custom_event() -> None:
         live_answer=True,
         out=out,
         err=err,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     assert result == "Hi there"
     assert out.getvalue().startswith("Hi there\n")
@@ -402,7 +421,7 @@ async def test_stream_query_tool_call_and_error_result() -> None:
         live_answer=True,
         out=out,
         err=err,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     assert result == "Recovered."
     assert out.getvalue().startswith("Recovered.\n")
@@ -461,7 +480,7 @@ async def test_verbose_skips_noisy_events_and_partial_tool_args() -> None:
         live_answer=True,
         out=out,
         err=err,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     assert result == "done"
     stderr = err.getvalue()
@@ -523,7 +542,7 @@ async def test_stream_query_drops_intermediate_ai_narration() -> None:
         thread_id="t1",
         live_answer=True,
         out=out,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     assert result.startswith("## Latest Stock Market News")
     printed = out.getvalue()
@@ -554,7 +573,7 @@ async def test_stream_query_keeps_longer_chunk_buffer_at_end() -> None:
         thread_id="t1",
         live_answer=True,
         out=out,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     assert result == long_answer
     assert out.getvalue().startswith(long_answer + "\n")
@@ -575,7 +594,7 @@ async def test_invoke_query_buffers_until_end() -> None:
         "q",
         thread_id="t1",
         out=out,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     assert result == "Final answer"
     assert out.getvalue().startswith("Final answer\n")
@@ -624,7 +643,7 @@ async def test_stream_query_ask_user_interrupt_returns_interrupted() -> None:
         live_answer=True,
         out=out,
         err=err,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     assert result == INTERRUPTED
     output = out.getvalue()
@@ -635,6 +654,52 @@ async def test_stream_query_ask_user_interrupt_returns_interrupted() -> None:
     assert "fjf -t t-auth" in output
     # Must NOT print "Done" when interrupted.
     assert "Done" not in output
+
+
+@pytest.mark.asyncio
+async def test_stream_query_paused_snapshot_precedes_questions() -> None:
+    """On a TTY the frozen PAUSED panel stays above the partitioned questions."""
+    from flowjet.cli.render import _ANSI_RE
+
+    class TTYBuffer(StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    class RecordingLive:
+        def __init__(self, **kwargs: Any) -> None:
+            self.console = kwargs["console"]
+            self.get_renderable = kwargs["get_renderable"]
+
+        def start(self, refresh: bool = False) -> None:
+            pass
+
+        def refresh(self) -> None:
+            self.console.print(self.get_renderable())
+
+        def stop(self) -> None:
+            pass
+
+    out = TTYBuffer()
+    err = StringIO()
+    dash = ProgressDashboard(out, enabled=True, live_factory=lambda **kw: RecordingLive(**kw))
+    result = await stream_query(
+        _FakeAgent([_interrupt_chunk(_QUESTIONS)]),  # type: ignore[arg-type]
+        "set up auth",
+        thread_id="t-paused",
+        out=out,
+        err=err,
+        progress=dash,
+    )
+    assert result == INTERRUPTED
+    assert dash.state.status == "PAUSED"
+    assert dash.state.elapsed_override is not None
+    plain = _ANSI_RE.sub("", out.getvalue())
+    assert "⏸ PAUSED" in plain
+    assert "⏸ Paused for input" in plain
+    assert plain.index("⏸ PAUSED") < plain.index("⏸ Paused for input")
+    assert "Which auth method" in plain
+    assert "fjf -t t-paused" in plain
+    assert "✓ Done" not in plain
 
 
 @pytest.mark.asyncio
@@ -656,7 +721,7 @@ async def test_stream_query_non_ask_user_interrupt_continues() -> None:
         live_answer=True,
         out=out,
         err=err,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     assert result == "Recovered."
     assert out.getvalue().startswith("Recovered.\n")
@@ -682,7 +747,7 @@ async def test_stream_query_resume_value_passed_to_backend() -> None:
         resume_value="my answer",
         live_answer=True,
         out=out,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     assert result == "Resumed!"
     # Resume sends a Command(resume=...) — not a HumanMessage dict.
@@ -826,7 +891,7 @@ async def test_stream_query_run_failure_carries_original_traceback() -> None:
             thread_id="t1",
             out=StringIO(),
             err=StringIO(),
-            progress=ProgressLine(StringIO(), enabled=False),
+            progress=ProgressDashboard(StringIO(), enabled=False),
         )
     assert excinfo.value.exc_type == "ValueError"
     assert excinfo.value.traceback_text is not None
@@ -913,7 +978,7 @@ async def test_stream_query_no_output_warns_with_failed_tool() -> None:
         thread_id="t1",
         out=out,
         err=err,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     warning = err.getvalue()
     assert "agent produced no output" in warning
@@ -932,7 +997,7 @@ async def test_stream_query_no_output_without_tool_failures() -> None:
         thread_id="t1",
         out=out,
         err=err,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     warning = err.getvalue()
     assert "agent produced no output" in warning
@@ -967,7 +1032,7 @@ async def test_stream_query_flushes_partial_output_on_failure() -> None:
             thread_id="t1",
             out=out,
             err=err,
-            progress=ProgressLine(out, enabled=False),
+            progress=ProgressDashboard(out, enabled=False),
         )
     assert excinfo.value.exc_type == "ValueError"
     flushed = err.getvalue()
@@ -987,7 +1052,7 @@ async def test_stream_query_timeout_cancels_run() -> None:
             thread_id="t1",
             out=out,
             err=err,
-            progress=ProgressLine(out, enabled=False),
+            progress=ProgressDashboard(out, enabled=False),
             timeout_s=0.05,
         )
     assert excinfo.value.exc_type == "TimeoutError"
@@ -1005,7 +1070,7 @@ async def test_stream_query_no_timeout_completes() -> None:
         thread_id="t1",
         out=out,
         err=err,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
         timeout_s=0,
     )
     assert result == "done text"

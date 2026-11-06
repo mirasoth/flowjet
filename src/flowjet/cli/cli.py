@@ -67,7 +67,7 @@ def _log_level_from_env() -> int | None:
 class _CompactConsoleFormatter(logging.Formatter):
     """One-line console records; exceptions summarized on the same line.
 
-    Full tracebacks would smash the ephemeral progress line, but dropping the
+    Full tracebacks would tear the live dashboard, but dropping the
     exception entirely (the old behavior) hid the root cause even with ``-v``.
     The full stack for run failures is available via ``AgentRunError``.
     """
@@ -135,8 +135,8 @@ def _attach_file_log_handler(root: logging.Logger) -> None:
 
     ``FJ_LOG_LEVEL`` (e.g. ``debug``) lowers this handler's level so the
     same file captures DEBUG records — the recommended way to observe the
-    nano bridge's tool stream timings without smashing the console
-    progress line.
+    nano bridge's tool stream timings without tearing the console
+    live dashboard.
     """
     if any(getattr(h, "name", None) == _FJ_FILE_HANDLER for h in root.handlers):
         return
@@ -696,9 +696,19 @@ async def run_async(args: argparse.Namespace) -> int:
                     else:
                         questions = ()
                     # Print the questions so the user sees what they're answering.
+                    # This path runs before stream_query starts, so there is no
+                    # dashboard instance yet: use the shared TTY renderer (the
+                    # same one the in-run pause uses) with a plain-text fallback.
                     if questions:
-                        sys.stdout.write(format_questions_block(questions, thread_id))
-                        sys.stdout.flush()
+                        try:
+                            from flowjet.cli.render import write_questions
+
+                            rendered = write_questions(questions, thread_id, sys.stdout)
+                        except ImportError:
+                            rendered = False
+                        if not rendered:
+                            sys.stdout.write(format_questions_block(questions, thread_id))
+                            sys.stdout.flush()
                     resume_value = {"answers": [args.query_text]}
                 if args.no_stream:
                     result = await invoke_query(

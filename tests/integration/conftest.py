@@ -166,22 +166,21 @@ def live_stream_runtime(
     soothe_home: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict[str, Any]:
-    """Stub agent wiring but run real ``stream_query`` (progress + answer path)."""
-    import sys
-
+    """Stub agent wiring but run real ``stream_query`` (dashboard + answer path)."""
     import flowjet.cli.agent as agent_mod
     import flowjet.cli.agent as config_mod
     import flowjet.cli.completion.context as history_mod
     import flowjet.cli.threads as threads_mod
-    from flowjet.cli.progress import ProgressLine
+    from flowjet.cli.dashboard import ProgressDashboard
 
-    # ProgressLine only paints on TTY; capsys stdout is non-interactive.
-    monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
-
+    # Keep capsys stdout non-interactive: the dashboard then stays in its
+    # zero-output mode while still reducing state, so captured stdout remains
+    # byte-identical and the wrappers below observe every update.
     seen: dict[str, Any] = {
         "chunks": [],
         "progress_updates": 0,
         "tail_updates": 0,
+        "previews": [],
     }
 
     class _FakeAgent:
@@ -199,26 +198,33 @@ def live_stream_runtime(
     async def fake_build(*_a: object, **_k: object) -> _FakeAgent:
         return _FakeAgent()
 
-    original_update = ProgressLine.update
+    original_update = ProgressDashboard.update
+    original_preview = ProgressDashboard.set_answer_preview
 
     def counting_update(
-        self: ProgressLine,
+        self: ProgressDashboard,
         message: str,
         *,
         color: str = "cyan",
         tail: bool = False,
+        ok: bool | None = None,
+        duration_ms: int | None = None,
     ) -> None:
         seen["progress_updates"] += 1
-        if tail:
-            seen["tail_updates"] += 1
-        original_update(self, message, color=color, tail=tail)
+        original_update(self, message, color=color, tail=tail, ok=ok, duration_ms=duration_ms)
+
+    def counting_preview(self: ProgressDashboard, text: str | None) -> None:
+        seen["tail_updates"] += 1
+        seen["previews"].append(text or "")
+        original_preview(self, text)
 
     monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
     monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
     monkeypatch.setattr(agent_mod, "build_agent", fake_build)
     monkeypatch.setattr(threads_mod, "resolve_thread_id", fake_resolve)
     monkeypatch.setattr(history_mod, "append_history", lambda _q: None)
-    monkeypatch.setattr(ProgressLine, "update", counting_update)
+    monkeypatch.setattr(ProgressDashboard, "update", counting_update)
+    monkeypatch.setattr(ProgressDashboard, "set_answer_preview", counting_preview)
     return seen
 
 

@@ -1,35 +1,21 @@
-"""Ephemeral colored progress line for fj (stdout line 1)."""
+"""Event-to-label formatting helpers for the fj CLI dashboard.
+
+The old single-line ANSI renderer is gone; the in-place multi-line display now
+lives in :mod:`flowjet.cli.dashboard`. This module keeps the pure formatting
+functions, the colour gate and the column budget that both the dashboard and
+the event reducer share.
+"""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
 import shutil
-import sys
-import time
 import unicodedata
 from typing import Any, TextIO
 
-# ANSI
-_RESET = "\033[0m"
-_BOLD = "\033[1m"
-_COLORS = {
-    "cyan": "\033[36m",
-    "yellow": "\033[33m",
-    "magenta": "\033[35m",
-    "green": "\033[32m",
-    "red": "\033[31m",
-    "blue": "\033[34m",
-    "white": "\033[37m",
-}
-
-_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-_TICK_SECONDS = 0.08
-_STEP_TIMER_MIN_SECONDS = 1.0
-_DIM = "\033[2m"
-# Visible status text budget (spinner glyph + space excluded).
+# Dashboard/panel column budget, shared with the event formatter.
 _PROGRESS_MIN = 36
 _PROGRESS_DEFAULT = 72
 _PROGRESS_MAX = 200
@@ -202,7 +188,7 @@ def _color_enabled(stream: TextIO) -> bool:
 
 
 def _line_budget() -> int:
-    """Max visible chars for the status text (spinner + margin excluded)."""
+    """Max columns for dashboard text (panel borders/padding excluded)."""
     env = os.environ.get("FJ_PROGRESS_WIDTH", "").strip()
     if env.isdigit():
         return max(_PROGRESS_MIN, min(_PROGRESS_MAX, int(env)))
@@ -210,7 +196,7 @@ def _line_budget() -> int:
         cols = shutil.get_terminal_size(fallback=(_PROGRESS_DEFAULT + 6, 24)).columns
     except OSError:
         cols = _PROGRESS_DEFAULT + 6
-    # Leave room for spinner glyph, space, and terminal margin.
+    # Leave room for panel borders, padding and terminal margin.
     return max(_PROGRESS_MIN, min(_PROGRESS_MAX, cols - 6))
 
 
@@ -783,143 +769,3 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
     if detail:
         label = f"{verb} · {detail}"
     return _fit(label), "cyan"
-
-
-class ProgressLine:
-    """Overwrite a single ephemeral status line on stdout (TTY only).
-
-    A background asyncio tick keeps the spinner moving between stream events
-    (e.g. while waiting on the model after a tool result).
-    """
-
-    def __init__(
-        self,
-        stream: TextIO | None = None,
-        *,
-        enabled: bool | None = None,
-        tick_seconds: float = _TICK_SECONDS,
-    ) -> None:
-        self._stream = stream if stream is not None else sys.stdout
-        if enabled is None:
-            enabled = bool(getattr(self._stream, "isatty", lambda: False)())
-        self._enabled = enabled
-        self._color = _color_enabled(self._stream) if self._enabled else False
-        self._active = False
-        self._frame = 0
-        self._message = "Working"
-        self._style = "cyan"
-        self._tick_seconds = tick_seconds
-        self._task: asyncio.Task[None] | None = None
-        self._step_started_at = time.monotonic()
-
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
-
-    async def __aenter__(self) -> ProgressLine:
-        await self.start()
-        return self
-
-    async def __aexit__(self, *_exc: object) -> None:
-        await self.stop()
-
-    async def start(self) -> None:
-        """Start the background spinner ticker."""
-        if not self._enabled or self._task is not None:
-            return
-        self._active = True
-        self._step_started_at = time.monotonic()
-        self._paint()
-        self._task = asyncio.create_task(self._spin(), name="fj-progress-spinner")
-
-    async def stop(self) -> None:
-        """Stop the ticker and clear the progress line."""
-        task = self._task
-        self._task = None
-        if task is not None:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        self.clear()
-
-    async def _spin(self) -> None:
-        try:
-            while True:
-                await asyncio.sleep(self._tick_seconds)
-                if self._active:
-                    self._paint()
-        except asyncio.CancelledError:
-            raise
-
-    def update(self, message: str, *, color: str = "cyan", tail: bool = False) -> None:
-        if not self._enabled:
-            return
-        fitted = _fit(message.strip() or "Working", tail=tail)
-        if fitted != self._message:
-            self._step_started_at = time.monotonic()
-        self._message = fitted
-        self._style = color
-        self._active = True
-        self._paint()
-        self._ensure_ticker()
-
-    def _ensure_ticker(self) -> None:
-        if not self._enabled or self._task is not None:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        self._task = loop.create_task(self._spin(), name="fj-progress-spinner")
-
-    def _elapsed_suffix(self) -> str:
-        elapsed = time.monotonic() - self._step_started_at
-        if elapsed < _STEP_TIMER_MIN_SECONDS:
-            return ""
-        total = int(elapsed)
-        if total < 60:
-            return f" · {total}s"
-        minutes, secs = divmod(total, 60)
-        return f" · {minutes}m{secs:02d}s"
-
-    def _paint(self) -> None:
-        if not self._enabled:
-            return
-        suffix = self._elapsed_suffix()
-        budget = _line_budget()
-        suffix_w = _display_width(suffix)
-        text = _fit(self._message, budget=max(1, budget - suffix_w))
-        frame = _SPINNER[self._frame % len(_SPINNER)]
-        self._frame += 1
-        if self._color:
-            code = _COLORS.get(self._style, _COLORS["cyan"])
-            dim_suffix = f"{_DIM}{suffix}{_RESET}{code}" if suffix else ""
-            rendered = f"{code}{_BOLD}{frame}{_RESET}{code} {text}{dim_suffix}{_RESET}"
-        else:
-            rendered = f"{frame} {text}{suffix}"
-        self._stream.write(f"\r\033[2K{rendered}")
-        self._stream.flush()
-
-    def blank(self) -> None:
-        """Erase the progress line so other writers can print cleanly."""
-        if not self._enabled:
-            return
-        if self._frame > 0 or self._message:
-            self._stream.write("\r\033[2K")
-            self._stream.flush()
-
-    def repaint(self) -> None:
-        """Redraw the current progress frame after a ``blank()``."""
-        if self._active:
-            self._paint()
-
-    def clear(self) -> None:
-        self._active = False
-        if not self._enabled:
-            return
-        if self._frame > 0 or self._message:
-            self._stream.write("\r\033[2K")
-            self._stream.flush()
-        self._message = ""

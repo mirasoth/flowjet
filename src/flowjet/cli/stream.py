@@ -1,4 +1,4 @@
-"""Stream agent events: ephemeral progress + complete final answer."""
+"""Stream agent events: multi-line progress dashboard + complete final answer."""
 
 from __future__ import annotations
 
@@ -16,8 +16,9 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from soothe_nano import SootheNanoAgent
 
 from flowjet.cli.cli import _FJ_FILE_HANDLER
+from flowjet.cli.dashboard import ProgressDashboard
 from flowjet.cli.progress import (
-    ProgressLine,
+    format_args_preview,
     format_tool_activity,
     format_tool_done,
     friendly_progress,
@@ -35,7 +36,7 @@ from flowjet.core.events import (
 from flowjet.core.runtime.direct import DirectRuntimeBackend
 from flowjet.core.streaming.tool_results import ToolResultInspector
 
-# Min interval between live narration previews on the progress line (seconds).
+# Min interval between live narration previews in the dashboard (seconds).
 _STATUS_PREVIEW_MIN_INTERVAL = 0.12
 
 # Returned by ``stream_query`` / ``invoke_query`` when the agent paused for
@@ -212,16 +213,37 @@ def _verbose_preview(content: Any, *, limit: int = 200) -> str:
     return ToolResultInspector.preview(content, limit=limit)
 
 
-def _write_verbose(status: ProgressLine, stderr: TextIO, text: str) -> None:
-    """Write a verbose mirror line without colliding with the progress spinner."""
+def _write_verbose(status: ProgressDashboard, stderr: TextIO, text: str) -> None:
+    """Write a verbose mirror line through the dashboard's live console."""
     status.blank()
-    stderr.write(text if text.endswith("\n") else text + "\n")
-    stderr.flush()
+    status.write_through(text if text.endswith("\n") else text + "\n", stderr)
     status.repaint()
 
 
+def _reduce_steps(status: ProgressDashboard, raw: dict[str, Any]) -> None:
+    """Fold soothe's ``step``/``steps`` todo events into the dashboard state."""
+    step = raw.get("step")
+    steps = raw.get("steps")
+    if isinstance(step, int) and isinstance(steps, int) and steps > 0:
+        status.set_step(step, steps)
+
+
+def _render_questions(
+    questions: tuple[dict[str, Any], ...] | list[dict[str, Any]],
+    thread_id: str,
+    out: TextIO,
+) -> bool:
+    """TTY: partitioned rich panel. ``False`` = caller writes the plain block."""
+    try:
+        from flowjet.cli.render import write_questions
+    except ImportError:
+        # A stale/partial wheel without ``render.py`` still shows the questions.
+        return False
+    return write_questions(questions, thread_id, out)
+
+
 def _mirror_tool(
-    status: ProgressLine,
+    status: ProgressDashboard,
     stderr: TextIO,
     mirrored: set[str],
     tc_id: str,
@@ -284,7 +306,7 @@ def accumulate_ai_text(current: str, message: AIMessage) -> str:
 
 
 def _status_preview(text: str) -> str:
-    """Single-line preview of AI narration for the ephemeral progress line."""
+    """Single-line preview of AI narration for the dashboard's answer row."""
     line = re.sub(r"\s+", " ", text.strip())
     if not line:
         return "Writing answer…"
@@ -308,17 +330,17 @@ def _status_preview(text: str) -> str:
 
 
 class AnswerWriter:
-    """Buffer answer text; show narration on the progress line; print only at end.
+    """Buffer answer text; preview narration in the dashboard; print only at end.
 
     Multi-step agent turns emit intermediate AI text ("Let me try…") before tool
-    calls. That stays on the ephemeral progress line. ``finish()`` always writes
-    the full buffer so the finalized response is never truncated.
+    calls. That stays in the dashboard's answer-preview row. ``finish()`` always
+    writes the full buffer so the finalized response is never truncated.
     """
 
     def __init__(
         self,
         stdout: TextIO,
-        status: ProgressLine,
+        status: ProgressDashboard,
         *,
         live: bool = True,
     ) -> None:
@@ -330,7 +352,7 @@ class AnswerWriter:
         self._last_preview = ""
 
     def set(self, new_buf: str) -> None:
-        """Replace the answer buffer; mirror a preview onto the progress line."""
+        """Replace the answer buffer; mirror a preview into the dashboard."""
         self.buf = new_buf
         if not new_buf:
             return
@@ -341,10 +363,12 @@ class AnswerWriter:
                 not self._last_preview
                 or now - self._last_preview_at >= _STATUS_PREVIEW_MIN_INTERVAL
             ):
-                self._status.update(preview, color="green", tail=True)
+                self._status.set_answer_preview(preview)
                 self._last_preview = preview
                 self._last_preview_at = now
         else:
+            # ``--no-stream`` shows no narration preview; keep the phase update
+            # without populating the dashboard's answer row.
             self._status.update("Writing answer…", color="green")
 
     def reset_for_tools(self) -> None:
@@ -352,9 +376,10 @@ class AnswerWriter:
         self.buf = ""
         self._last_preview = ""
         self._last_preview_at = 0.0
+        self._status.clear_answer_preview()
 
     def finish(self) -> str:
-        """Print the complete answer buffer once (progress is cleared by ``stop``).
+        """Print the complete answer buffer once (the dashboard snapshot stays above).
 
         On a TTY the markdown answer is rendered with rich (lazy import);
         piped/scripted output stays raw so downstream tooling is unaffected.
@@ -403,8 +428,8 @@ def format_questions_block(
 ) -> str:
     """Render ``ask_user`` questions as a terminal block with a resume hint.
 
-    The block is written to stdout after the ephemeral progress line is
-    cleared, so it stays visible. Each question lists its options with the
+    On a TTY the dashboard is frozen as a PAUSED snapshot first, so this
+    block stays visible below it. Each question lists its options with the
     recommended one (label ending in "(Recommended)") marked. The footer
     tells the user how to resume with an answer via ``fjf``. Non-CLI hosts
     (ACP) pass ``resume_hint=""`` to omit the CLI-specific footer — the user
@@ -498,22 +523,23 @@ async def stream_query(
     live_answer: bool = True,
     out: TextIO | None = None,
     err: TextIO | None = None,
-    progress: ProgressLine | None = None,
+    progress: ProgressDashboard | None = None,
     resume_value: Any = None,
     timeout_s: float | None = None,
 ) -> str:
-    """Run a query with ephemeral progress; print the complete final answer.
+    """Run a query with a live multi-line dashboard; print the final answer.
 
     When the agent pauses for human input (``ask_user`` interrupt), the
-    questions are rendered and :data:`INTERRUPTED` is returned — the run is
-    not complete and must be resumed with ``fjf -t <thread> <answer>``.
+    dashboard freezes on a PAUSED snapshot, the questions are rendered below
+    it, and :data:`INTERRUPTED` is returned — the run is not complete and must
+    be resumed with ``fjf -t <thread> <answer>``.
 
     ``timeout_s`` cancels the whole run after that many seconds and raises
     :class:`AgentRunError` naming the last visible activity.
     """
     stdout = out or sys.stdout
     stderr = err or sys.stderr
-    status = progress if progress is not None else ProgressLine(stdout)
+    status = progress if progress is not None else ProgressDashboard(stdout)
     backend = DirectRuntimeBackend(agent)
     answer = AnswerWriter(stdout, status, live=live_answer)
     # ``-v``: emit each tool call once when args are available.
@@ -530,7 +556,7 @@ async def stream_query(
     total_tokens: int | None = None
 
     def _flush_partial() -> None:
-        """Surface buffered narration before an error replaces the progress line."""
+        """Surface buffered narration before an error finalizes the dashboard."""
         if answer.buf:
             stderr.write("\n· partial output before failure:\n")
             stderr.write(answer.buf.rstrip() + "\n")
@@ -538,8 +564,8 @@ async def stream_query(
 
     timeout_cm = asyncio.timeout(timeout_s) if timeout_s else contextlib.nullcontext()
     try:
-        # Deepagents emits a deprecation warning mid-run that would smash the
-        # ephemeral progress line when mixed onto the terminal.
+        # Deepagents emits a deprecation warning mid-run that would tear the
+        # live dashboard when mixed onto the terminal.
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
@@ -565,12 +591,13 @@ async def stream_query(
                             # ``raw`` carries the soothe-nano custom payload so the
                             # terminal can keep using its own label/colour mapping.
                             if event.raw is not None:
+                                _reduce_steps(status, event.raw)
                                 mapped = friendly_progress(event.raw)
                                 if mapped:
                                     label, color = mapped
                                     last_label = label
                                     status.update(label, color=color)
-                                    # Only mirror events that drive the progress line
+                                    # Only mirror events that drive the dashboard
                                     # (skips policy.checked, output.*, …).
                                     if show_tool_calls:
                                         event_type = event.raw.get("type", "unknown")
@@ -582,6 +609,7 @@ async def stream_query(
                             label, color = format_tool_activity(event.tool, event.args)
                             last_label = label
                             status.update(label, color=color)
+                            status.set_tool(event.tool, format_args_preview(event.tool, event.args))
                             if show_tool_calls:
                                 _mirror_tool(
                                     status,
@@ -597,6 +625,7 @@ async def stream_query(
                             is_error = not event.ok
                             if is_error:
                                 failed_tool_calls += 1
+                                status.add_failure()
                                 detail = event.detail or event.preview
                                 if detail:
                                     last_tool_error = " ".join(str(detail).split())[:200]
@@ -607,7 +636,12 @@ async def stream_query(
                                 detail=event.detail,
                             )
                             last_label = label
-                            status.update(label, color=color)
+                            status.update(
+                                label,
+                                color=color,
+                                ok=not is_error,
+                                duration_ms=event.duration_ms,
+                            )
                             if show_tool_calls:
                                 # Late mirror if args never parsed as complete mid-stream.
                                 _mirror_tool(
@@ -634,17 +668,27 @@ async def stream_query(
                                 answer.set(event.output_text)
                             if event.usage is not None and event.usage.total_tokens > 0:
                                 total_tokens = event.usage.total_tokens
+                                status.set_tokens(total_tokens)
                             continue
 
                         if isinstance(event, InterruptWaiting):
                             status.update("Waiting for input…", color="yellow")
                             if event.questions:
-                                # A real ``ask_user`` interrupt pauses the graph —
-                                # render the questions and mark the run as interrupted
-                                # so the CLI returns ``INTERRUPTED`` instead of "Done".
+                                # A real ``ask_user`` interrupt pauses the graph.
+                                # Freeze the dashboard as a PAUSED snapshot first,
+                                # then print the questions BELOW it so both stay
+                                # visible; ``finalize`` is idempotent, so the
+                                # ``async with`` exit won't erase the snapshot.
+                                status.finalize(
+                                    "PAUSED",
+                                    duration_s=time.monotonic() - started_at,
+                                    tokens=total_tokens,
+                                )
                                 status.blank()
-                                stdout.write(format_questions_block(event.questions, thread_id))
-                                stdout.flush()
+                                if not _render_questions(event.questions, thread_id, stdout):
+                                    stdout.write(format_questions_block(event.questions, thread_id))
+                                    stdout.flush()
+                                status.repaint()
                                 interrupted = True
                             elif show_tool_calls:
                                 _write_verbose(
@@ -696,7 +740,7 @@ async def invoke_query(
     *,
     thread_id: str,
     out: TextIO | None = None,
-    progress: ProgressLine | None = None,
+    progress: ProgressDashboard | None = None,
     resume_value: Any = None,
     timeout_s: float | None = None,
 ) -> str:

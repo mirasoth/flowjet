@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
 
-from flowjet.cli.progress import ProgressLine
+from flowjet.cli.dashboard import ProgressDashboard
 from flowjet.cli.stream import _format_tokens, stream_query
 from flowjet.core.bridges.nano.token_usage import (
     TokenUsageAccumulator,
@@ -241,7 +241,7 @@ async def test_footer_shows_streamed_usage_total() -> None:
         "hi",
         thread_id="t1",
         out=out,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     footer = out.getvalue().splitlines()[-1]
     assert "1.0K tokens" in footer
@@ -289,7 +289,7 @@ async def test_bare_token_usage_breakdown_does_not_override_streamed() -> None:
         "hi",
         thread_id="t1",
         out=out,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     footer = out.getvalue().splitlines()[-1]
     assert "5.1K tokens" in footer
@@ -327,7 +327,7 @@ async def test_footer_prefers_authoritative_lifecycle_total() -> None:
         "hi",
         thread_id="t1",
         out=out,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     footer = out.getvalue().splitlines()[-1]
     assert "98.8K tokens" in footer
@@ -343,7 +343,7 @@ async def test_footer_shows_estimate_when_no_provider_usage() -> None:
         "hi",
         thread_id="t1",
         out=out,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     footer = out.getvalue().splitlines()[-1]
     assert "tokens" in footer
@@ -364,7 +364,7 @@ async def test_footer_omits_tokens_when_zero() -> None:
         "hi",
         thread_id="t1",
         out=out,
-        progress=ProgressLine(out, enabled=False),
+        progress=ProgressDashboard(out, enabled=False),
     )
     # Estimation still yields a small non-zero count; assert the shape only.
     assert out.getvalue().splitlines()[-1].startswith("✓ Done · ")

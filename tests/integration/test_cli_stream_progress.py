@@ -1,12 +1,13 @@
-"""Integration tests for live stream progress (CJK width, tail preview, throttle).
+"""Integration tests for the live dashboard (CJK width, tail preview, throttle).
 
-Uses real ``stream_query`` / ``ProgressLine`` / ``AnswerWriter`` with a stubbed
-agent stream — no live model required.
+Uses real ``stream_query`` / ``ProgressDashboard`` / ``AnswerWriter`` with a
+stubbed agent stream — no live model required. The dashboard stays in its
+non-TTY zero-output mode here (captured stdout is byte-identical to before);
+its state reduction is observed through the ``live_stream_runtime`` wrappers.
 """
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 import pytest
@@ -14,21 +15,9 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 
 pytestmark = pytest.mark.integration
 
-_ANSI_RE = re.compile(r"\033\[[0-9?]*[ -/]*[@-~]")
-_SPINNER_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
 
 def _msg_chunk(message: object) -> tuple[tuple[()], str, tuple[object, dict[str, object]]]:
     return ((), "messages", (message, {}))
-
-
-def _plain_progress_text(raw: str) -> str:
-    """Last ephemeral progress frame with spinner/ANSI stripped."""
-    frames = re.findall(r"\r\033\[2K([^\r]*)", raw)
-    if not frames:
-        return ""
-    plain = _ANSI_RE.sub("", frames[-1])
-    return plain.lstrip(_SPINNER_CHARS + " ").strip()
 
 
 @pytest.fixture
@@ -88,13 +77,16 @@ def test_cli_cjk_progress_preview_shows_latest_clause(
         _msg_chunk(AIMessage(content=full)),
     ]
 
-    code, out, err, _seen = run_fj_live_stream(["release"])
+    code, out, err, seen = run_fj_live_stream(["release"])
     assert code == 0, err
-    preview = _plain_progress_text(out)
-    if preview:
-        assert _display_width(preview) <= _line_budget()
-        assert "Release" in preview or "v1.0.8" in preview
-        assert "前面说明" not in preview
+    previews = seen["previews"]
+    assert previews
+    preview = previews[-1]
+    assert _display_width(preview) <= _line_budget()
+    assert "Release" in preview or "v1.0.8" in preview
+    assert "前面说明" not in preview
+    # The dashboard is non-TTY here: no live frames are appended to stdout.
+    assert full + "\n" in out
 
 
 def test_cli_stream_throttles_rapid_narration_chunks(
@@ -129,8 +121,10 @@ def test_cli_no_stream_skips_live_narration_preview(
     assert "## 分析结果\n完成。\n" in out
     assert out.endswith(" · fj-stream-stub\n")
     assert seen["tail_updates"] == 0
-    preview = _plain_progress_text(out)
-    assert narration not in preview
+    # No live narration preview in --no-stream mode; the narration is still
+    # accumulated into the final answer (pre-existing behavior).
+    assert seen["previews"] == []
+    assert out.startswith(narration)
 
 
 def test_cli_stream_mixed_cjk_english_tool_then_answer(
@@ -173,3 +167,49 @@ def test_cli_stream_mixed_cjk_english_tool_then_answer(
     assert out.endswith(" · fj-stream-stub\n")
     assert seen["progress_updates"] >= 2
     assert seen["tail_updates"] >= 1
+
+
+def test_cli_pause_freezes_paused_state_and_keeps_questions_visible(
+    live_stream_runtime: dict[str, Any],
+    run_fj_live_stream: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real CLI path: ask_user freezes a PAUSED snapshot, then questions below."""
+    from langgraph.types import Interrupt
+
+    import flowjet.cli.stream as stream_mod
+
+    dashboards: list[Any] = []
+    original = stream_mod.ProgressDashboard
+
+    class RecordingDashboard(original):  # type: ignore[valid-type, misc]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            dashboards.append(self)
+
+    monkeypatch.setattr(stream_mod, "ProgressDashboard", RecordingDashboard)
+    value = {
+        "type": "ask_user",
+        "questions": [
+            {
+                "header": "Auth method",
+                "question": "Which auth method should I use?",
+                "options": [{"label": "API Key (Recommended)", "description": "Use an API key"}],
+            }
+        ],
+    }
+    live_stream_runtime["chunks"] = [
+        ((), "updates", {"__interrupt__": (Interrupt(value=value, id="int-1"),)})
+    ]
+
+    code, out, err, seen = run_fj_live_stream(["choose", "auth"])
+    assert code == 0, err
+    assert dashboards and dashboards[-1].state.status == "PAUSED"
+    assert dashboards[-1].state.elapsed_override is not None
+    # Non-TTY: no live frames at all, the historical plain block is untouched.
+    assert out.startswith("\n⏸ Paused for input:")
+    assert "Which auth method" in out
+    assert "API Key (Recommended)" in out
+    assert "fjf -t fj-stream-stub" in out
+    assert "✓ Done" not in out
+    assert seen["progress_updates"] >= 1

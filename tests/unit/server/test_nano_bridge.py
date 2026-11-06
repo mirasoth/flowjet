@@ -219,7 +219,7 @@ async def test_skill_activation_update_becomes_skill_progress():
 async def test_late_tool_args_refresh_the_status_line():
     """Args stream as partial JSON; surface them once they parse.
 
-    Without the refresh the progress line stays a bare "Writing" for the whole
+    Without the refresh the dashboard stays on a bare "Writing" for the whole
     call, which is the least informative moment of a run.
     """
     events = await collect(
@@ -464,11 +464,11 @@ async def test_wire_tool_call_update_yields_tool_started():
 
 @pytest.mark.asyncio
 async def test_wire_tool_call_update_refreshes_already_started_call():
-    """A wire update for an already-started call refreshes the status line.
+    """A wire update for an already-started call refreshes the dashboard.
 
     When the messages path emitted ToolStarted first (empty args from partial
     JSON), the wire update arrives later with the parsed args and must refresh
-    the progress line so it shows "Writing a.txt" instead of bare "Writing".
+    the dashboard so it shows "Writing a.txt" instead of bare "Writing".
     """
     events = await collect(
         [
