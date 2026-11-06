@@ -35,6 +35,8 @@ _TAIL_MIN = 2
 _TAIL_MAX = 6
 # Rows taken by the panel chrome, heading, summary table and answer preview.
 _CHROME_ROWS = 14
+# Ceiling for a reasoning stretch before it is truncated into one panel row.
+_REASONING_MAX_CHARS = 2000
 
 _STATUS_BADGES: dict[str, tuple[str, str]] = {
     "LIVE": ("● LIVE", "cyan"),
@@ -88,6 +90,8 @@ class Activity:
     ok: bool | None = None
     duration_ms: int | None = None
     at: float = 0.0
+    # ``event`` = phase/tool activity; ``reasoning`` = intermediate Narration.
+    kind: str = "event"
 
 
 @dataclass
@@ -137,7 +141,6 @@ def build_dashboard(
     """
     from rich.console import Group
     from rich.panel import Panel
-    from rich.table import Table
     from rich.text import Text
 
     def style(name: str) -> str:
@@ -146,44 +149,49 @@ def build_dashboard(
     badge, badge_color = _STATUS_BADGES.get(state.status, _STATUS_BADGES["LIVE"])
     border = badge_color
 
+    # Heading is state only. The in-flight action has exactly one home: the
+    # main line below. Repeating it here (and in the activity tail) made the
+    # same long command appear three times in one panel.
     heading = Text()
     if frame and state.status == "LIVE":
         heading.append(f"{frame} ", style=style("bold cyan"))
     heading.append(badge, style=style(f"bold {badge_color}"))
-    heading.append("  ")
-    heading.append(_one_line(state.phase, width - 12), style=style(f"bold {state.color}"))
 
     step = f"{state.step} / {state.steps}" if state.step is not None and state.steps else "—"
-    tool = state.current_tool or "—"
-    if state.tool_args_preview:
-        tool = f"{tool} · {state.tool_args_preview}"
-    rows = [
-        ("Stage", state.phase),
-        ("Step", step),
-        ("Tool", tool),
-        ("Elapsed", _duration(state.elapsed(now_mono))),
-        ("Tokens", _tokens(state.total_tokens)),
-        ("Updated", _clock(state.updated_at)),
-    ]
-    if state.failed_tools:
-        rows.append(("Failed tools", str(state.failed_tools)))
-
-    summary = Table(
-        box=None,
-        show_header=False,
-        pad_edge=False,
-        padding=(0, 1),
-        expand=True,
-    )
-    summary.add_column("key", width=12, no_wrap=True)
-    summary.add_column("value", ratio=1)
-    for key, value in rows:
-        summary.add_row(
-            Text(key, style=style("dim")),
-            Text(_one_line(value, max(16, width - 18)), style=style("")),
+    stage = state.phase
+    if stage == "Working" and state.current_tool:
+        # Fallback for backends that emit a bare phase: keep the tool detail
+        # visible without duplicating the full args preview on its own row.
+        stage = (
+            f"{state.current_tool} · {state.tool_args_preview}"
+            if state.tool_args_preview
+            else state.current_tool
         )
+    # Step / Elapsed / Tokens / Updated share ONE compact line instead of four
+    # label rows. Empty Step and Tokens are skipped rather than printing a "—"
+    # placeholder that wastes a row. Narrow terminals drop the labels.
+    parts: list[tuple[str, str]] = []
+    if step != "—":
+        parts.append(("Step", step))
+    parts.append(("Elapsed", _duration(state.elapsed(now_mono))))
+    if state.total_tokens is not None:
+        parts.append(("Tokens", _tokens(state.total_tokens)))
+    parts.append(("Updated", _clock(state.updated_at)))
+    if state.failed_tools:
+        parts.append(("Failed tools", str(state.failed_tools)))
+    meta_full = " · ".join(f"{key} {value}" for key, value in parts)
+    meta_short = " · ".join(value for _, value in parts)
+    meta_budget = max(16, width - 6)
+    meta = meta_full if len(meta_full) <= meta_budget else meta_short
 
-    blocks: list[Any] = [heading, Text(""), summary]
+    # Meta first, then the in-flight action as the panel's main line. No
+    # key/value table: its 12-column label gutter pushed "Thinking" far to the
+    # right, out of alignment with the meta line and the Activity rows.
+    blocks: list[Any] = [
+        heading,
+        Text(_one_line(meta, meta_budget), style=style("dim")),
+        Text(_one_line(stage, meta_budget), style=style(f"bold {state.color}")),
+    ]
 
     if state.answer_preview:
         blocks.append(Text(""))
@@ -194,14 +202,29 @@ def build_dashboard(
             )
         )
 
-    tail = state.activity[-_tail_limit(height) :]
+    # Activity is history, never a second copy of the main action line.
+    # ``update`` appends the in-flight phase, and a later reasoning row can
+    # leave that mirror in the middle of the tail, so filter by content rather
+    # than by position. Completed rows (ok / timing) carry extra information
+    # and stay; reasoning with different text stays.
+    history = [
+        item
+        for item in state.activity
+        if not (item.label == state.phase and item.ok is None and item.duration_ms is None)
+    ]
+    tail = history[-_tail_limit(height) :]
     if tail:
         blocks.append(Text(""))
         blocks.append(Text("Activity", style=style("bold dim")))
         for item in tail:
-            mark = "✓" if item.ok is True else ("✗" if item.ok is False else "·")
+            if item.kind == "reasoning":
+                # Intermediate answer/reasoning text between tool calls.
+                mark = "›"
+                item_style = "dim cyan"
+            else:
+                mark = "✓" if item.ok is True else ("✗" if item.ok is False else "·")
+                item_style = "green" if item.ok else "red" if item.ok is False else item.color
             suffix = f" · {item.duration_ms}ms" if item.duration_ms is not None else ""
-            item_style = "green" if item.ok else "red" if item.ok is False else item.color
             blocks.append(
                 Text(
                     f"{mark} {_one_line(item.label, width - 12)}{suffix}",
@@ -299,6 +322,8 @@ class ProgressDashboard:
         self._frame = 0
         self._log_streams: list[tuple[logging.StreamHandler, TextIO]] = []
         self._state = DashboardState(started_at=time.monotonic(), updated_at=time.time())
+        # Raw text of the reasoning stretch currently shown as one tail row.
+        self._last_reasoning = ""
         self._width = _DEFAULT_WIDTH
         self._height = _DEFAULT_HEIGHT
         self._color = False
@@ -421,7 +446,13 @@ class ProgressDashboard:
             self._state.append_activity(
                 Activity(label=label, color=color, ok=ok, duration_ms=duration_ms, at=time.time())
             )
-        elif (ok is not None or duration_ms is not None) and self._state.activity:
+        elif (
+            (ok is not None or duration_ms is not None)
+            and self._state.activity
+            and self._state.activity[-1].kind != "reasoning"
+        ):
+            # Tool success/timing belongs to the tool row, never to a
+            # reasoning row left at the tail by a repeated phase label.
             last = self._state.activity[-1]
             if ok is not None:
                 last.ok = ok
@@ -459,6 +490,42 @@ class ProgressDashboard:
     def clear_answer_preview(self) -> None:
         self._state.answer_preview = None
         self._refresh()
+
+    def add_reasoning(self, text: str) -> None:
+        """Mirror intermediate ``Narration`` into the activity tail.
+
+        ACP projects the same text as ``agent_thought_chunk`` so hosts can see
+        the agent's reasoning between tool calls; the CLI keeps it as a rolling
+        history row so it survives the answer-preview reset on ``ToolStarted``.
+
+        The bridge emits the *cumulative* answer for the current stretch, so one
+        row is updated in place instead of appending N ever-growing prefixes. A
+        new stretch starts as soon as another event appends a row (tool call or
+        result), which interleaves reasoning and tool activity in order.
+        """
+        full = _one_line(text, _REASONING_MAX_CHARS)
+        if not full:
+            return
+        label = _one_line(full, max(12, self._width - 12))
+        activity = self._state.activity
+        continuation = bool(
+            self._last_reasoning
+            and full.startswith(self._last_reasoning)
+            and activity
+            and activity[-1].kind == "reasoning"
+        )
+        self._state.updated_at = time.time()
+        if continuation:
+            activity[-1].label = label
+            # ``Live``'s auto-refresh picks up the mutated state; forcing a
+            # frame per streamed token would repaint the whole panel at token
+            # rate, which is exactly what the old single-line spinner did.
+        else:
+            self._state.append_activity(
+                Activity(label=label, kind="reasoning", color="cyan", at=time.time())
+            )
+            self._refresh()
+        self._last_reasoning = full
 
     # ------------------------------------------------------------------
     # Interleaved output

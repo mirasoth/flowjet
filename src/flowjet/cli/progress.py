@@ -497,28 +497,32 @@ def format_args_preview(
 
 
 def format_tool_activity(tool_name: str, args: Any | None = None) -> tuple[str, str]:
-    """Status line for an in-flight tool call: ``Reading flowjet.cli/cli.py``."""
+    """Unified tool activity label: ``read_file core/events.py``.
+
+    Every tool row in the dashboard's Activity history shares this shape, so
+    in-flight and completed rows read the same; success/failure is conveyed by
+    the row marker and colour instead of by changing the wording. A repeated
+    ``Thinking ·`` prefix on every row adds no information — the LIVE badge
+    and the row marker already say the agent is working.
+    """
     name = (tool_name or "tool").strip() or "tool"
-    verb, color = _TOOL_VERBS.get(name, ("Running", "yellow"))
     meta = _tool_meta(name)
     if meta is not None:
-        verb, color = _TOOL_VERBS.get(meta.name, (verb, color))
         name = meta.name
+    color = _TOOL_VERBS.get(name, ("Running", "yellow"))[1]
 
-    known = name in _TOOL_VERBS or (meta is not None and meta.name in _TOOL_VERBS)
-    # Reserve columns for the verb (or "Running tool_name ") before args.
-    if known:
-        prefix_width = _display_width(verb) + 1
-    else:
-        prefix_width = _display_width(f"{verb} {name} ")
-    preview = format_args_preview(name, args, prefix_width=prefix_width)
+    prefix = f"{name} "
+    # Reserve the real prefix width when building the args preview, then trim
+    # ONLY the preview to the remaining width (from the tail, so a path's
+    # basename survives). The tool name itself is never truncated.
+    preview = format_args_preview(name, args, prefix_width=_display_width(prefix))
     if preview:
-        if known:
-            label = f"{verb} {preview}"
-        else:
-            label = f"{verb} {name} {preview}"
+        remaining = max(12, _line_budget() - _display_width(prefix))
+        if _display_width(preview) > remaining:
+            preview = _truncate_path(preview, remaining)
+        label = f"{prefix}{preview}"
     else:
-        label = verb if known else f"{verb} {name}"
+        label = name
     return _fit(label), color
 
 
@@ -541,7 +545,7 @@ def format_tool_done(
     meta = _tool_meta(name)
     if meta is not None:
         name = meta.name
-    prefix = "Failed " if is_error else "Thinking · "
+    prefix = "Failed " if is_error else ""
     preview = format_args_preview(
         name, args, max_parts=1, prefix_width=_display_width(prefix + name + " ")
     )
@@ -552,7 +556,7 @@ def format_tool_done(
             detail_limit = _detail_budget(prefix=f"{label} · ", fraction=0.45, floor=20)
             label = f"{label} · {_truncate_middle(_compact(detail), detail_limit)}"
         return _fit(label), "red"
-    return _fit(f"Thinking · {summary}"), "cyan"
+    return _fit(summary), "cyan"
 
 
 def _tool_name(data: dict[str, Any]) -> str | None:
@@ -695,7 +699,7 @@ def friendly_progress(data: dict[str, Any]) -> tuple[str, str] | None:
         else:
             detail = preview
         if action in {"completed", "finished"}:
-            label = f"Thinking · {name}"
+            label = name
             color = "cyan"
         else:
             label = f"Delegating {name}"

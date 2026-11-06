@@ -167,6 +167,59 @@ def test_cli_stream_mixed_cjk_english_tool_then_answer(
     assert out.endswith(" · fj-stream-stub\n")
     assert seen["progress_updates"] >= 2
     assert seen["tail_updates"] >= 1
+    # Narration reaches the CLI (ACP parity) even though a tool call follows.
+    assert seen["reasoning"]
+    assert any("检查 CI 状态" in text for text in seen["reasoning"])
+
+
+def test_cli_narration_is_rendered_as_an_activity_row(
+    live_stream_runtime: dict[str, Any],
+    run_fj_live_stream: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cumulative answer text shows up as a reasoning row in Activity."""
+    import flowjet.cli.stream as stream_mod
+    from flowjet.cli.dashboard import build_dashboard
+    from flowjet.cli.render import render_to_text
+
+    dashboards: list[Any] = []
+    original = stream_mod.ProgressDashboard
+
+    class RecordingDashboard(original):  # type: ignore[valid-type, misc]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            dashboards.append(self)
+
+    monkeypatch.setattr(stream_mod, "ProgressDashboard", RecordingDashboard)
+    full = "先查一下 CI 状态。然后发布 v1.0.8。"
+    live_stream_runtime["chunks"] = [
+        _msg_chunk(AIMessageChunk(content="先查一下 CI 状态。")),
+        _msg_chunk(AIMessageChunk(content=full)),
+        _msg_chunk(AIMessage(content=full)),
+    ]
+
+    code, out, err, seen = run_fj_live_stream(["check", "release"])
+    assert code == 0, err
+    dash = dashboards[-1]
+    rows = [item for item in dash.state.activity if item.kind == "reasoning"]
+    assert rows and full in rows[-1].label
+    rendered = render_to_text(
+        build_dashboard(
+            dash.state,
+            frame="",
+            width=64,
+            color=False,
+            height=24,
+            now_mono=dash.state.started_at + 1.0,
+        ),
+        width=64,
+        color=False,
+    )
+    assert "Activity" in rendered
+    assert "›" in rendered
+    assert "先查一下 CI 状态" in rendered
+    assert out.startswith(full + "\n")  # stdout unchanged
+    assert seen["reasoning"]
 
 
 def test_cli_pause_freezes_paused_state_and_keeps_questions_visible(

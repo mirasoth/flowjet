@@ -502,6 +502,7 @@ async def test_verbose_skips_noisy_events_and_partial_tool_args() -> None:
 async def test_stream_query_drops_intermediate_ai_narration() -> None:
     """Multi-step agent talk before tools must not appear in the final result."""
     out = StringIO()
+    status = ProgressDashboard(out, enabled=False)
 
     def tool_chunk(call_id: str) -> AIMessageChunk:
         return AIMessageChunk(
@@ -542,7 +543,7 @@ async def test_stream_query_drops_intermediate_ai_narration() -> None:
         thread_id="t1",
         live_answer=True,
         out=out,
-        progress=ProgressDashboard(out, enabled=False),
+        progress=status,
     )
     assert result.startswith("## Latest Stock Market News")
     printed = out.getvalue()
@@ -550,6 +551,42 @@ async def test_stream_query_drops_intermediate_ai_narration() -> None:
     assert printed.endswith(" · t1\n")
     assert "I'll fetch" not in printed
     assert "rate-limiting" not in printed
+    # The intermediate reasoning still reaches the CLI: it stays in the
+    # dashboard activity history, interleaved with the tool calls and NOT
+    # erased by reset_for_tools (ACP sends the same text as a thought chunk).
+    reasoning = [a.label for a in status.state.activity if a.kind == "reasoning"]
+    assert len(reasoning) >= 2
+    assert any("I'll fetch" in text for text in reasoning)
+    assert any("rate-limiting" in text for text in reasoning)
+    assert any(a.kind == "event" and "web_search" in a.label for a in status.state.activity)
+
+
+@pytest.mark.asyncio
+async def test_stream_query_narration_enters_cli_activity_even_without_streaming() -> None:
+    """Narration is mirrored unconditionally (ACP parity), incl. --no-stream."""
+    out = StringIO()
+    status = ProgressDashboard(out, enabled=False)
+    full = "Let me check the CI status."
+    agent = _FakeAgent(
+        [
+            _msg_chunk(AIMessageChunk(content="Let me check")),
+            _msg_chunk(AIMessageChunk(content=full)),
+            _msg_chunk(AIMessage(content=full)),
+        ]
+    )
+    result = await stream_query(
+        agent,  # type: ignore[arg-type]
+        "check ci",
+        thread_id="t1",
+        live_answer=False,
+        out=out,
+        progress=status,
+    )
+    assert result == full
+    assert out.getvalue().startswith(full + "\n")
+    reasoning = [a.label for a in status.state.activity if a.kind == "reasoning"]
+    assert len(reasoning) == 1 and full in reasoning[-1]
+    assert status.state.answer_preview is None  # --no-stream has no preview row
 
 
 @pytest.mark.asyncio

@@ -372,7 +372,11 @@ class AnswerWriter:
             self._status.update("Writing answer…", color="green")
 
     def reset_for_tools(self) -> None:
-        """Drop buffered narration when a tool call starts (it was status, not result)."""
+        """Clear the answer preview when a tool call starts (it was status, not result).
+
+        The reasoning text itself stays in the dashboard's activity history —
+        only the single-line preview is transient.
+        """
         self.buf = ""
         self._last_preview = ""
         self._last_preview_at = 0.0
@@ -658,9 +662,16 @@ async def stream_query(
                             continue
 
                         if isinstance(event, Narration):
-                            # Live preview only; dropped automatically when a tool call
-                            # starts (see ToolStarted → reset_for_tools).
+                            # ACP projects Narration as agent_thought_chunk; the
+                            # CLI mirrors the same intermediate reasoning into
+                            # the activity history, so it stays visible when a
+                            # tool call clears the single-line answer preview
+                            # (see ToolStarted → reset_for_tools). Keep the
+                            # preview first: in --no-stream mode that update
+                            # would otherwise split one reasoning stretch into
+                            # two adjacent rows.
                             answer.set(event.text)
+                            status.add_reasoning(event.text)
                             continue
 
                         if isinstance(event, RunCompleted):

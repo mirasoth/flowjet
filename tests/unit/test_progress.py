@@ -26,7 +26,7 @@ def test_friendly_tool_started_event() -> None:
             "path": "/tmp/hello.py",
         }
     )
-    assert "Reading" in label or "hello.py" in label
+    assert label.startswith("read_file ")
     assert "hello.py" in label
     assert color == "yellow"
 
@@ -53,14 +53,41 @@ def test_format_read_file_activity() -> None:
     label, color = format_tool_activity(
         "read_file", {"file_path": "/Users/chenxm/Workspace/fj-ai/src/flowjet.cli/cli.py"}
     )
-    assert label.startswith("Reading ")
+    assert label.startswith("read_file ")
     assert "cli.py" in label
     assert color == "yellow"
 
 
+def test_tool_activity_and_done_share_one_shape() -> None:
+    """Activity rows are uniform: in-flight and completed labels read alike."""
+    args = {"file_path": "core/events.py"}
+    started, _ = format_tool_activity("read_file", args)
+    done, _ = format_tool_done("read_file", args)
+    assert started.startswith("read_file ")
+    assert done.startswith("read_file ")
+    assert "core/events.py" in started and "core/events.py" in done
+    assert "Thinking" not in started and "Thinking" not in done
+
+
+def test_tool_rows_drop_the_repeated_thinking_prefix() -> None:
+    """No tool row repeats a status word; the LIVE badge / row marker say it."""
+    args = {"file_path": "core/events.py"}
+    labels = [
+        format_tool_activity("read_file", args)[0],
+        format_tool_done("read_file", args)[0],
+        format_tool_done("read_file", args, is_error=True)[0],
+        friendly_progress({"type": "soothe.tool.invocation.started", "tool": "grep"})[0],
+        friendly_progress({"type": "soothe.subagent.explore.completed"})[0],
+    ]
+    assert all(not label.startswith("Thinking · ") for label in labels)
+    assert labels[0].startswith("read_file ")
+    assert labels[2].startswith("Failed ")
+    assert labels[4] == "explore"
+
+
 def test_format_run_command_activity() -> None:
     label, color = format_tool_activity("run_command", {"command": "ruff check src/ tests/"})
-    assert "Running" in label
+    assert label.startswith("run_command ")
     assert "ruff check" in label
     assert color == "yellow"
 
@@ -69,7 +96,7 @@ def test_format_grep_activity() -> None:
     label, _color = format_tool_activity(
         "grep", {"pattern": "DashboardPanel", "path": "src/flowjet.cli"}
     )
-    assert "Grepping" in label
+    assert label.startswith("grep ")
     assert "DashboardPanel" in label
     assert "flowjet.cli" in label or "src/flowjet.cli" in label
 
@@ -101,7 +128,7 @@ def test_progress_respects_width_budget(monkeypatch: pytest.MonkeyPatch) -> None
     long_path = "/Users/chenxm/Workspace/fj-ai/src/flowjet.cli/" + ("very_long_dir/" * 8) + "cli.py"
     label, _color = format_tool_activity("read_file", {"file_path": long_path})
     assert _display_width(label) <= 40
-    assert label.startswith("Reading ")
+    assert label.startswith("read_file ")
     assert "cli.py" in label  # basename preserved
 
 
@@ -188,7 +215,7 @@ def test_format_tool_done_keeps_context() -> None:
     label, color = format_tool_done(
         "read_file", {"file_path": "src/flowjet.cli/progress.py"}, is_error=False
     )
-    assert "Thinking" in label
+    assert "Thinking" not in label
     assert "read_file" in label
     assert "progress.py" in label
     assert color == "cyan"
@@ -202,7 +229,7 @@ def test_friendly_tool_completed_keeps_context() -> None:
             "file_path": "Makefile",
         }
     )
-    assert "Thinking" in label
+    assert "Thinking" not in label
     assert "read_file" in label
     assert "Makefile" in label
     assert color == "cyan"
@@ -415,7 +442,7 @@ def test_wide_budget_keeps_long_command(monkeypatch: pytest.MonkeyPatch) -> None
     cmd = "ruff check src/flowjet.cli tests/unit --select E,F,W --fix"
     label, _color = format_tool_activity("run_command", {"command": cmd})
     assert _display_width(label) <= 120
-    assert "Running" in label
+    assert label.startswith("run_command ")
     # Old hard cap was 48; wide budget should keep more of the command.
     assert "--fix" in label or "--select" in label
     assert "ruff check src/flowjet.cli" in label
@@ -439,7 +466,7 @@ def test_narrow_budget_still_clamps(monkeypatch: pytest.MonkeyPatch) -> None:
     cmd = "python -m pytest tests/unit/test_progress.py -q --tb=short"
     label, _ = format_tool_activity("run_command", {"command": cmd})
     assert _display_width(label) <= 40
-    assert label.startswith("Running")
+    assert label.startswith("run_command")
 
 
 def test_args_preview_cjk_respects_display_width(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -482,12 +509,12 @@ def test_format_edit_file_preview() -> None:
 
 def test_format_tool_activity_unknown_tool() -> None:
     label, color = format_tool_activity("custom_tool", {"query": "x"})
-    assert "Running custom_tool" in label
+    assert label.startswith("custom_tool ")
     assert "x" in label
-    assert " · " not in label.split("custom_tool", 1)[0]
+    assert label.startswith("custom_tool")
     assert color == "yellow"
     label, _ = format_tool_activity("read_file", None)
-    assert label.startswith("Reading")
+    assert label.startswith("read_file")
 
 
 def test_args_preview_strips_decoration() -> None:

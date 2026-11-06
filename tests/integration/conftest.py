@@ -181,6 +181,7 @@ def live_stream_runtime(
         "progress_updates": 0,
         "tail_updates": 0,
         "previews": [],
+        "reasoning": [],
     }
 
     class _FakeAgent:
@@ -200,6 +201,7 @@ def live_stream_runtime(
 
     original_update = ProgressDashboard.update
     original_preview = ProgressDashboard.set_answer_preview
+    original_reasoning = ProgressDashboard.add_reasoning
 
     def counting_update(
         self: ProgressDashboard,
@@ -218,6 +220,10 @@ def live_stream_runtime(
         seen["previews"].append(text or "")
         original_preview(self, text)
 
+    def counting_reasoning(self: ProgressDashboard, text: str) -> None:
+        seen["reasoning"].append(text)
+        original_reasoning(self, text)
+
     monkeypatch.setattr(config_mod, "load_config", lambda _p=None: SimpleNamespace())
     monkeypatch.setattr(agent_mod, "open_sqlite_checkpointer", fake_cp)
     monkeypatch.setattr(agent_mod, "build_agent", fake_build)
@@ -225,6 +231,7 @@ def live_stream_runtime(
     monkeypatch.setattr(history_mod, "append_history", lambda _q: None)
     monkeypatch.setattr(ProgressDashboard, "update", counting_update)
     monkeypatch.setattr(ProgressDashboard, "set_answer_preview", counting_preview)
+    monkeypatch.setattr(ProgressDashboard, "add_reasoning", counting_reasoning)
     return seen
 
 

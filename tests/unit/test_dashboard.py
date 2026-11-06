@@ -143,6 +143,63 @@ def test_control_characters_are_stripped_from_panel_text() -> None:
     assert "\x1b" not in out
 
 
+def test_add_reasoning_keeps_one_row_per_stretch_and_interleaves_tools() -> None:
+    """Cumulative Narration updates one row; tool calls start a new stretch."""
+    dash = ProgressDashboard(io.StringIO(), enabled=True)
+    dash.add_reasoning("Let me check")
+    dash.add_reasoning("Let me check the file")
+    assert len(dash.state.activity) == 1
+    assert dash.state.activity[-1].kind == "reasoning"
+    assert dash.state.activity[-1].label == "Let me check the file"
+
+    dash.update("read_file · cli.py", color="yellow", ok=True, duration_ms=12)
+    dash.add_reasoning("The file shows a bug")
+    assert [item.kind for item in dash.state.activity] == ["reasoning", "event", "reasoning"]
+    assert dash.state.activity[0].label == "Let me check the file"
+    assert dash.state.activity[-1].label == "The file shows a bug"
+
+    out = _render(dash.state)
+    assert "› Let me check the file" in out
+    assert "› The file shows a bug" in out
+    assert "✓ read_file · cli.py" in out
+
+
+def test_add_reasoning_survives_the_answer_preview_reset() -> None:
+    dash = ProgressDashboard(io.StringIO(), enabled=True)
+    dash.add_reasoning("Let me look that up.")
+    dash.set_answer_preview("Let me look that up.")
+    dash.clear_answer_preview()
+    assert dash.state.answer_preview is None
+    assert dash.state.activity[-1].label == "Let me look that up."
+    assert "› Let me look that up." in _render(dash.state)
+
+
+def test_tool_result_metadata_does_not_attach_to_a_reasoning_row() -> None:
+    dash = ProgressDashboard(io.StringIO(), enabled=True)
+    dash.add_reasoning("thinking")
+    # Same phase label → ``update`` takes its dedup branch; tool metadata must
+    # not be written onto the reasoning row that happens to be last.
+    dash.update("Working", color="cyan", ok=True, duration_ms=7)
+    row = dash.state.activity[-1]
+    assert row.kind == "reasoning"
+    assert row.ok is None and row.duration_ms is None
+
+
+def test_add_reasoning_is_cleaned_width_bounded_and_silent_on_non_tty() -> None:
+    dash = ProgressDashboard(io.StringIO(), enabled=True)
+    dash.add_reasoning("Injected \x1b[31mred\x1b[0m\r\n" + "长" * 200)
+    label = dash.state.activity[-1].label
+    assert "\x1b" not in label and "\r" not in label and "\n" not in label
+    assert len(label) <= 60
+    assert "\x1b" not in _render(dash.state)
+
+    out = io.StringIO()
+    quiet = ProgressDashboard(out)
+    quiet.add_reasoning("thinking")
+    assert out.getvalue() == ""
+    assert quiet.state.activity[-1].kind == "reasoning"
+
+
 # ---------------------------------------------------------------------------
 # Pure rendering
 # ---------------------------------------------------------------------------
@@ -165,12 +222,20 @@ def test_build_dashboard_renders_multi_line_summary() -> None:
     assert len(out.splitlines()) > 8  # a real multi-line region, not one status line
     assert "LIVE" in out
     assert "FlowJet Agent" in out
-    assert "Stage" in out and "Reading · cli.py" in out
+    assert "Stage" not in out and "Reading · cli.py" in out
     assert "Step" in out and "2 / 5" in out
-    assert "Tool" in out and "read_file" in out
+    # The duplicate Tool row, the Stage label gutter and the heading's copy
+    # are gone; only the main line and the *completed* history row carry it.
+    assert "Tool" not in out and "read_file" not in out
+    assert "● LIVE  Reading" not in out
+    assert out.count("Reading · cli.py") == 2
     assert "Elapsed" in out and "12s" in out
     assert "Tokens" in out and "12.3K" in out
     assert "Updated" in out
+    # Step/Elapsed/Tokens/Updated share ONE meta line, not four label rows.
+    meta = [line for line in out.splitlines() if "Elapsed" in line]
+    assert len(meta) == 1
+    assert "Step" in meta[0] and "Tokens" in meta[0] and "Updated" in meta[0]
     assert "Activity" in out and "Thinking" in out and "42ms" in out
 
 
@@ -184,6 +249,106 @@ def test_build_dashboard_status_badges(status: str, badge: str) -> None:
     assert badge in out
     if status != "LIVE":
         assert "⠋" not in out
+
+
+def test_build_dashboard_meta_row_omits_empty_values() -> None:
+    """Screenshot case: Step — and Tokens — must not occupy two rows."""
+    state = DashboardState(
+        phase="ls mirasoth/flowjet",
+        status="LIVE",
+        started_at=100.0,
+        updated_at=time.time(),
+    )
+    out = _render(state)
+    assert "—" not in out
+    meta = [line for line in out.splitlines() if "Elapsed" in line]
+    assert len(meta) == 1
+    assert "Updated" in meta[0]
+    assert "Step" not in meta[0] and "Tokens" not in meta[0]
+    assert out.count("ls mirasoth/flowjet") == 1
+
+
+def test_build_dashboard_meta_row_stays_one_line_on_narrow_terminals() -> None:
+    state = DashboardState(
+        phase="Thinking",
+        step=2,
+        steps=5,
+        total_tokens=12345,
+        started_at=100.0,
+        updated_at=time.time(),
+    )
+    out = _render(state, width=36)
+    assert len([line for line in out.splitlines() if "2 / 5" in line]) == 1
+
+
+def test_build_dashboard_stage_sits_below_meta_and_is_left_aligned() -> None:
+    """Meta line first; the action line follows, starting at the same column."""
+    state = DashboardState(
+        phase="grep def main in cli/cli.py",
+        status="LIVE",
+        step=1,
+        steps=6,
+        started_at=100.0,
+        updated_at=time.time(),
+    )
+    lines = _render(state).splitlines()
+    meta_idx = next(i for i, line in enumerate(lines) if "Updated" in line)
+    stage_idx = next(i for i, line in enumerate(lines) if "grep def main" in line)
+    assert stage_idx == meta_idx + 1
+    assert lines[stage_idx].index("grep") == lines[meta_idx].index("Step")
+    assert "Stage" not in _render(state)
+
+
+def test_build_dashboard_does_not_repeat_the_current_stage() -> None:
+    """Heading / main line / Activity must not all print the in-flight command."""
+    phase = "run_command find tests"
+    state = DashboardState(
+        phase=phase,
+        status="LIVE",
+        started_at=100.0,
+        updated_at=time.time(),
+        activity=[
+            Activity("Running deploy_ecs/config.py"),
+            Activity(phase, kind="reasoning"),
+        ],
+    )
+    out = _render(state)
+    assert "● LIVE" in out
+    assert "Stage" not in out
+    assert out.count(phase) == 1  # only in the main action line
+    assert "Running deploy_ecs/config.py" in out  # history is preserved
+    assert "›" not in out  # trailing mirror of the current stage is dropped
+
+
+def test_build_dashboard_drops_the_phase_mirror_wherever_it_sits() -> None:
+    """A reasoning row can leave the in-flight mirror mid-tail; it must go."""
+    phase = "grep def main"
+    state = DashboardState(
+        phase=phase,
+        started_at=100.0,
+        updated_at=time.time(),
+        activity=[
+            Activity("Reading Users/xiaming"),
+            Activity(phase),
+            Activity("I will analyze the project architecture.", kind="reasoning"),
+        ],
+    )
+    out = _render(state)
+    assert out.count(phase) == 1  # only the main action line
+    assert "Reading Users/xiaming" in out
+    assert "›" in out  # reasoning history is preserved
+
+
+def test_build_dashboard_keeps_completed_rows_sharing_the_stage_label() -> None:
+    state = DashboardState(
+        phase="Reading · cli.py",
+        started_at=100.0,
+        updated_at=time.time(),
+        activity=[Activity("Reading · cli.py", ok=True, duration_ms=42)],
+    )
+    out = _render(state)
+    assert "42ms" in out
+    assert "✓" in out
 
 
 def test_build_dashboard_shows_failed_tool_count_only_when_nonzero() -> None:
