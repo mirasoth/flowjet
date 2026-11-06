@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Token total in the CLI footer.** The final `✓ Done` line now reports cumulative token consumption (e.g. `✓ Done · 31m 14s · 12.5K tokens · 107ad28a51d945d4`). The nano bridge sums provider `usage_metadata` / `response_metadata` deltas per generation (deduped by message id, no double-count on replays), reconciles against soothe's authoritative turn-end `total_tokens_used` lifecycle events, and falls back to soothe-nano's unified model-aware `estimate_token_usage` (IG-761) when a provider reports no usage. Totals flow through `RunCompleted.usage`, so the ACP and OpenAI-compat projections receive the same numbers; `UsageInfo` now also carries cache read/creation tokens.
+
+### Changed
+
+- **`soothe` floor bumped to `>=1.2.7`.** Picks up soothe's optimized token accounting (live cumulative totals, cache-aware breakdown, authoritative per-goal turn-end total). `uv.lock` refreshed to `soothe 1.2.7`.
+
 ## [2.1.12] — 2026-10-31
 
 ### Fixed

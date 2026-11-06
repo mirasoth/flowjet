@@ -77,9 +77,19 @@ class InterruptWaiting:
 
 @dataclass(frozen=True, slots=True)
 class UsageInfo:
+    """Token consumption for one run.
+
+    ``cache_*`` are a *subset* of ``input_tokens`` (never added to
+    ``total_tokens`` a second time); they are carried for clients that render a
+    cache-aware breakdown. ``total_tokens`` is the authoritative cumulative
+    consumption shown in the CLI footer.
+    """
+
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
 
 
 @dataclass(frozen=True, slots=True)

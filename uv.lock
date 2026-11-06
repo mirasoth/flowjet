@@ -907,7 +907,7 @@ resolution-markers = [
     "python_full_version < '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "cffi", marker = "platform_machine == 'x86_64' and platform_python_implementation != 'PyPy' and sys_platform == 'darwin'" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a7/35/c495bffc2056f2dadb32434f1feedd79abde2a7f8363e1974afa9c33c7e2/cryptography-45.0.7.tar.gz", hash = "sha256:4b1654dfc64ea479c242508eb8c724044f1e964a47d1d1cacc5132292d851971", size = 744980, upload-time = "2025-09-01T11:15:03.146Z" }
 wheels = [
@@ -931,7 +931,7 @@ resolution-markers = [
     "(python_full_version < '3.12' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.12' and sys_platform != 'darwin' and sys_platform != 'win32')",
 ]
 dependencies = [
-    { name = "cffi", marker = "(platform_machine != 'x86_64' and platform_python_implementation != 'PyPy') or (platform_python_implementation != 'PyPy' and sys_platform != 'darwin')" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/bb/ad/5d6702db60b1e40b41ef513b6967ff5848f307d50f8449baf1634f5908f1/cryptography-50.0.1.tar.gz", hash = "sha256:5dd9bda1c12b4162f6ff568eeb5e0ff956c28d14406e875cfe8a63a2d414ff20", size = 880381, upload-time = "2026-08-25T19:45:45.499Z" }
 wheels = [
@@ -1210,7 +1210,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.0" },
     { name = "s3fs", marker = "extra == 'server'", specifier = ">=2024.6" },
-    { name = "soothe", specifier = ">=1.2.6,<2.0.0" },
+    { name = "soothe", specifier = ">=1.2.8,<2.0.0" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=5.0.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.32.0" },
 ]
@@ -7358,8 +7358,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", version = "50.0.1", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'win32')" },
-    { name = "jeepney", marker = "(platform_machine != 'x86_64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'win32')" },
+    { name = "cryptography", version = "50.0.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "jeepney" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
@@ -7386,7 +7386,7 @@ wheels = [
 
 [[package]]
 name = "soothe"
-version = "1.2.6"
+version = "1.2.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
@@ -7407,9 +7407,9 @@ dependencies = [
     { name = "soothe-nano" },
     { name = "watchdog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c2/e1/1bbc95a233b28424542c61e599f7643807e443311da2cd709642e22e7fd8/soothe-1.2.6.tar.gz", hash = "sha256:2a0b6ffff0afdab94fcb6d7cf592be1eeb30203b48260a6e8620f14e719feba4", size = 677786, upload-time = "2026-10-30T12:40:04.434Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/19/a9/3f296f95fa13ce483c0c18bed88da67469f20e4c5e4b2073f2b310d3465b/soothe-1.2.8.tar.gz", hash = "sha256:55860f96f99a6345e9507f9f95c7ab059459e42cf24d7f0e8f839a806109dd34", size = 682631, upload-time = "2026-11-06T06:04:55.061Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/35/2e/0e70de627852a0acb58664b47b9c3f234e2e680a792475e7deca9fcce3bf/soothe-1.2.6-py3-none-any.whl", hash = "sha256:e46ac6f2aa3eccfa683cb9630e6e76a098a2eec0376a616f064efdd1c6ab801a", size = 865741, upload-time = "2026-10-30T12:40:02.479Z" },
+    { url = "https://files.pythonhosted.org/packages/da/2b/a8813a3a202a2c0931031f365a452f7ef0f260ebbd992bc0fbc6f73e88d1/soothe-1.2.8-py3-none-any.whl", hash = "sha256:377b668df8cd4d55f40bd0495b060cd30da3a0ba60b92f44bb4e19bfb69df8c3", size = 871520, upload-time = "2026-11-06T06:04:53.428Z" },
 ]
 
 [[package]]
@@ -7431,7 +7431,7 @@ wheels = [
 
 [[package]]
 name = "soothe-nano"
-version = "2.0.6"
+version = "2.0.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -7471,9 +7471,9 @@ dependencies = [
     { name = "tiktoken" },
     { name = "wcmatch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e7/63/9d9d3299dadc7ae1782217b1022bcb74c44ef16cdbbd60a1f76150859ffa/soothe_nano-2.0.6.tar.gz", hash = "sha256:39a8b4b024b22c36cb0860854f6662fff6281590c2b23b1259701d677515aa0c", size = 1354286, upload-time = "2026-10-30T10:15:03.663Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4f/b5/e838602fa3cc3fd88b3ffddc6d0b3f8e5271b35a89bbfdc887e56515c2b9/soothe_nano-2.0.7.tar.gz", hash = "sha256:47e2a4fa8e61f21a477c82f8b48ca25ca3c56e76727f8c2381faa4018ba29f4f", size = 1355370, upload-time = "2026-11-06T05:47:39.046Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bc/e2/c62e8ccd60ac50d85332ce84f46a4c35e1e8bd690202943b2d6ec4ddcdc6/soothe_nano-2.0.6-py3-none-any.whl", hash = "sha256:973f1efaff4c8c51111e0a0005cd3c65f5d59fca5add515739b2ee236f585e0d", size = 1614663, upload-time = "2026-10-30T10:15:01.998Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/86/d37be0b99b06c680dafff6c2021a70c6d2453ec31889639c2a83ec464d15/soothe_nano-2.0.7-py3-none-any.whl", hash = "sha256:7f70a84996bf2280acc38d775cfb677e228892677ad389baad735f9b186bc806", size = 1615620, upload-time = "2026-11-06T05:47:37.52Z" },
 ]
 
 [[package]]

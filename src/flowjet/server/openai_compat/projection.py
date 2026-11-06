@@ -43,7 +43,10 @@ def usage_dict(usage: UsageInfo | None) -> dict[str, Any] | None:
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
         "total_tokens": usage.total_tokens,
-        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        "input_tokens_details": {
+            "cached_tokens": usage.cache_read_tokens,
+            "cache_write_tokens": usage.cache_creation_tokens,
+        },
         "output_tokens_details": {"reasoning_tokens": 0},
     }
 

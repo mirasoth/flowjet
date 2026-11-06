@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from flowjet.core.bridges.nano.interrupts import detect_pending_ask_user
+from flowjet.core.bridges.nano.token_usage import TokenUsageAccumulator
 from flowjet.core.events import (
     InterruptWaiting,
     Narration,
@@ -25,6 +26,7 @@ from flowjet.core.events import (
     RuntimeEvent,
     ToolCompleted,
     ToolStarted,
+    UsageInfo,
 )
 from flowjet.core.streaming.presentation import (
     AiTextExtractor,
@@ -232,6 +234,38 @@ def map_custom(data: dict[str, Any]) -> Progress | None:
     return Progress(stage=str(stage), message=str(message or "Working"), raw=data)
 
 
+def _custom_token_usage(data: dict[str, Any]) -> dict[str, int] | None:
+    """Extract an authoritative turn-end total from a soothe lifecycle event.
+
+    soothe's runner publishes ``total_tokens_used`` (cumulative loop
+    consumption) and an optional cache-aware ``token_usage`` breakdown on
+    ``StrangeLoop*CompletedEvent`` / plan-phase / step-completed custom events
+    (v1.2.7). Only the cumulative ``total_tokens_used`` counter is authoritative;
+    a bare ``token_usage`` is a *per-turn* breakdown and must not replace the
+    summed streamed deltas (it would undercount a multi-step goal). When a host
+    forwards the cumulative counter, reconcile against it at turn end.
+    """
+    total = data.get("total_tokens_used")
+    if total is None:
+        return None
+    try:
+        cumulative = max(0, int(total or 0))
+    except (TypeError, ValueError):
+        return None
+    if cumulative <= 0:
+        return None
+
+    breakdown = data.get("token_usage")
+    if isinstance(breakdown, dict) and breakdown:
+        from flowjet.core.bridges.nano.token_usage import _normalize
+
+        normalized = _normalize(breakdown)
+        # The cumulative counter wins over the per-turn breakdown's own total.
+        normalized["total_tokens"] = cumulative
+        return normalized
+    return {"total_tokens": cumulative}
+
+
 def _refresh_due(refreshed_at: dict[str, float], tc_id: str) -> bool:
     """True when an in-flight arg refresh may be emitted for this call.
 
@@ -412,6 +446,15 @@ async def iter_nano_runtime_events(
     refreshed_at: dict[str, float] = {}
     started_at: dict[str, float] = {}
     last_step_key = ""
+    # Cumulative token accounting across the whole run (summed per generation,
+    # deduped by id). Reconciled against authoritative lifecycle totals below.
+    usage_acc = TokenUsageAccumulator()
+    authoritative_usage: dict[str, int] | None = None
+    # Clean input context for the estimation fallback. Streamed AI chunks are
+    # cumulative snapshots (or deltas) of the SAME generation, so keeping them
+    # all would double-count; the committed ``answer`` is appended as ONE final
+    # AI message instead. Tool results are kept as real input context.
+    estimate_messages: list[Any] = [HumanMessage(content=input_text)]
 
     try:
         async for chunk in agent.astream(
@@ -424,7 +467,18 @@ async def iter_nano_runtime_events(
                 continue
             _ns, mode, data = chunk
 
+            # Observe every stream chunk for token usage. ``observe`` is a no-op
+            # for non-``messages`` chunks, so this stays cheap and keeps ONE
+            # accounting path for all providers.
+            usage_acc.observe(chunk)
+
             if mode == "custom" and isinstance(data, dict):
+                # soothe host lifecycle events carry an authoritative cumulative
+                # total + optional breakdown; reconcile (last one wins, they are
+                # cumulative counters, not deltas).
+                turn_usage = _custom_token_usage(data)
+                if turn_usage is not None:
+                    authoritative_usage = turn_usage
                 # Host (soothe) wire tool-call update: pre-parsed args that
                 # bypass tool_call_chunks partial-JSON accumulation. Handle
                 # before map_custom so it yields a real ToolStarted.
@@ -540,6 +594,10 @@ async def iter_nano_runtime_events(
                         yield Narration(text=answer)
 
             elif isinstance(message_obj, ToolMessage):
+                # Tool results are genuine input context for later turns; keep
+                # them for the estimation fallback (never the cumulative AI
+                # chunks, which would double-count).
+                estimate_messages.append(message_obj)
                 msg_call_id = getattr(message_obj, "tool_call_id", None)
                 call = str(msg_call_id) if msg_call_id else None
                 tool_name, tc_args = tool_args.pop(msg_call_id)
@@ -583,7 +641,29 @@ async def iter_nano_runtime_events(
             # of a single monolithic one.
             for text_delta in OutputTextChunker.word_deltas(answer):
                 yield text_delta
-        yield RunCompleted(output_text=answer)
+
+        # Resolve the final token total: authoritative lifecycle counter wins,
+        # then summed provider usage, then the model-aware estimation fallback.
+        breakdown = usage_acc.snapshot()
+        if authoritative_usage is not None:
+            usage = UsageInfo(**authoritative_usage)
+        elif breakdown is not None:
+            usage = UsageInfo(
+                input_tokens=breakdown.input_tokens,
+                output_tokens=breakdown.output_tokens,
+                total_tokens=breakdown.total_tokens,
+                cache_read_tokens=breakdown.cache_read_tokens,
+                cache_creation_tokens=breakdown.cache_creation_tokens,
+            )
+        else:
+            conversation = estimate_messages + [AIMessage(content=answer)]
+            estimated = usage_acc.estimate(conversation, model=model)
+            usage = UsageInfo(
+                input_tokens=estimated.input_tokens,
+                output_tokens=estimated.output_tokens,
+                total_tokens=estimated.total_tokens,
+            )
+        yield RunCompleted(output_text=answer, usage=usage)
     except Exception as exc:  # noqa: BLE001
         # Preserve the original type and stack so the CLI can report the real
         # cause (the event is re-wrapped downstream, which would otherwise

@@ -70,6 +70,19 @@ def _format_duration(seconds: float) -> str:
     return f"{seconds:.1f}s"
 
 
+def _format_tokens(count: int) -> str:
+    """Format a token count compactly (``1.2K`` / ``3.4M`` / ``842``).
+
+    Matches soothe's ``format_token_count`` (K at 1,000, M at 1,000,000) so the
+    footer reads the same across both CLIs.
+    """
+    if count >= 1_000_000:
+        return f"{count / 1_000_000:.1f}M"
+    if count >= 1000:
+        return f"{count / 1000:.1f}K"
+    return str(count)
+
+
 # Western + CJK sentence boundaries for status preview.
 _STATUS_SENTENCE_SEPS = (
     ". ",
@@ -513,6 +526,8 @@ async def stream_query(
     # Human-readable label of the latest activity, reported on timeout so the
     # user knows where the run was stuck.
     last_label = "Thinking"
+    # Final cumulative token consumption, surfaced in the ``✓ Done`` footer.
+    total_tokens: int | None = None
 
     def _flush_partial() -> None:
         """Surface buffered narration before an error replaces the progress line."""
@@ -617,6 +632,8 @@ async def stream_query(
                         if isinstance(event, RunCompleted):
                             if event.output_text:
                                 answer.set(event.output_text)
+                            if event.usage is not None and event.usage.total_tokens > 0:
+                                total_tokens = event.usage.total_tokens
                             continue
 
                         if isinstance(event, InterruptWaiting):
@@ -667,7 +684,8 @@ async def stream_query(
         # failed tool calls visible instead.
         _write_no_output_warning(stderr, failed_tool_calls, last_tool_error, thread_id)
     duration = _format_duration(time.monotonic() - started_at)
-    stdout.write(f"\n✓ Done · {duration} · {thread_id}\n")
+    token_part = f" · {_format_tokens(total_tokens)} tokens" if total_tokens else ""
+    stdout.write(f"\n✓ Done · {duration}{token_part} · {thread_id}\n")
     stdout.flush()
     return answer_text
 
