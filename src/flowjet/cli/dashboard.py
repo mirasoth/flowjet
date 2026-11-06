@@ -473,6 +473,28 @@ class ProgressDashboard:
         self._state.updated_at = time.time()
         self._refresh()
 
+    def update_tool_activity(self, message: str, *, color: str = "cyan") -> None:
+        """Refresh the in-flight tool row in place instead of appending.
+
+        Partial tool-arg chunks stream as a growing label (``run_command sleep``,
+        ``run_command sleep 180``, …). Each one used to append a new Activity row,
+        flooding the tail with near-duplicate ``· run_command`` lines. This updates
+        the current phase and the last in-flight tool row together so one row grows
+        as the command assembles — mirroring how :meth:`add_reasoning` handles
+        cumulative narration.
+        """
+        label = _one_line(message, max(12, self._width - 10)) or "Working"
+        self._state.phase = label
+        self._state.color = color
+        self._state.updated_at = time.time()
+        activity = self._state.activity
+        if activity and activity[-1].kind == "event" and activity[-1].ok is None:
+            activity[-1].label = label
+            activity[-1].color = color
+        else:
+            self._state.append_activity(Activity(label=label, color=color, at=time.time()))
+        self._refresh()
+
     def set_tokens(self, total: int | None) -> None:
         self._state.total_tokens = total
         self._state.updated_at = time.time()

@@ -174,6 +174,53 @@ def test_add_reasoning_survives_the_answer_preview_reset() -> None:
     assert "› Let me look that up." in _render(dash.state)
 
 
+def test_update_tool_activity_grows_one_row_for_partial_chunks() -> None:
+    """Partial tool-arg chunks update the in-flight row, not one row per chunk."""
+    dash = ProgressDashboard(io.StringIO(), enabled=True)
+    # ToolStarted → first row (args empty, label is just the tool verb).
+    dash.update("run_command", color="yellow")
+    assert len(dash.state.activity) == 1
+
+    # Partial args stream in as growing labels — each must update the SAME row.
+    dash.update_tool_activity("run_command sleep", color="yellow")
+    dash.update_tool_activity("run_command sleep 180", color="yellow")
+    dash.update_tool_activity("run_command sleep 180 && echo done", color="yellow")
+    assert len(dash.state.activity) == 1
+    assert dash.state.activity[-1].label == "run_command sleep 180 && echo done"
+    assert dash.state.phase == "run_command sleep 180 && echo done"
+
+    # ToolCompleted with the same label → updates the in-flight row in place
+    # with ok/duration (the · becomes ✓), not a duplicate row.
+    dash.update(
+        "run_command sleep 180 && echo done",
+        color="green",
+        ok=True,
+        duration_ms=500,
+    )
+    assert len(dash.state.activity) == 1
+    assert dash.state.activity[-1].ok is True
+    assert dash.state.activity[-1].duration_ms == 500
+
+
+def test_update_tool_activity_appends_when_no_in_flight_row() -> None:
+    """If there is no in-flight event row yet, create one rather than crashing."""
+    dash = ProgressDashboard(io.StringIO(), enabled=True)
+    dash.update_tool_activity("run_command sleep 180", color="yellow")
+    assert len(dash.state.activity) == 1
+    assert dash.state.activity[-1].label == "run_command sleep 180"
+
+
+def test_update_tool_activity_appends_after_reasoning() -> None:
+    """A reasoning row at the tail must not be mutated; a new event row starts."""
+    dash = ProgressDashboard(io.StringIO(), enabled=True)
+    dash.add_reasoning("Let me run a command")
+    dash.update_tool_activity("run_command sleep 180", color="yellow")
+    assert len(dash.state.activity) == 2
+    assert dash.state.activity[0].kind == "reasoning"
+    assert dash.state.activity[1].kind == "event"
+    assert dash.state.activity[1].label == "run_command sleep 180"
+
+
 def test_tool_result_metadata_does_not_attach_to_a_reasoning_row() -> None:
     dash = ProgressDashboard(io.StringIO(), enabled=True)
     dash.add_reasoning("thinking")

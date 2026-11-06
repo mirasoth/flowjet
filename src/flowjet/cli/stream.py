@@ -600,11 +600,19 @@ async def stream_query(
                                 if mapped:
                                     label, color = mapped
                                     last_label = label
-                                    status.update(label, color=color)
+                                    # Partial tool-arg refreshes (``soothe.tool.started``
+                                    # emitted while args stream) must update the in-flight
+                                    # tool row in place, not append a new Activity row per
+                                    # growing chunk — otherwise the tail fills with
+                                    # near-duplicate ``· run_command`` lines.
+                                    event_type = event.raw.get("type", "")
+                                    if event_type == "soothe.tool.started":
+                                        status.update_tool_activity(label, color=color)
+                                    else:
+                                        status.update(label, color=color)
                                     # Only mirror events that drive the dashboard
                                     # (skips policy.checked, output.*, …).
                                     if show_tool_calls:
-                                        event_type = event.raw.get("type", "unknown")
                                         _write_verbose(status, stderr, f"  [event] {event_type}\n")
                             continue
 
