@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.13] — 2026-11-06
+
 ### Added
 
 - **Token totals in the CLI footer.** `✓ Done` now reports cumulative usage, aggregated from provider usage deltas, reconciled with soothe's turn-end total and estimated when a provider reports none. The same totals reach the ACP and OpenAI-compat projections via `RunCompleted.usage`.
@@ -18,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Multi-line live progress dashboard replaces the single-line status line.** On a TTY, `fj`/`fjf` redraw one fixed region in place (Rich `Live`): status badge, a one-line step/elapsed/tokens/updated strip, the current action, an activity history (tool calls plus the agent's reasoning between them) and a live answer preview. DONE / FAILED / PAUSED snapshots stay above the answer or the questions; verbose and log lines print outside the live region. Tool rows in `Activity` show `<tool> <args>` with no repeated status prefix. Non-TTY output is unchanged byte-for-byte.
 - **Partitioned `ask_user` questions on TTY.** Numbered `Q1:`/`Q2:` sections, a `★` recommended marker, wrapped descriptions and a standalone resume hint. The in-run pause and `fjf` resume share one renderer; non-TTY keeps the historical plain-text block. Answering stays manual via `fjf -t … <answer>`.
-- **`soothe` floor bumped to `>=1.2.7`** for improved token accounting (`uv.lock` refreshed).
+- **`soothe` floor bumped to `>=1.2.8`** for improved token accounting (`uv.lock` refreshed).
 
 ## [2.1.12] — 2026-10-31
 
