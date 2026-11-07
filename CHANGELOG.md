@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.14] — 2026-11-07
+
+### Fixed
+
+- **In-flight tool activity no longer duplicates per partial arg chunk.** As tool arguments streamed in (e.g. a growing `run_command sleep 180 && …` command), each partial refresh appended a new `· run_command …` row to the dashboard Activity tail instead of updating the single in-flight row in place. Partial `soothe.tool.started` progress events now route to `update_tool_activity()`, which grows the existing row's label in place; the completed event marks that same row `✓` (no duplicate `·` row above the `✓`).
+- **Brief in-flight tool rows are dropped from the Activity tail.** Quick tool calls (read_file, grep, ls, …) previously left a `·` stub visible between completed rows. Bare in-flight event rows (`·`) that have been visible for under 5 seconds are now filtered from the rendered history; long-running commands (sleep 180, slow builds) cross the threshold and stay visible. Same-tool completions fold into the in-flight row in place rather than leaving a stale `·` beside the `✓`.
+
+### Changed
+
+- **`soothe` floor bumped to `>=1.2.9`** (`uv.lock` refreshed).
+
 ## [2.1.13] — 2026-11-06
 
 ### Added
