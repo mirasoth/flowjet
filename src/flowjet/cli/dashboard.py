@@ -37,6 +37,13 @@ _TAIL_MAX = 6
 _CHROME_ROWS = 14
 # Ceiling for a reasoning stretch before it is truncated into one panel row.
 _REASONING_MAX_CHARS = 2000
+# In-flight tool rows (the bare ``·`` entries) are dropped from the Activity
+# tail unless they have been visible for at least this long — quick tool calls
+# (read_file, grep, ls, …) come and go in well under a second, and a row per
+# call floods the history with ``· run_command`` noise. Long-running commands
+# (``sleep 180``, a slow build) cross the threshold and stay visible so the
+# user can see what is taking time.
+_TOOL_ACTIVITY_MIN_SECONDS = 5.0
 
 _STATUS_BADGES: dict[str, tuple[str, str]] = {
     "LIVE": ("● LIVE", "cyan"),
@@ -49,6 +56,22 @@ _STATUS_BADGES: dict[str, tuple[str, str]] = {
 def _one_line(text: Any, limit: int) -> str:
     """Single-line, control-character-free, width-bounded panel text."""
     return _clean(text, limit=max(1, limit)).strip()
+
+
+def _same_tool(a: str, b: str) -> bool:
+    """Whether two activity labels refer to the same tool.
+
+    Tool rows share the shape ``<tool_name> <args…>`` (e.g.
+    ``run_command sleep 180``); the first whitespace-delimited token is the
+    tool name. Two rows are the same tool when that leading token matches,
+    so a completion (``run_command sleep 180 && echo done``) can fold into
+    the in-flight row (``run_command sleep``) without leaving a duplicate.
+    """
+    ta = a.strip().split(None, 1)
+    tb = b.strip().split(None, 1)
+    if not ta or not tb:
+        return a.strip() == b.strip()
+    return ta[0] == tb[0]
 
 
 def _duration(seconds: float) -> str:
@@ -207,10 +230,25 @@ def build_dashboard(
     # leave that mirror in the middle of the tail, so filter by content rather
     # than by position. Completed rows (ok / timing) carry extra information
     # and stay; reasoning with different text stays.
+    #
+    # Bare in-flight rows (``·``) are dropped unless they have been visible for
+    # at least ``_TOOL_ACTIVITY_MIN_SECONDS`` — quick tool calls come and go in
+    # well under a second and a ``·`` row per call floods the history. Only
+    # long-running commands (slow builds, ``sleep 180``, …) cross the threshold
+    # and stay visible so the user can see what is taking time.
+    def _is_brief_in_flight(item: Activity) -> bool:
+        if item.kind != "event" or item.ok is not None or item.duration_ms is not None:
+            return False
+        # The current phase mirror is always handled by the first clause below;
+        # this check is for *historical* in-flight rows left behind when a tool
+        # completed with a different label (or is still running elsewhere).
+        return (now_mono - item.at) < _TOOL_ACTIVITY_MIN_SECONDS
+
     history = [
         item
         for item in state.activity
         if not (item.label == state.phase and item.ok is None and item.duration_ms is None)
+        and not _is_brief_in_flight(item)
     ]
     tail = history[-_tail_limit(height) :]
     if tail:
@@ -442,9 +480,32 @@ class ProgressDashboard:
         self._state.phase = label
         self._state.color = color
         self._state.updated_at = time.time()
+        activity = self._state.activity
+        # When a tool completes with a label that differs from the last partial
+        # args (``changed``), the previous in-flight row (``·``) would be left
+        # in history as a duplicate of the new ``✓`` row. If the last row is
+        # still a bare in-flight event for the *same tool*, fold the completion
+        # into it in place instead of appending a second row.
+        if (
+            changed
+            and (ok is not None or duration_ms is not None)
+            and activity
+            and activity[-1].kind == "event"
+            and activity[-1].ok is None
+            and activity[-1].duration_ms is None
+            and _same_tool(activity[-1].label, label)
+        ):
+            activity[-1].label = label
+            activity[-1].color = color
+            if ok is not None:
+                activity[-1].ok = ok
+            if duration_ms is not None:
+                activity[-1].duration_ms = duration_ms
+            self._refresh()
+            return
         if changed:
             self._state.append_activity(
-                Activity(label=label, color=color, ok=ok, duration_ms=duration_ms, at=time.time())
+                Activity(label=label, color=color, ok=ok, duration_ms=duration_ms, at=time.monotonic())
             )
         elif (
             (ok is not None or duration_ms is not None)
@@ -492,7 +553,7 @@ class ProgressDashboard:
             activity[-1].label = label
             activity[-1].color = color
         else:
-            self._state.append_activity(Activity(label=label, color=color, at=time.time()))
+            self._state.append_activity(Activity(label=label, color=color, at=time.monotonic()))
         self._refresh()
 
     def set_tokens(self, total: int | None) -> None:
@@ -544,7 +605,7 @@ class ProgressDashboard:
             # rate, which is exactly what the old single-line spinner did.
         else:
             self._state.append_activity(
-                Activity(label=label, kind="reasoning", color="cyan", at=time.time())
+                Activity(label=label, kind="reasoning", color="cyan", at=time.monotonic())
             )
             self._refresh()
         self._last_reasoning = full

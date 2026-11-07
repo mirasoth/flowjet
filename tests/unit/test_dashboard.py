@@ -565,3 +565,64 @@ def test_write_through_uses_live_console_while_active() -> None:
     assert target.getvalue() == ""
     assert printed and "verbose" in str(printed[0])
     dash.finalize()
+
+
+# ---------------------------------------------------------------------------
+# Brief in-flight tool rows are dropped; long-running ones stay
+# ---------------------------------------------------------------------------
+
+
+def test_brief_in_flight_tool_row_is_dropped_from_history() -> None:
+    """A ``·`` row for a quick tool call (< 5s) must not clutter the Activity tail."""
+    state = DashboardState(
+        phase="grep def main",  # different from the historical row
+        started_at=100.0,
+        updated_at=time.time(),
+        activity=[
+            Activity("run_command sleep 180", at=108.0),  # 4s ago → brief
+        ],
+    )
+    out = _render(state)
+    # _render uses now_mono = started_at + 12 = 112; 112 - 108 = 4 < 5 → dropped
+    assert "· run_command sleep 180" not in out
+
+
+def test_long_running_in_flight_tool_row_stays_in_history() -> None:
+    """A ``·`` row for a command visible > 5s stays so the user sees what's slow."""
+    state = DashboardState(
+        phase="grep def main",  # different from the historical row
+        started_at=100.0,
+        updated_at=time.time(),
+        activity=[
+            Activity("run_command sleep 180", at=106.0),  # 6s ago → stays
+        ],
+    )
+    out = _render(state)
+    # _render uses now_mono = started_at + 12 = 112; 112 - 106 = 6 > 5 → kept
+    assert "· run_command sleep 180" in out
+
+
+def test_completed_tool_row_folds_into_in_flight_same_tool_row() -> None:
+    """When a tool completes with a different label but same tool, fold in place."""
+    dash = ProgressDashboard(io.StringIO(), enabled=True)
+    # ToolStarted → in-flight row (bare ``·``)
+    dash.update("run_command", color="yellow")
+    assert len(dash.state.activity) == 1
+    assert dash.state.activity[-1].ok is None
+
+    # ToolCompleted with a different (fuller) label — same tool ``run_command``
+    dash.update("run_command sleep 180 && echo done", color="green", ok=True, duration_ms=500)
+    assert len(dash.state.activity) == 1  # folded, not duplicated
+    assert dash.state.activity[-1].label == "run_command sleep 180 && echo done"
+    assert dash.state.activity[-1].ok is True
+    assert dash.state.activity[-1].duration_ms == 500
+
+
+def test_completed_tool_does_not_fold_into_different_tool_row() -> None:
+    """A completion for a different tool must append, not fold."""
+    dash = ProgressDashboard(io.StringIO(), enabled=True)
+    dash.update("read_file", color="yellow")
+    dash.update("run_command ls", color="green", ok=True, duration_ms=10)
+    assert len(dash.state.activity) == 2
+    assert dash.state.activity[-1].label == "run_command ls"
+    assert dash.state.activity[-1].ok is True
