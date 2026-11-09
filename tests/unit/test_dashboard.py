@@ -96,7 +96,7 @@ def test_tail_limit_shrinks_on_short_terminals() -> None:
     assert _tail_limit(12) == 2
 
 
-def test_update_reduces_state_and_deduplicates_activity() -> None:
+def test_update_reduces_state_and_records_only_completed_tools() -> None:
     dash = ProgressDashboard(io.StringIO(), enabled=True)
     dash.update("Thinking", color="cyan")
     dash.update("Thinking", color="cyan")
@@ -116,9 +116,13 @@ def test_update_reduces_state_and_deduplicates_activity() -> None:
     assert state.total_tokens == 12345
     assert state.failed_tools == 1
     assert state.answer_preview == "draft answer"
-    assert len(state.activity) == 2
+    # Bare phase updates never enter the completion log, and a completion
+    # clears the in-flight action line.
+    assert len(state.activity) == 1
     assert state.activity[-1].ok is True
     assert state.activity[-1].duration_ms == 42
+    assert state.activity_total == 1
+    assert state.in_flight_tool is None
 
     dash.clear_answer_preview()
     assert dash.state.answer_preview is None
@@ -127,10 +131,10 @@ def test_update_reduces_state_and_deduplicates_activity() -> None:
 def test_activity_tail_is_bounded() -> None:
     dash = ProgressDashboard(io.StringIO(), enabled=True)
     for i in range(20):
-        dash.update(f"step {i}")
+        dash.update(f"tool {i}", ok=True, duration_ms=i)
     assert len(dash.state.activity) == 8
-    assert dash.state.activity[-1].label == "step 19"
-    assert "step 0" not in [item.label for item in dash.state.activity]
+    assert dash.state.activity[-1].label == "tool 19"
+    assert "tool 0" not in [item.label for item in dash.state.activity]
 
 
 def test_control_characters_are_stripped_from_panel_text() -> None:
@@ -158,9 +162,12 @@ def test_add_reasoning_keeps_one_row_per_stretch_and_interleaves_tools() -> None
     assert dash.state.activity[0].label == "Let me check the file"
     assert dash.state.activity[-1].label == "The file shows a bug"
 
+    # Reasoning stays in the reduced state (ACP parity) but Activity lists
+    # completed tool calls only.
     out = _render(dash.state)
-    assert "› Let me check the file" in out
-    assert "› The file shows a bug" in out
+    assert "›" not in out
+    assert "Let me check the file" not in out
+    assert "The file shows a bug" not in out
     assert "✓ read_file · cli.py" in out
 
 
@@ -171,65 +178,87 @@ def test_add_reasoning_survives_the_answer_preview_reset() -> None:
     dash.clear_answer_preview()
     assert dash.state.answer_preview is None
     assert dash.state.activity[-1].label == "Let me look that up."
-    assert "› Let me look that up." in _render(dash.state)
+    assert "›" not in _render(dash.state)
 
 
-def test_update_tool_activity_grows_one_row_for_partial_chunks() -> None:
-    """Partial tool-arg chunks update the in-flight row, not one row per chunk."""
+def test_update_tool_activity_grows_one_action_line_for_partial_chunks() -> None:
+    """Partial tool-arg chunks grow the action line, never an Activity row."""
     dash = ProgressDashboard(io.StringIO(), enabled=True)
-    # ToolStarted → first row (args empty, label is just the tool verb).
+    # ToolStarted → the complete label starts the action line.
     dash.update("run_command", color="yellow")
-    assert len(dash.state.activity) == 1
+    dash.set_in_flight_tool("run_command", color="yellow")
+    assert dash.state.activity == []
+    assert dash.state.in_flight_tool == "run_command"
 
-    # Partial args stream in as growing labels — each must update the SAME row.
+    # Partial args stream in as growing labels — every chunk refreshes the SAME
+    # action line (the command is still incomplete, so it stays out of Activity).
     dash.update_tool_activity("run_command sleep", color="yellow")
     dash.update_tool_activity("run_command sleep 180", color="yellow")
     dash.update_tool_activity("run_command sleep 180 && echo done", color="yellow")
-    assert len(dash.state.activity) == 1
-    assert dash.state.activity[-1].label == "run_command sleep 180 && echo done"
+    assert dash.state.in_flight_tool == "run_command sleep 180 && echo done"
     assert dash.state.phase == "run_command sleep 180 && echo done"
+    assert dash.state.activity == []
 
-    # ToolCompleted with the same label → updates the in-flight row in place
-    # with ok/duration (the · becomes ✓), not a duplicate row.
+    out = _render(dash.state)
+    lines = out.splitlines()
+    meta_idx = next(i for i, line in enumerate(lines) if "Elapsed" in line)
+    assert "run_command sleep 180 && echo done" in lines[meta_idx + 1]
+    assert "Activity" not in out
+
+    # ToolCompleted → one ✓ row in Activity and the action line is cleared.
     dash.update(
         "run_command sleep 180 && echo done",
         color="green",
         ok=True,
         duration_ms=500,
     )
+    assert dash.state.in_flight_tool is None
     assert len(dash.state.activity) == 1
     assert dash.state.activity[-1].ok is True
     assert dash.state.activity[-1].duration_ms == 500
+    assert "✓ run_command sleep 180 && echo done" in _render(dash.state)
+
+
+def test_in_flight_tool_survives_unrelated_phase_updates() -> None:
+    """Generic progress events must not hide the tool call being executed."""
+    dash = ProgressDashboard(io.StringIO(), enabled=True)
+    dash.set_in_flight_tool("run_command git commi", color="yellow")
+    dash.update("Thinking", color="cyan")
+    assert dash.state.in_flight_tool == "run_command git commi"
+    lines = _render(dash.state).splitlines()
+    meta_idx = next(i for i, line in enumerate(lines) if "Elapsed" in line)
+    assert "run_command git commi" in lines[meta_idx + 1]
+    assert "Activity" not in "\n".join(lines)
 
 
 def test_update_tool_activity_appends_when_no_in_flight_row() -> None:
-    """If there is no in-flight event row yet, create one rather than crashing."""
+    """A partial chunk works even when no ToolStarted update came first."""
     dash = ProgressDashboard(io.StringIO(), enabled=True)
     dash.update_tool_activity("run_command sleep 180", color="yellow")
-    assert len(dash.state.activity) == 1
-    assert dash.state.activity[-1].label == "run_command sleep 180"
+    assert dash.state.in_flight_tool == "run_command sleep 180"
+    assert dash.state.activity == []
 
 
-def test_update_tool_activity_appends_after_reasoning() -> None:
-    """A reasoning row at the tail must not be mutated; a new event row starts."""
+def test_update_tool_activity_leaves_reasoning_row_alone() -> None:
+    """A reasoning row at the tail must not be mutated by a partial chunk."""
     dash = ProgressDashboard(io.StringIO(), enabled=True)
     dash.add_reasoning("Let me run a command")
     dash.update_tool_activity("run_command sleep 180", color="yellow")
-    assert len(dash.state.activity) == 2
+    assert len(dash.state.activity) == 1
     assert dash.state.activity[0].kind == "reasoning"
-    assert dash.state.activity[1].kind == "event"
-    assert dash.state.activity[1].label == "run_command sleep 180"
+    assert dash.state.in_flight_tool == "run_command sleep 180"
 
 
-def test_tool_result_metadata_does_not_attach_to_a_reasoning_row() -> None:
+def test_tool_result_metadata_belongs_to_a_new_completed_row() -> None:
     dash = ProgressDashboard(io.StringIO(), enabled=True)
     dash.add_reasoning("thinking")
-    # Same phase label → ``update`` takes its dedup branch; tool metadata must
-    # not be written onto the reasoning row that happens to be last.
     dash.update("Working", color="cyan", ok=True, duration_ms=7)
+    assert len(dash.state.activity) == 2
+    reasoning = dash.state.activity[0]
+    assert reasoning.kind == "reasoning"
+    assert reasoning.ok is None and reasoning.duration_ms is None
     row = dash.state.activity[-1]
-    assert row.kind == "reasoning"
-    assert row.ok is None and row.duration_ms is None
+    assert row.kind == "event" and row.ok is True and row.duration_ms == 7
 
 
 def test_add_reasoning_is_cleaned_width_bounded_and_silent_on_non_tty() -> None:
@@ -263,7 +292,10 @@ def test_build_dashboard_renders_multi_line_summary() -> None:
         total_tokens=12345,
         started_at=100.0,
         updated_at=time.time(),
-        activity=[Activity("Thinking", ok=True), Activity("Reading · cli.py", duration_ms=42)],
+        activity=[
+            Activity("Thinking", ok=True),
+            Activity("Reading · cli.py", ok=True, duration_ms=42),
+        ],
     )
     out = _render(state)
     assert len(out.splitlines()) > 8  # a real multi-line region, not one status line
@@ -283,7 +315,7 @@ def test_build_dashboard_renders_multi_line_summary() -> None:
     meta = [line for line in out.splitlines() if "Elapsed" in line]
     assert len(meta) == 1
     assert "Step" in meta[0] and "Tokens" in meta[0] and "Updated" in meta[0]
-    assert "Activity" in out and "Thinking" in out and "42ms" in out
+    assert "Activity (2)" in out and "Thinking" in out and "42ms" in out
 
 
 @pytest.mark.parametrize(
@@ -355,7 +387,7 @@ def test_build_dashboard_does_not_repeat_the_current_stage() -> None:
         started_at=100.0,
         updated_at=time.time(),
         activity=[
-            Activity("Running deploy_ecs/config.py"),
+            Activity("Running deploy_ecs/config.py", ok=True),
             Activity(phase, kind="reasoning"),
         ],
     )
@@ -363,27 +395,27 @@ def test_build_dashboard_does_not_repeat_the_current_stage() -> None:
     assert "● LIVE" in out
     assert "Stage" not in out
     assert out.count(phase) == 1  # only in the main action line
-    assert "Running deploy_ecs/config.py" in out  # history is preserved
-    assert "›" not in out  # trailing mirror of the current stage is dropped
+    assert "✓ Running deploy_ecs/config.py" in out
+    assert "›" not in out  # reasoning rows are not Activity rows
 
 
-def test_build_dashboard_drops_the_phase_mirror_wherever_it_sits() -> None:
-    """A reasoning row can leave the in-flight mirror mid-tail; it must go."""
+def test_build_dashboard_drops_in_flight_and_reasoning_rows_wherever_they_sit() -> None:
+    """Activity shows only completed tool calls; mirrors and reasoning go."""
     phase = "grep def main"
     state = DashboardState(
         phase=phase,
         started_at=100.0,
         updated_at=time.time(),
         activity=[
-            Activity("Reading Users/xiaming"),
-            Activity(phase),
+            Activity("Reading Users/xiaming", ok=True, duration_ms=7),
+            Activity(phase),  # in-flight phase mirror
             Activity("I will analyze the project architecture.", kind="reasoning"),
         ],
     )
     out = _render(state)
     assert out.count(phase) == 1  # only the main action line
-    assert "Reading Users/xiaming" in out
-    assert "›" in out  # reasoning history is preserved
+    assert "✓ Reading Users/xiaming" in out
+    assert "›" not in out
 
 
 def test_build_dashboard_keeps_completed_rows_sharing_the_stage_label() -> None:
@@ -410,7 +442,7 @@ def test_build_dashboard_limits_tail_by_terminal_height() -> None:
         phase="Working",
         started_at=100.0,
         updated_at=time.time(),
-        activity=[Activity(f"activity-{i}") for i in range(8)],
+        activity=[Activity(f"activity-{i}", ok=True) for i in range(8)],
     )
     tall = _render(state, height=24)
     short = _render(state, height=15)
@@ -568,61 +600,87 @@ def test_write_through_uses_live_console_while_active() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Brief in-flight tool rows are dropped; long-running ones stay
+# Activity = completed tool calls only; in-flight calls live on the action line
 # ---------------------------------------------------------------------------
 
 
-def test_brief_in_flight_tool_row_is_dropped_from_history() -> None:
-    """A ``·`` row for a quick tool call (< 5s) must not clutter the Activity tail."""
+@pytest.mark.parametrize("at", [108.0, 106.0])
+def test_in_flight_tool_rows_never_appear_in_activity(at: float) -> None:
+    """A ``·`` row is never an Activity row, however long it has been visible."""
     state = DashboardState(
-        phase="grep def main",  # different from the historical row
+        phase="grep def main",
         started_at=100.0,
         updated_at=time.time(),
-        activity=[
-            Activity("run_command sleep 180", at=108.0),  # 4s ago → brief
-        ],
+        activity=[Activity("run_command sleep 180", at=at)],
     )
     out = _render(state)
-    # _render uses now_mono = started_at + 12 = 112; 112 - 108 = 4 < 5 → dropped
     assert "· run_command sleep 180" not in out
+    assert "run_command sleep 180" not in out
+    assert "Activity" not in out
 
 
-def test_long_running_in_flight_tool_row_stays_in_history() -> None:
-    """A ``·`` row for a command visible > 5s stays so the user sees what's slow."""
-    state = DashboardState(
-        phase="grep def main",  # different from the historical row
-        started_at=100.0,
-        updated_at=time.time(),
-        activity=[
-            Activity("run_command sleep 180", at=106.0),  # 6s ago → stays
-        ],
-    )
-    out = _render(state)
-    # _render uses now_mono = started_at + 12 = 112; 112 - 106 = 6 > 5 → kept
-    assert "· run_command sleep 180" in out
-
-
-def test_completed_tool_row_folds_into_in_flight_same_tool_row() -> None:
-    """When a tool completes with a different label but same tool, fold in place."""
+def test_completed_tool_appends_exactly_one_row() -> None:
+    """ToolStarted/partial chunks never log; the completion logs one ✓ row."""
     dash = ProgressDashboard(io.StringIO(), enabled=True)
-    # ToolStarted → in-flight row (bare ``·``)
     dash.update("run_command", color="yellow")
-    assert len(dash.state.activity) == 1
-    assert dash.state.activity[-1].ok is None
+    dash.set_in_flight_tool("run_command", color="yellow")
+    dash.update_tool_activity("run_command sleep", color="yellow")
+    assert dash.state.activity == []
+    assert dash.state.in_flight_tool == "run_command sleep"
 
-    # ToolCompleted with a different (fuller) label — same tool ``run_command``
     dash.update("run_command sleep 180 && echo done", color="green", ok=True, duration_ms=500)
-    assert len(dash.state.activity) == 1  # folded, not duplicated
+    assert len(dash.state.activity) == 1
     assert dash.state.activity[-1].label == "run_command sleep 180 && echo done"
     assert dash.state.activity[-1].ok is True
     assert dash.state.activity[-1].duration_ms == 500
+    assert dash.state.in_flight_tool is None
+    assert "Activity" in _render(dash.state)
 
 
-def test_completed_tool_does_not_fold_into_different_tool_row() -> None:
-    """A completion for a different tool must append, not fold."""
+def test_each_completed_tool_gets_its_own_row() -> None:
     dash = ProgressDashboard(io.StringIO(), enabled=True)
     dash.update("read_file", color="yellow")
-    dash.update("run_command ls", color="green", ok=True, duration_ms=10)
+    dash.set_in_flight_tool("read_file", color="yellow")
+    dash.update("read_file cli.py", color="green", ok=True, duration_ms=10)
+    dash.update("run_command ls", color="yellow")
+    dash.set_in_flight_tool("run_command ls", color="yellow")
+    dash.update("run_command ls", color="green", ok=True, duration_ms=12)
     assert len(dash.state.activity) == 2
-    assert dash.state.activity[-1].label == "run_command ls"
-    assert dash.state.activity[-1].ok is True
+    assert [row.label for row in dash.state.activity] == ["read_file cli.py", "run_command ls"]
+    assert all(row.ok is True for row in dash.state.activity)
+    assert dash.state.in_flight_tool is None
+
+
+def test_reasoning_rows_do_not_evict_completed_tool_rows() -> None:
+    """A burst of narration must not push ✓ rows out of the completion log."""
+    dash = ProgressDashboard(io.StringIO(), enabled=True)
+    dash.update("run_command git status", ok=True, duration_ms=9)
+    for i in range(12):
+        dash.add_reasoning(f"thought {i}")
+    assert len([row for row in dash.state.activity if row.ok is not None]) == 1
+    assert "✓ run_command git status" in _render(dash.state)
+
+
+def test_activity_heading_counts_every_completed_call() -> None:
+    """The heading shows the run total even though the log keeps only 8 rows."""
+    dash = ProgressDashboard(io.StringIO(), enabled=True)
+    for i in range(12):
+        dash.update(f"tool {i}", ok=True, duration_ms=i)
+    assert dash.state.activity_total == 12
+    assert len(dash.state.activity) == 8
+    out = _render(dash.state)
+    assert "Activity (12)" in out
+    assert "✓ tool 11" in out  # recent tail
+    assert "✓ tool 0" not in out  # evicted from the rolling log
+
+
+def test_failed_tool_is_still_a_completed_activity_row() -> None:
+    state = DashboardState(
+        phase="Working",
+        started_at=100.0,
+        updated_at=time.time(),
+        activity=[Activity("run_command false", ok=False, duration_ms=3)],
+    )
+    out = _render(state)
+    assert "✗ run_command false" in out
+    assert "3ms" in out

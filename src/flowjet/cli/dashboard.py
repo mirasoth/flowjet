@@ -29,6 +29,9 @@ from flowjet.cli.render import _clean, make_console, terminal_metrics
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _DEFAULT_WIDTH = 72
 _DEFAULT_HEIGHT = 24
+# Activity is a rolling log of COMPLETED tool calls only. In-flight / partial
+# tool calls have exactly one home — the action line below the meta strip — so
+# they are never appended to this history.
 _ACTIVITY_MAX = 8
 _REFRESH_PER_SECOND = 8.0
 _TAIL_MIN = 2
@@ -37,13 +40,6 @@ _TAIL_MAX = 6
 _CHROME_ROWS = 14
 # Ceiling for a reasoning stretch before it is truncated into one panel row.
 _REASONING_MAX_CHARS = 2000
-# In-flight tool rows (the bare ``·`` entries) are dropped from the Activity
-# tail unless they have been visible for at least this long — quick tool calls
-# (read_file, grep, ls, …) come and go in well under a second, and a row per
-# call floods the history with ``· run_command`` noise. Long-running commands
-# (``sleep 180``, a slow build) cross the threshold and stay visible so the
-# user can see what is taking time.
-_TOOL_ACTIVITY_MIN_SECONDS = 5.0
 
 _STATUS_BADGES: dict[str, tuple[str, str]] = {
     "LIVE": ("● LIVE", "cyan"),
@@ -56,22 +52,6 @@ _STATUS_BADGES: dict[str, tuple[str, str]] = {
 def _one_line(text: Any, limit: int) -> str:
     """Single-line, control-character-free, width-bounded panel text."""
     return _clean(text, limit=max(1, limit)).strip()
-
-
-def _same_tool(a: str, b: str) -> bool:
-    """Whether two activity labels refer to the same tool.
-
-    Tool rows share the shape ``<tool_name> <args…>`` (e.g.
-    ``run_command sleep 180``); the first whitespace-delimited token is the
-    tool name. Two rows are the same tool when that leading token matches,
-    so a completion (``run_command sleep 180 && echo done``) can fold into
-    the in-flight row (``run_command sleep``) without leaving a duplicate.
-    """
-    ta = a.strip().split(None, 1)
-    tb = b.strip().split(None, 1)
-    if not ta or not tb:
-        return a.strip() == b.strip()
-    return ta[0] == tb[0]
 
 
 def _duration(seconds: float) -> str:
@@ -106,14 +86,15 @@ def _tail_limit(height: int) -> int:
 
 @dataclass
 class Activity:
-    """One entry in the rolling activity tail."""
+    """One entry in the rolling history (rendered only when completed)."""
 
     label: str
     color: str = "cyan"
     ok: bool | None = None
     duration_ms: int | None = None
     at: float = 0.0
-    # ``event`` = phase/tool activity; ``reasoning`` = intermediate Narration.
+    # ``event`` = completed tool call (ok set); ``reasoning`` = Narration, kept
+    # in the reduced state for ACP parity but never rendered in Activity.
     kind: str = "event"
 
 
@@ -128,12 +109,20 @@ class DashboardState:
     steps: int | None = None
     current_tool: str | None = None
     tool_args_preview: str | None = None
+    # The tool call currently being assembled/executed, including partial args
+    # that have not fully streamed in yet. It has exactly one home: the action
+    # line directly below the step/elapsed/tokens/updated strip.
+    in_flight_tool: str | None = None
+    in_flight_color: str = "yellow"
     answer_preview: str | None = None
     total_tokens: int | None = None
     failed_tools: int = 0
     started_at: float = 0.0
     updated_at: float = 0.0
     elapsed_override: float | None = None
+    # Cumulative number of tool calls that completed. ``activity`` is a rolling
+    # log capped at _ACTIVITY_MAX, so it cannot supply the total for the heading.
+    activity_total: int = 0
     activity: list[Activity] = field(default_factory=list)
 
     def elapsed(self, now_mono: float) -> float:
@@ -143,8 +132,15 @@ class DashboardState:
 
     def append_activity(self, item: Activity) -> None:
         self.activity.append(item)
-        if len(self.activity) > _ACTIVITY_MAX:
-            del self.activity[: len(self.activity) - _ACTIVITY_MAX]
+        # Two independent rolling caps: completed tool calls (what Activity
+        # renders) and reasoning rows (state-only, kept for ACP parity). A
+        # burst of narration must never evict a ✓ row from the visible log.
+        for kind in ("event", "reasoning"):
+            indices = [i for i, row in enumerate(self.activity) if row.kind == kind]
+            overflow = len(indices) - _ACTIVITY_MAX
+            if overflow > 0:
+                for i in reversed(indices[:overflow]):
+                    del self.activity[i]
 
 
 def build_dashboard(
@@ -207,13 +203,18 @@ def build_dashboard(
     meta_budget = max(16, width - 6)
     meta = meta_full if len(meta_full) <= meta_budget else meta_short
 
-    # Meta first, then the in-flight action as the panel's main line. No
-    # key/value table: its 12-column label gutter pushed "Thinking" far to the
-    # right, out of alignment with the meta line and the Activity rows.
+    # Meta first, then the tool call being assembled/executed as the panel's
+    # main line. Partial arg chunks update ``in_flight_tool`` in place, so a
+    # command whose args have not fully arrived is still visible here. Generic
+    # phases ("Thinking", …) are the fallback when no tool is in flight. No
+    # key/value table: its label gutter would push the action out of alignment
+    # with the meta line and the Activity rows.
+    action = state.in_flight_tool or stage
+    action_color = state.in_flight_color if state.in_flight_tool else state.color
     blocks: list[Any] = [
         heading,
         Text(_one_line(meta, meta_budget), style=style("dim")),
-        Text(_one_line(stage, meta_budget), style=style(f"bold {state.color}")),
+        Text(_one_line(action, meta_budget), style=style(f"bold {action_color}")),
     ]
 
     if state.answer_preview:
@@ -225,43 +226,22 @@ def build_dashboard(
             )
         )
 
-    # Activity is history, never a second copy of the main action line.
-    # ``update`` appends the in-flight phase, and a later reasoning row can
-    # leave that mirror in the middle of the tail, so filter by content rather
-    # than by position. Completed rows (ok / timing) carry extra information
-    # and stay; reasoning with different text stays.
-    #
-    # Bare in-flight rows (``·``) are dropped unless they have been visible for
-    # at least ``_TOOL_ACTIVITY_MIN_SECONDS`` — quick tool calls come and go in
-    # well under a second and a ``·`` row per call floods the history. Only
-    # long-running commands (slow builds, ``sleep 180``, …) cross the threshold
-    # and stay visible so the user can see what is taking time.
-    def _is_brief_in_flight(item: Activity) -> bool:
-        if item.kind != "event" or item.ok is not None or item.duration_ms is not None:
-            return False
-        # The current phase mirror is always handled by the first clause below;
-        # this check is for *historical* in-flight rows left behind when a tool
-        # completed with a different label (or is still running elsewhere).
-        return (now_mono - item.at) < _TOOL_ACTIVITY_MIN_SECONDS
-
-    history = [
-        item
-        for item in state.activity
-        if not (item.label == state.phase and item.ok is None and item.duration_ms is None)
-        and not _is_brief_in_flight(item)
-    ]
+    # Activity is a completion log: only tool calls that have returned (✓ / ✗).
+    # Reasoning stretches are still reduced into ``state.activity`` for ACP
+    # parity and the answer-preview reset, but they belong to the Answer row;
+    # in-flight / partial tool calls belong to the action line above. Neither
+    # gets a row here.
+    history = [item for item in state.activity if item.kind == "event" and item.ok is not None]
     tail = history[-_tail_limit(height) :]
     if tail:
+        # The heading counts ALL completed tool calls in the run, not just the
+        # rows still held by the rolling log / visible in the terminal tail.
+        total = max(state.activity_total, len(history))
         blocks.append(Text(""))
-        blocks.append(Text("Activity", style=style("bold dim")))
+        blocks.append(Text(f"Activity ({total})", style=style("bold dim")))
         for item in tail:
-            if item.kind == "reasoning":
-                # Intermediate answer/reasoning text between tool calls.
-                mark = "›"
-                item_style = "dim cyan"
-            else:
-                mark = "✓" if item.ok is True else ("✗" if item.ok is False else "·")
-                item_style = "green" if item.ok else "red" if item.ok is False else item.color
+            mark = "✓" if item.ok else "✗"
+            item_style = "green" if item.ok else "red"
             suffix = f" · {item.duration_ms}ms" if item.duration_ms is not None else ""
             blocks.append(
                 Text(
@@ -466,7 +446,12 @@ class ProgressDashboard:
         ok: bool | None = None,
         duration_ms: int | None = None,
     ) -> None:
-        """Update the current stage and append a rolling activity entry.
+        """Update the current stage; append an Activity row only on completion.
+
+        ``ok`` / ``duration_ms`` mark a tool call that has returned — the only
+        kind of event the Activity completion log records. Bare phase updates
+        and partial tool args never enter the log: they are shown on the single
+        action line below the meta strip via :meth:`set_in_flight_tool`.
 
         ``tail`` is kept for signature compatibility (the old single-line
         renderer used it to keep the end of a preview); rich now word-wraps, so
@@ -480,46 +465,20 @@ class ProgressDashboard:
         self._state.phase = label
         self._state.color = color
         self._state.updated_at = time.time()
-        activity = self._state.activity
-        # When a tool completes with a label that differs from the last partial
-        # args (``changed``), the previous in-flight row (``·``) would be left
-        # in history as a duplicate of the new ``✓`` row. If the last row is
-        # still a bare in-flight event for the *same tool*, fold the completion
-        # into it in place instead of appending a second row.
-        if (
-            changed
-            and (ok is not None or duration_ms is not None)
-            and activity
-            and activity[-1].kind == "event"
-            and activity[-1].ok is None
-            and activity[-1].duration_ms is None
-            and _same_tool(activity[-1].label, label)
-        ):
-            activity[-1].label = label
-            activity[-1].color = color
-            if ok is not None:
-                activity[-1].ok = ok
-            if duration_ms is not None:
-                activity[-1].duration_ms = duration_ms
-            self._refresh()
-            return
-        if changed:
+        completed = ok is not None or duration_ms is not None
+        if completed:
             self._state.append_activity(
-                Activity(label=label, color=color, ok=ok, duration_ms=duration_ms, at=time.monotonic())
+                Activity(
+                    label=label,
+                    color=color,
+                    ok=ok,
+                    duration_ms=duration_ms,
+                    at=time.monotonic(),
+                )
             )
-        elif (
-            (ok is not None or duration_ms is not None)
-            and self._state.activity
-            and self._state.activity[-1].kind != "reasoning"
-        ):
-            # Tool success/timing belongs to the tool row, never to a
-            # reasoning row left at the tail by a repeated phase label.
-            last = self._state.activity[-1]
-            if ok is not None:
-                last.ok = ok
-            if duration_ms is not None:
-                last.duration_ms = duration_ms
-        if changed:
+            self._state.activity_total += 1
+            self._state.in_flight_tool = None
+        if changed or completed:
             self._refresh()
 
     def set_step(self, step: int | None, steps: int | None) -> None:
@@ -534,27 +493,30 @@ class ProgressDashboard:
         self._state.updated_at = time.time()
         self._refresh()
 
-    def update_tool_activity(self, message: str, *, color: str = "cyan") -> None:
-        """Refresh the in-flight tool row in place instead of appending.
+    def set_in_flight_tool(self, label: str, *, color: str = "yellow") -> None:
+        """Show the tool call currently executing (args may still be partial).
 
-        Partial tool-arg chunks stream as a growing label (``run_command sleep``,
-        ``run_command sleep 180``, …). Each one used to append a new Activity row,
-        flooding the tail with near-duplicate ``· run_command`` lines. This updates
-        the current phase and the last in-flight tool row together so one row grows
-        as the command assembles — mirroring how :meth:`add_reasoning` handles
-        cumulative narration.
+        Called on ``ToolStarted`` (complete args) and on every partial arg
+        chunk; the label grows in place until a completion arrives and
+        :meth:`update` records the ``✓`` row and clears this line.
+        """
+        self._state.in_flight_tool = _one_line(label, max(12, self._width - 10)) or None
+        self._state.in_flight_color = color
+        self._state.updated_at = time.time()
+        self._refresh()
+
+    def update_tool_activity(self, message: str, *, color: str = "cyan") -> None:
+        """Grow the in-flight tool label as partial args stream in.
+
+        ``soothe.tool.started`` fires repeatedly while a tool call's JSON args
+        are still arriving (``run_command sleep`` → ``run_command sleep 180``).
+        These chunks never enter the Activity completion log; they only refresh
+        the single action line below the meta strip.
         """
         label = _one_line(message, max(12, self._width - 10)) or "Working"
         self._state.phase = label
         self._state.color = color
-        self._state.updated_at = time.time()
-        activity = self._state.activity
-        if activity and activity[-1].kind == "event" and activity[-1].ok is None:
-            activity[-1].label = label
-            activity[-1].color = color
-        else:
-            self._state.append_activity(Activity(label=label, color=color, at=time.monotonic()))
-        self._refresh()
+        self.set_in_flight_tool(label, color=color)
 
     def set_tokens(self, total: int | None) -> None:
         self._state.total_tokens = total
@@ -575,11 +537,12 @@ class ProgressDashboard:
         self._refresh()
 
     def add_reasoning(self, text: str) -> None:
-        """Mirror intermediate ``Narration`` into the activity tail.
+        """Mirror intermediate ``Narration`` into the reduced state.
 
         ACP projects the same text as ``agent_thought_chunk`` so hosts can see
         the agent's reasoning between tool calls; the CLI keeps it as a rolling
         history row so it survives the answer-preview reset on ``ToolStarted``.
+        It is not rendered in Activity, which lists completed tool calls only.
 
         The bridge emits the *cumulative* answer for the current stretch, so one
         row is updated in place instead of appending N ever-growing prefixes. A

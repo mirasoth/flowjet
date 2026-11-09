@@ -601,10 +601,10 @@ async def stream_query(
                                     label, color = mapped
                                     last_label = label
                                     # Partial tool-arg refreshes (``soothe.tool.started``
-                                    # emitted while args stream) must update the in-flight
-                                    # tool row in place, not append a new Activity row per
-                                    # growing chunk — otherwise the tail fills with
-                                    # near-duplicate ``· run_command`` lines.
+                                    # emitted while args stream) grow the in-flight
+                                    # action line in place. They must never append
+                                    # Activity rows: that log holds completed tool
+                                    # calls only.
                                     event_type = event.raw.get("type", "")
                                     if event_type == "soothe.tool.started":
                                         status.update_tool_activity(label, color=color)
@@ -621,6 +621,7 @@ async def stream_query(
                             label, color = format_tool_activity(event.tool, event.args)
                             last_label = label
                             status.update(label, color=color)
+                            status.set_in_flight_tool(label, color=color)
                             status.set_tool(event.tool, format_args_preview(event.tool, event.args))
                             if show_tool_calls:
                                 _mirror_tool(

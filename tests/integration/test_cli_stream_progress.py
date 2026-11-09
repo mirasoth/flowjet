@@ -172,12 +172,12 @@ def test_cli_stream_mixed_cjk_english_tool_then_answer(
     assert any("检查 CI 状态" in text for text in seen["reasoning"])
 
 
-def test_cli_narration_is_rendered_as_an_activity_row(
+def test_cli_narration_stays_in_state_but_not_in_activity(
     live_stream_runtime: dict[str, Any],
     run_fj_live_stream: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The cumulative answer text shows up as a reasoning row in Activity."""
+    """Narration is reduced for ACP parity, but Activity lists tool calls only."""
     import flowjet.cli.stream as stream_mod
     from flowjet.cli.dashboard import build_dashboard
     from flowjet.cli.render import render_to_text
@@ -215,8 +215,11 @@ def test_cli_narration_is_rendered_as_an_activity_row(
         width=64,
         color=False,
     )
-    assert "Activity" in rendered
-    assert "›" in rendered
+    # No tool completed in this run, so there is no Activity section and no
+    # reasoning row — the narration is visible on the Answer preview line.
+    assert "Activity" not in rendered
+    assert "›" not in rendered
+    assert "Answer" in rendered
     assert "先查一下 CI 状态" in rendered
     assert out.startswith(full + "\n")  # stdout unchanged
     assert seen["reasoning"]

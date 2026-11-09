@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Activity lists completed tool calls only; the in-flight tool call has its own line.** `Activity` now renders only rows with a completion marker (`✓` / `✗`). Reasoning stretches, phase mirrors and in-flight / partial tool calls no longer get a row there (reasoning is still reduced into the dashboard state for ACP parity and stays on the Answer line). The line directly below `Elapsed … · Tokens … · Updated …` is reserved for the tool call currently being executed: partial `soothe.tool.started` chunks grow that one line in place even before the arguments have fully arrived, `ToolStarted` replaces it with the complete call, and the completion clears it while appending a single `✓` row. Completed rows and reasoning rows now have independent rolling caps, so a burst of narration cannot evict a `✓` row. The heading reads `Activity (N)` with the cumulative number of completed tool calls in the run, even though the panel shows only the most recent rows. Non-TTY output is unchanged byte-for-byte.
+
 ## [2.1.14] — 2026-11-07
 
 ### Fixed
