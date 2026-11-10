@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-11-10
+
+### Changed
+
+- **`soothe` floor bumped to `>=1.3.0`** (`uv.lock` refreshed). Picks up the latest soothe 1.3.0 runtime; no flowjet-facing API changes.
+
 ## [2.1.16] — 2026-11-09
 
 ### Changed
