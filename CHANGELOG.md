@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.2] — 2026-11-13
+
+### Changed
+
+- **Dashboard snapshot is now disabled by default.** The live progress panel is erased when the run finishes, leaving only the final answer. Set `FJ_SNAPSHOT=1` (or `true`/`yes`) to keep the DONE / FAILED / PAUSED snapshot visible above the answer, as in previous versions.
+
+- **`✓ Done` status footer is now suppressed by default.** The run ends with just the final answer. Pass `-v` (or set `FJ_LOG_LEVEL=debug`) to surface the `✓ Done · <duration> · <tokens> · <thread_id>` summary footer.
+
 ## [2.2.1] — 2026-11-11
 
 ### Changed

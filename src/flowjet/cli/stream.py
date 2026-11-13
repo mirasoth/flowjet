@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import re
 import sys
 import time
@@ -82,6 +83,19 @@ def _format_tokens(count: int) -> str:
     if count >= 1000:
         return f"{count / 1000:.1f}K"
     return str(count)
+
+
+def _verbose_mode_active(show_tool_calls: bool) -> bool:
+    """True when verbose mode is on (``-v`` flag or ``FJ_LOG_LEVEL=debug``).
+
+    The ``✓ Done`` summary footer is shown **only** in verbose mode — by
+    default the run ends with just the final answer. In verbose mode the
+    footer complements the mirrored tool calls / DEBUG log records, which
+    surface duration, tokens, and thread id.
+    """
+    if show_tool_calls:
+        return True
+    return os.environ.get("FJ_LOG_LEVEL", "").strip().lower() == "debug"
 
 
 # Western + CJK sentence boundaries for status preview.
@@ -538,6 +552,10 @@ async def stream_query(
     it, and :data:`INTERRUPTED` is returned — the run is not complete and must
     be resumed with ``fjf -t <thread> <answer>``.
 
+    The ``✓ Done`` summary footer (duration, tokens, thread id) is shown only
+    in verbose mode (``show_tool_calls=True`` or ``FJ_LOG_LEVEL=debug``); by
+    default the run ends with just the final answer.
+
     ``timeout_s`` cancels the whole run after that many seconds and raises
     :class:`AgentRunError` naming the last visible activity.
     """
@@ -747,6 +765,10 @@ async def stream_query(
         # A silent "✓ Done" teaches nothing — make the empty outcome and any
         # failed tool calls visible instead.
         _write_no_output_warning(stderr, failed_tool_calls, last_tool_error, thread_id)
+    if not _verbose_mode_active(show_tool_calls):
+        # Default mode: the ``✓ Done`` summary footer is suppressed — the
+        # run ends with just the final answer. Only verbose mode surfaces it.
+        return answer_text
     duration = _format_duration(time.monotonic() - started_at)
     token_part = f" · {_format_tokens(total_tokens)} tokens" if total_tokens else ""
     stdout.write(f"\n✓ Done · {duration}{token_part} · {thread_id}\n")

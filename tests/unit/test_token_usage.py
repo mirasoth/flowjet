@@ -240,6 +240,7 @@ async def test_footer_shows_streamed_usage_total() -> None:
         agent,  # type: ignore[arg-type]
         "hi",
         thread_id="t1",
+        show_tool_calls=True,
         out=out,
         progress=ProgressDashboard(out, enabled=False),
     )
@@ -288,6 +289,7 @@ async def test_bare_token_usage_breakdown_does_not_override_streamed() -> None:
         agent,  # type: ignore[arg-type]
         "hi",
         thread_id="t1",
+        show_tool_calls=True,
         out=out,
         progress=ProgressDashboard(out, enabled=False),
     )
@@ -326,6 +328,7 @@ async def test_footer_prefers_authoritative_lifecycle_total() -> None:
         agent,  # type: ignore[arg-type]
         "hi",
         thread_id="t1",
+        show_tool_calls=True,
         out=out,
         progress=ProgressDashboard(out, enabled=False),
     )
@@ -342,11 +345,61 @@ async def test_footer_shows_estimate_when_no_provider_usage() -> None:
         agent,  # type: ignore[arg-type]
         "hi",
         thread_id="t1",
+        show_tool_calls=True,
         out=out,
         progress=ProgressDashboard(out, enabled=False),
     )
     footer = out.getvalue().splitlines()[-1]
     assert "tokens" in footer
+
+
+@pytest.mark.asyncio
+async def test_footer_shown_when_verbose(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ✓ Done footer is shown when the verbose flag is active."""
+    monkeypatch.delenv("FJ_LOG_LEVEL", raising=False)
+    agent = _FakeAgent([_chunk(AIMessage(content="Hello", id="g1"))])
+    out = StringIO()
+    await stream_query(
+        agent,  # type: ignore[arg-type]
+        "hi",
+        thread_id="t1",
+        show_tool_calls=True,
+        out=out,
+        progress=ProgressDashboard(out, enabled=False),
+    )
+    assert "✓ Done" in out.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_footer_shown_when_log_level_debug(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ✓ Done footer is shown when FJ_LOG_LEVEL=debug is set."""
+    monkeypatch.setenv("FJ_LOG_LEVEL", "debug")
+    agent = _FakeAgent([_chunk(AIMessage(content="Hello", id="g1"))])
+    out = StringIO()
+    await stream_query(
+        agent,  # type: ignore[arg-type]
+        "hi",
+        thread_id="t1",
+        out=out,
+        progress=ProgressDashboard(out, enabled=False),
+    )
+    assert "✓ Done" in out.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_footer_suppressed_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ✓ Done footer is hidden by default (no verbose flag)."""
+    monkeypatch.delenv("FJ_LOG_LEVEL", raising=False)
+    agent = _FakeAgent([_chunk(AIMessage(content="Hello", id="g1"))])
+    out = StringIO()
+    await stream_query(
+        agent,  # type: ignore[arg-type]
+        "hi",
+        thread_id="t1",
+        out=out,
+        progress=ProgressDashboard(out, enabled=False),
+    )
+    assert "✓ Done" not in out.getvalue()
 
 
 @pytest.mark.asyncio
@@ -363,6 +416,7 @@ async def test_footer_omits_tokens_when_zero() -> None:
         ZeroAgent(),  # type: ignore[arg-type]
         "hi",
         thread_id="t1",
+        show_tool_calls=True,
         out=out,
         progress=ProgressDashboard(out, enabled=False),
     )

@@ -9,14 +9,16 @@ The terminal renderer is split in two:
   gate, interleaved output and the final snapshot.
 
 ``Live`` itself is the only refresh source (its ``auto_refresh`` thread replaces
-the old hand-rolled 0.08s asyncio spinner). ``transient=False`` leaves the last
-frame on screen, which is what makes the DONE / FAILED / PAUSED snapshot visible
-above the final answer.
+the old hand-rolled 0.08s asyncio spinner). By default ``transient=True`` so the
+live panel is erased when the run finishes, leaving only the final answer.
+Set ``FJ_SNAPSHOT=1`` (or ``true``/``yes``) to keep the last frame on screen as
+a DONE / FAILED / PAUSED snapshot visible above the final answer.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -40,6 +42,16 @@ _TAIL_MAX = 6
 _CHROME_ROWS = 14
 # Ceiling for a reasoning stretch before it is truncated into one panel row.
 _REASONING_MAX_CHARS = 2000
+# Env var that keeps the final DONE/FAILED/PAUSED panel on screen after the run
+# finishes. Disabled by default so only the answer text remains on the terminal;
+# set ``FJ_SNAPSHOT=1`` (or ``true``/``yes``) to leave the snapshot visible.
+_SNAPSHOT_ENV = "FJ_SNAPSHOT"
+
+
+def _snapshot_enabled() -> bool:
+    """Whether the final dashboard snapshot stays on screen after completion."""
+    return os.environ.get(_SNAPSHOT_ENV, "").strip().lower() in {"1", "true", "yes"}
+
 
 _STATUS_BADGES: dict[str, tuple[str, str]] = {
     "LIVE": ("● LIVE", "cyan"),
@@ -272,7 +284,7 @@ def _default_live(
         console=console,
         auto_refresh=True,
         refresh_per_second=refresh_per_second,
-        transient=False,
+        transient=not _snapshot_enabled(),
         redirect_stdout=True,
         redirect_stderr=True,
         vertical_overflow="visible",
@@ -622,11 +634,13 @@ class ProgressDashboard:
         duration_s: float | None = None,
         tokens: int | None = None,
     ) -> None:
-        """Freeze the panel as a visible snapshot (idempotent).
+        """Freeze the panel as a snapshot, or erase it (idempotent).
 
-        ``transient=False`` means ``Live.stop()`` leaves the last frame on
-        screen; no erase bytes are emitted, so a PAUSED snapshot and the
-        questions printed after it are both visible.
+        When ``FJ_SNAPSHOT`` is set, ``transient=False`` means ``Live.stop()``
+        leaves the last frame on screen — no erase bytes are emitted, so a
+        PAUSED snapshot and the questions printed after it are both visible.
+        By default (snapshot disabled) ``transient=True`` erases the panel so
+        only the final answer remains.
         """
         if self._finalized:
             return

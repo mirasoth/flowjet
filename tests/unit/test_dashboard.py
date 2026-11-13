@@ -574,11 +574,65 @@ def test_default_live_keeps_snapshot_and_auto_refresh(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(rich.live, "Live", Recorder)
     _default_live(console=object(), get_renderable=lambda: None, refresh_per_second=8.0)
-    assert captured["transient"] is False
     assert captured["auto_refresh"] is True
     assert captured["vertical_overflow"] == "visible"
     assert captured["redirect_stdout"] is True
     assert captured["redirect_stderr"] is True
+
+
+def test_snapshot_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    import rich.live
+
+    from flowjet.cli.dashboard import _default_live
+
+    monkeypatch.delenv("FJ_SNAPSHOT", raising=False)
+    captured: dict[str, Any] = {}
+
+    class Recorder:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(rich.live, "Live", Recorder)
+    _default_live(console=object(), get_renderable=lambda: None, refresh_per_second=8.0)
+    assert captured["transient"] is True
+
+
+def test_snapshot_enabled_when_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    import rich.live
+
+    from flowjet.cli.dashboard import _default_live
+
+    captured: dict[str, Any] = {}
+
+    class Recorder:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(rich.live, "Live", Recorder)
+    for val in ("1", "true", "yes"):
+        monkeypatch.setenv("FJ_SNAPSHOT", val)
+        captured.clear()
+        _default_live(console=object(), get_renderable=lambda: None, refresh_per_second=8.0)
+        assert captured["transient"] is False
+
+
+def test_snapshot_disabled_on_unrecognised_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    import rich.live
+
+    from flowjet.cli.dashboard import _default_live
+
+    captured: dict[str, Any] = {}
+
+    class Recorder:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(rich.live, "Live", Recorder)
+    for val in ("", "0", "false", "no", "off", "garbage"):
+        monkeypatch.setenv("FJ_SNAPSHOT", val)
+        captured.clear()
+        _default_live(console=object(), get_renderable=lambda: None, refresh_per_second=8.0)
+        assert captured["transient"] is True
 
 
 def test_write_through_uses_live_console_while_active() -> None:
