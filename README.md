@@ -25,30 +25,15 @@ Built on [soothe-nano](https://github.com/mirasoth/soothe-nano): tools, skills, 
 
 ---
 
-## Quick start
+## CLI
 
 Requires Python 3.11+.
 
 ```bash
 pip install flowjet
-fj setup                     # guided: choose a local or hosted model
+fj setup                     # guided: writes ~/.flowjet/config/nano.yml
 fj "explain this repo"
 ```
-
-No config file needed if you already have a provider key — FlowJet falls back to `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`:
-
-```bash
-export OPENAI_API_KEY=sk-...
-fj "summarize README.md"
-```
-
-`fj setup` writes `$FLOWJET_HOME/config/nano.yml` (default `~/.flowjet/config/nano.yml`). Something off? Run `fj doctor` (add `--deep` or `--live-llm` for a full check).
-
-Defaults just work. To switch the agent runtime, set `FLOWJET_BACKEND` (CLI, default `soothe`) or `FLOWJET_SERVER_BACKEND` (server, default `nano`); both accept `soothe` or `nano`.
-
----
-
-## CLI
 
 ```bash
 fj explain this repo
@@ -66,6 +51,8 @@ Shell completion predicts full queries, not just flags:
 ```bash
 eval "$(fj completion zsh)"   # or: fj completion bash
 ```
+
+Something off? Run `fj doctor` (add `--deep` or `--live-llm` for a full check).
 
 ---
 
@@ -95,9 +82,28 @@ Walkthroughs for the OpenAI SDK, raw HTTP, and ACP: [examples/README.md](example
 
 ---
 
-## Extend
+## Configuration
 
-Add skills and MCP servers in `nano.yml`:
+Both the CLI and server read `nano.yml` — the CLI from `$FLOWJET_HOME/config/nano.yml` (default `~/.flowjet/config/nano.yml`), the server from `/flowjet/config/nano.yml`. `fj setup` writes one for you; for server deployments, mount your own. A minimal example:
+
+```yaml
+providers:
+  - name: default
+    provider_type: openai
+    api_base_url: "http://127.0.0.1:11434/v1"
+    api_key: "ollama"
+    models:
+      - llama3.2
+
+router_profiles:
+  - name: default
+    router:
+      default: "default:llama3.2"
+
+active_router_profile: default
+```
+
+Skills and MCP servers go in the same file:
 
 ```yaml
 skills:
