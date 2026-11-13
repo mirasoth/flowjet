@@ -60,7 +60,7 @@ def test_update_config_adds_default_new_provider_name() -> None:
         model="llama3.2",
     )
     assert updated["providers"][0]["name"] == DEFAULT_NEW_PROVIDER_NAME
-    assert updated["router_profiles"][0]["router"]["default"] == "flowjet-default:llama3.2"
+    assert updated["router_profiles"][0]["router"]["default"] == "default:llama3.2"
     assert updated["active_router_profile"] == "default"
 
 
@@ -161,7 +161,7 @@ def test_fetch_models_invalid_url_raises_runtime_error() -> None:
 
 
 def test_suggest_provider_name_from_endpoint() -> None:
-    assert suggest_provider_name("http://127.0.0.1:11434/v1") == "flowjet-default"
+    assert suggest_provider_name("http://127.0.0.1:11434/v1") == "default"
     assert suggest_provider_name("https://coding.dashscope.aliyuncs.com/v1") == "coding-dashscope"
     assert suggest_provider_name("https://apihub.agnes-ai.com/v1") == "apihub-agnes-ai"
     assert suggest_provider_name("http://100.75.70.86:9642/v1") == "host-100-75-70-86"
@@ -356,7 +356,7 @@ def test_run_setup_endpoint_down_warns_and_saves(monkeypatch, tmp_path, capsys) 
 
     saved = cfg_path.read_text(encoding="utf-8")
     assert "custom-model" in saved
-    assert "flowjet-default:custom-model" in saved
+    assert "default:custom-model" in saved
 
 
 def test_run_setup_endpoint_down_offers_saved_models(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]

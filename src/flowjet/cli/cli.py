@@ -191,17 +191,11 @@ def resolve_cli_prog(argv0: str | None = None) -> str:
 
 def _cli_description(prog: str) -> str:
     alias_note = {
-        FORMAL_CLI: "Aliases: fj (same), fjf (same as flowjet -f).",
-        "fj": "Alias of flowjet. Also: fjf (= fj -f).",
-        "fjf": "Alias of flowjet -f / fj -f (follow this project's latest thread).",
-    }.get(prog, "Formal command: flowjet. Aliases: fj, fjf (= -f).")
-    return (
-        "FlowJet — coding agent CLI (soothe-nano)\n"
-        f"\n{alias_note}\n"
-        "\nPass a natural-language query after options. Remaining words are joined into\n"
-        "one query string (any Unicode). Use -- to force the rest of the line into the\n"
-        "query when it looks like flags."
-    )
+        FORMAL_CLI: "Aliases: fj, fjf (= -f)",
+        "fj": "Alias of flowjet · fjf (= -f)",
+        "fjf": "Alias of flowjet -f",
+    }.get(prog, "Aliases: fj, fjf (= -f)")
+    return f"FlowJet — coding agent CLI\n\n{alias_note}"
 
 
 def _cli_epilog(prog: str) -> str:
@@ -210,39 +204,22 @@ def _cli_epilog(prog: str) -> str:
     follow = show if show == "fjf" else f"{show} -f"
     return f"""\
 commands:
-  {show} setup                 Interactive nano.yml setup
-  {show} doctor                Diagnose runtime readiness (tool deps, providers, …)
-  {show} doctor-fix            Repair Chrome/chromedriver (install/download if needed)
-  {show} serve                 Run the FlowJet server (ACP + OpenAI-compatible HTTP)
-  {show} completion zsh|bash   Print shell completion script
-
-query modes:
-  {show} QUERY...              Start a new thread (default)
-  {follow} QUERY...           Continue this project's latest active thread
-  {show} -t ID QUERY...        Continue a specific thread
-  {show} -t ID                 Pin thread as active (no query)
-  {show} -a QUERY...           Ask mode: answer only, no tool calls
+  {show} setup                 Configure nano.yml
+  {show} doctor                Diagnose runtime issues
+  {show} serve                 Run the server
+  {show} completion zsh|bash   Shell completion
 
 examples:
   {show} explain this repo
   {follow} what did we decide last time?
   {show} -t abc-123 continue here
   {show} -l -n 10
-  {show} doctor
-  {show} doctor --deep --live-llm
-  eval "$({show if show != "fjf" else "fj"} completion zsh)"
 
 notes:
-  • Formal CLI: flowjet · aliases: fj, fjf (= -f)
-  • -t overrides -f when both are given; -n requires -l; -l takes no query
-  • -f is per project (git root, else cwd); resume elsewhere with -t ID
-  • -a/--ask disables all tools — pure Q&A, no side effects
-  • Bypass mode (skip all security enforcement) is the CLI default — use -a for guardrails
-  • One query per thread at a time; different threads may run concurrently
-  • With -v, prints thread <id> and the project dir on stderr before the run
-  • --timeout N cancels a run after N seconds (0 = no limit)
-  • Exit codes: 0 ok · 1 error · 2 usage · 3 no output · 130/143 interrupted
-  • Set FJ_LOG_FILE=<path> to keep warnings & errors (with tracebacks) on file
+  • -t overrides -f; -n requires -l; -l takes no query
+  • -f is per project (git root, else cwd)
+  • Exit codes: 0 ok · 1 error · 2 usage · 130 interrupted
+  • Set FJ_LOG_FILE=<path> to keep errors on file
 """
 
 
@@ -430,26 +407,26 @@ def _build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "-t",
         "--thread",
         metavar="ID",
-        help="Thread id (-t alone: pin active; with query: continue it; overrides -f)",
+        help="Thread id to continue or pin (overrides -f)",
     )
     thread.add_argument(
         "-f",
         "--follow",
         action="store_true",
-        help="Continue the latest active thread in this project directory",
+        help="Continue latest active thread in this project",
     )
     thread.add_argument(
         "-l",
         "--list",
         action="store_true",
-        help="List threads, newest first (default: 20), then exit",
+        help="List threads, newest first (default: 20)",
     )
     thread.add_argument(
         "-n",
         metavar="NUM",
         type=int,
         dest="list_limit",
-        help="With -l: max threads to show (0 = all)",
+        help="With -l: max threads (0 = all)",
     )
 
     output = parser.add_argument_group("output")
@@ -457,18 +434,18 @@ def _build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "-v",
         "--verbose",
         action="store_true",
-        help="Mirror tool calls and custom events on stderr",
+        help="Show tool calls and events on stderr",
     )
     output.add_argument(
         "--no-stream",
         action="store_true",
-        help="Wait for the full answer instead of streaming tokens",
+        help="Wait for full answer instead of streaming",
     )
     output.add_argument(
         "-a",
         "--ask",
         action="store_true",
-        help="Ask mode: answer the query with no tools (pure Q&A)",
+        help="Ask mode: answer without tools",
     )
 
     run = parser.add_argument_group("run")
@@ -476,7 +453,7 @@ def _build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "--timeout",
         metavar="SECONDS",
         type=float,
-        help="Cancel the run after N seconds (0 = no limit)",
+        help="Cancel run after N seconds (0 = no limit)",
     )
 
     paths = parser.add_argument_group("paths")
