@@ -36,9 +36,6 @@ def soothe_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (home / "config").mkdir(parents=True)
     monkeypatch.setenv("SOOTHE_HOME", str(home))
     monkeypatch.setenv("FLOWJET_HOME", str(home))
-    # ``load_config`` copies ``~/.soothe/config`` into FLOWJET_HOME by default; point
-    # it at nothing so a real config never leaks into the sandbox.
-    monkeypatch.setattr("flowjet.home.legacy_soothe_home", lambda: tmp_path / "no-legacy-soothe")
     # Avoid inheriting cloud keys that would change zero-config load_config behavior.
     for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DASHSCOPE_API_KEY"):
         monkeypatch.delenv(key, raising=False)

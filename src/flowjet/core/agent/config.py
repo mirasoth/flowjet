@@ -10,7 +10,6 @@ from soothe_nano.config import SootheConfig
 from flowjet.core.backend_config import Backend, resolve_backend
 from flowjet.core.modes import Surface
 from flowjet.home import default_config_path as _flowjet_config_path
-from flowjet.home import ensure_flowjet_config
 
 
 class FlowJetConfigLoader:
@@ -30,10 +29,6 @@ class FlowJetConfigLoader:
 
     On the ``soothe`` backend, a sibling ``soothe.yml`` (host-owned keys) is
     composed over ``nano.yml`` when present.
-
-    Without an explicit ``config_path``, a config found in ``~/.soothe/config``
-    is copied into the flowjet home first — see
-    :func:`flowjet.home.ensure_flowjet_config`.
     """
 
     @staticmethod
@@ -51,7 +46,6 @@ class FlowJetConfigLoader:
         """Load a ``SootheConfig`` for ``backend``, or bootstrap from env when missing."""
         backend = backend or resolve_backend(Surface.CLI)
         if config_path is None:
-            ensure_flowjet_config()
             path = cls.default_path()
         else:
             path = Path(config_path).expanduser()

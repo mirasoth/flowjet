@@ -413,15 +413,12 @@ def test_run_setup_targets_flowjet_home_not_soothe_home(monkeypatch, tmp_path) -
     ``SOOTHE_HOME`` holds CLI data; it must not decide where flowjet reads and
     writes its config.
     """
-    import flowjet.home as home_mod
     from flowjet.cli.setup_cmd import _run_setup
 
     flowjet_home = tmp_path / "flowjet"
     soothe_home = tmp_path / "soothe"
     monkeypatch.setenv("FLOWJET_HOME", str(flowjet_home))
     monkeypatch.setenv("SOOTHE_HOME", str(soothe_home))
-    # Never read a developer's real ~/.soothe config during tests.
-    monkeypatch.setattr(home_mod, "legacy_soothe_home", lambda: tmp_path / "no-legacy-soothe")
 
     answers = iter(["", "", "1"])  # provider name, endpoint default, model
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
@@ -431,45 +428,3 @@ def test_run_setup_targets_flowjet_home_not_soothe_home(monkeypatch, tmp_path) -
     assert _run_setup(None) == 0
     assert (flowjet_home / "config" / "nano.yml").is_file()
     assert not (soothe_home / "config").exists()
-
-
-def test_run_setup_migrates_legacy_soothe_config(monkeypatch, tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
-    """A config in ``~/.soothe`` is copied in, so its providers are offered."""
-    import flowjet.home as home_mod
-    from flowjet.cli.setup_cmd import _run_setup
-
-    legacy = tmp_path / "soothe"
-    (legacy / "config").mkdir(parents=True)
-    (legacy / "config" / "nano.yml").write_text(
-        """
-providers:
-  - name: omlx
-    provider_type: openai
-    api_base_url: "http://localhost:9642/v1"
-    api_key: ""
-    models: [DeepSeek-V4-Flash-2bit-DQ]
-router_profiles:
-  - name: default
-    router:
-      default: "omlx:DeepSeek-V4-Flash-2bit-DQ"
-active_router_profile: default
-""",
-        encoding="utf-8",
-    )
-    flowjet_home = tmp_path / "flowjet"
-    monkeypatch.setenv("FLOWJET_HOME", str(flowjet_home))
-    monkeypatch.setattr(home_mod, "legacy_soothe_home", lambda: legacy)
-
-    answers = iter(["1", "", "1"])  # provider, endpoint default, migrated model
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
-    monkeypatch.setattr("flowjet.cli.setup_cmd._read_secret_masked", lambda _prompt: "")
-    monkeypatch.setattr("flowjet.cli.setup_cmd.fetch_models", lambda *a, **k: [])
-
-    assert _run_setup(None) == 0
-    err = capsys.readouterr().err
-    assert "Copied nano.yml" in err
-    # Migration is non-destructive.
-    assert (legacy / "config" / "nano.yml").is_file()
-
-    saved = (flowjet_home / "config" / "nano.yml").read_text(encoding="utf-8")
-    assert "omlx:DeepSeek-V4-Flash-2bit-DQ" in saved

@@ -41,13 +41,6 @@ def main() -> None:
 
     suppress_known_warnings()
 
-    # Pull in a ~/.soothe/config copy before the first agent build. Kept out of
-    # create_app(): the ASGI app is built at import time, and importing a module
-    # must not write files.
-    from flowjet.home import ensure_flowjet_config
-
-    ensure_flowjet_config()
-
     settings = Settings()
     # When the host is a wildcard (``::`` or ``0.0.0.0``), use a dual-stack
     # socket so both IPv4 and IPv6 clients can connect.  This is essential

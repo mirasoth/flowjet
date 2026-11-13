@@ -80,6 +80,62 @@ def test_format_cli_error_empty_and_prefixed() -> None:
     )
 
 
+def test_format_cli_error_strips_type_chain() -> None:
+    """Triple-nested type prefixes should be stripped to the human message."""
+    raw = (
+        "InternalServerError: litellm.InternalServerError: InternalServerError: "
+        "OpenAIException - Missing credentials. Please pass an `api_key`, "
+        "`workload_identity`, `admin_api_key`, or set the `OPENAI_API_KEY` "
+        "or `OPENAI_ADMIN_KEY` environment variable."
+    )
+    exc = RuntimeError(raw)
+    exc_type = "InternalServerError"
+    exc.exc_type = exc_type  # type: ignore[attr-defined]
+    result = format_cli_error(exc)
+    # Known-error pattern → friendly summary, no type-chain noise.
+    assert result == "error: Missing API key"
+
+
+def test_format_cli_error_strips_type_chain_unknown() -> None:
+    """For unknown errors, type-chain prefixes are stripped but message kept."""
+    raw = "ValueError: ValueError: something broke"
+    exc = ValueError(raw)
+    result = format_cli_error(exc)
+    assert result == "error: ValueError: something broke"
+
+
+def test_format_cli_error_missing_credentials_hint() -> None:
+    """Missing-credentials errors produce a friendly summary + hint."""
+    from flowjet.cli.stream import _error_hint
+
+    raw = (
+        "InternalServerError: litellm.InternalServerError: InternalServerError: "
+        "OpenAIException - Missing credentials. Please pass an `api_key`."
+    )
+    exc = RuntimeError(raw)
+    exc.exc_type = "InternalServerError"  # type: ignore[attr-defined]
+    assert format_cli_error(exc) == "error: Missing API key"
+    hint = _error_hint(exc)
+    assert hint is not None
+    assert "OPENAI_API_KEY" in hint
+
+
+def test_write_cli_error_prints_hint_for_known_error() -> None:
+    """Known errors should print an actionable hint line."""
+    err = StringIO()
+    raw = (
+        "InternalServerError: litellm.InternalServerError: InternalServerError: "
+        "OpenAIException - Missing credentials. Please pass an `api_key`."
+    )
+    exc = RuntimeError(raw)
+    exc.exc_type = "InternalServerError"  # type: ignore[attr-defined]
+    write_cli_error(exc, verbose=False, err=err)
+    output = err.getvalue()
+    assert "error: Missing API key" in output
+    assert "→" in output
+    assert "OPENAI_API_KEY" in output
+
+
 def test_write_cli_error_verbose_includes_traceback() -> None:
     err = StringIO()
 

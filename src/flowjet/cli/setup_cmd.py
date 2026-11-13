@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - Windows
 import yaml
 from soothe_nano.config import _ENV_VAR_RE, _resolve_env
 
-from flowjet.home import default_config_path, ensure_flowjet_config
+from flowjet.home import default_config_path
 
 DEFAULT_PROVIDER_NAME = "local"
 DEFAULT_NEW_PROVIDER_NAME = "flowjet-default"
@@ -65,10 +65,6 @@ def run_setup(config_path: str | None = None) -> int:
 
 def _run_setup(config_path: str | None = None) -> int:
     path = Path(config_path).expanduser() if config_path else default_config_path()
-    if config_path is None:
-        # ``fj setup`` bypasses ``load_config``, so it pulls in a ``~/.soothe/config``
-        # copy itself before reading the provider list.
-        ensure_flowjet_config()
     existing = _load_existing_config(path)
     providers = _list_providers(existing)
     _, seed_model = _seed_from_config(existing)

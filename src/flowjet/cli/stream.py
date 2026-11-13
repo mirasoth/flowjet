@@ -117,9 +117,111 @@ _STATUS_SENTENCE_SEPS = (
 # User-facing error formatting
 # ---------------------------------------------------------------------------
 
+# Raw provider/library exceptions often chain the same type name multiple
+# times (e.g. ``InternalServerError: litellm.InternalServerError:
+# InternalServerError: OpenAIException - …``). These prefixes add noise without
+# helping the user — we strip them and keep only the human-readable message.
+_TYPE_CHAIN_SEPARATORS = (":", " -", "—")
+
+# Mapping from a type name (or substring) found in the message to a friendly,
+# actionable summary. ``hint`` is printed on a second line when present.
+_KNOWN_ERRORS: list[tuple[str, str, str]] = [
+    (
+        "Missing credentials",
+        "Missing API key",
+        "Set OPENAI_API_KEY (or the matching provider key) in your environment,\n"
+        "  or add it to your config file. Run `flowjet setup` to configure.",
+    ),
+    (
+        "AuthenticationError",
+        "Authentication failed",
+        "Check that your API key is valid and has not expired.",
+    ),
+    (
+        "RateLimitError",
+        "Rate limit reached",
+        "Wait a moment and retry, or reduce request frequency.",
+    ),
+    (
+        "context_length_exceeded",
+        "Input too long",
+        "Reduce the input size or start a new thread with `flowjet threads`.",
+    ),
+    (
+        "Connection error",
+        "Connection error",
+        "Check your network connection and the provider endpoint URL.",
+    ),
+    (
+        "ConnectionError",
+        "Connection error",
+        "Check your network connection and the provider endpoint URL.",
+    ),
+]
+
+
+def _simplify_type_name(name: str) -> str:
+    """Collapse ``litellm.InternalServerError`` → ``InternalServerError``."""
+    if "." in name:
+        name = name.rsplit(".", 1)[-1]
+    return name
+
+
+def _strip_type_chain(text: str, name: str) -> str:
+    """Remove leading repeated type-name prefixes from *text*.
+
+    Handles patterns like ``InternalServerError: litellm.InternalServerError:
+    InternalServerError: OpenAIException - Missing credentials…`` by stripping
+    each ``<Type>:`` / ``<Type> -`` prefix until a non-type token is reached.
+    """
+    simplified = _simplify_type_name(name)
+    prefixes = {name, simplified, name.lower(), simplified.lower()}
+    # Also strip common wrapper type names that appear in litellm/openai chains.
+    prefixes.update(
+        {
+            "openaiexception",
+            "litellminternerservererror",
+            "litellmauthenticationerror",
+            "litellmratelimiterror",
+            "litellmconnectionerror",
+            "apierror",
+        }
+    )
+    while True:
+        stripped = text.lstrip()
+        matched = False
+        for sep in _TYPE_CHAIN_SEPARATORS:
+            idx = stripped.find(sep)
+            if idx <= 0:
+                continue
+            candidate = stripped[:idx].strip()
+            # ``candidate`` may itself be dotted — simplify before comparing.
+            if _simplify_type_name(candidate).lower() in prefixes:
+                stripped = stripped[idx + len(sep) :].lstrip()
+                text = stripped
+                matched = True
+                break
+        if not matched:
+            break
+    return text.strip()
+
+
+def _known_error(msg: str) -> tuple[str, str] | None:
+    """Return ``(summary, hint)`` if *msg* matches a known error pattern."""
+    lower = msg.lower()
+    for needle, summary, hint in _KNOWN_ERRORS:
+        if needle.lower() in lower:
+            return summary, hint
+    return None
+
 
 def format_cli_error(exc: BaseException) -> str:
-    """One-line summary for an uncaught run failure."""
+    """One-line summary for an uncaught run failure.
+
+    Strips redundant type-name chains (e.g. ``InternalServerError:
+    litellm.InternalServerError: InternalServerError: OpenAIException - …``)
+    and maps known errors to friendlier descriptions.
+    """
     # AgentRunError carries the original exception type from inside the run —
     # report that instead of the re-wrap site (RuntimeError).
     exc_type = getattr(exc, "exc_type", None)
@@ -127,13 +229,41 @@ def format_cli_error(exc: BaseException) -> str:
     msg = str(exc).strip()
     if not msg:
         return f"error: {name}"
+
     first = next((line.strip() for line in msg.splitlines() if line.strip()), msg)
-    if first.startswith(name + ":"):
-        return f"error: {first}"
-    # Avoid "error: RuntimeError: RuntimeError: ..." duplication.
-    if first.startswith(name):
-        return f"error: {first}"
-    return f"error: {name}: {first}"
+
+    # Check for known error patterns first — they produce the friendliest output.
+    known = _known_error(first)
+    if known:
+        summary, _hint = known
+        return f"error: {summary}"
+
+    # Strip repeated type-name prefixes from the message body.
+    cleaned = _strip_type_chain(first, name)
+
+    if not cleaned:
+        # Message was *only* type names — fall back to the type itself.
+        return f"error: {_simplify_type_name(name)}"
+
+    # Avoid ``error: RuntimeError: RuntimeError: …`` duplication.
+    simplified_name = _simplify_type_name(name)
+    if cleaned.lower().startswith(simplified_name.lower()):
+        return f"error: {cleaned}"
+
+    return f"error: {simplified_name}: {cleaned}"
+
+
+def _error_hint(exc: BaseException) -> str | None:
+    """Return an actionable hint string for known errors, else ``None``."""
+    msg = str(exc).strip()
+    if not msg:
+        return None
+    first = next((line.strip() for line in msg.splitlines() if line.strip()), msg)
+    known = _known_error(first)
+    if known:
+        _summary, hint = known
+        return hint
+    return None
 
 
 class AgentRunError(RuntimeError):
@@ -161,9 +291,13 @@ def write_cli_error(
     verbose: bool = False,
     err: TextIO | None = None,
 ) -> None:
-    """Write a clean error to stderr; include traceback only when verbose."""
+    """Write a clean, friendly error to stderr; include traceback only when verbose."""
     stream = err or sys.stderr
     stream.write(format_cli_error(exc) + "\n")
+    # Show an actionable hint for known errors (e.g. missing API key).
+    hint = _error_hint(exc)
+    if hint:
+        stream.write("  → " + hint + "\n")
     if not verbose and _has_hidden_detail(exc):
         stream.write("… run with -v for the full error and traceback\n")
     if verbose:
