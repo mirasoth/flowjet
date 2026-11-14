@@ -6,15 +6,9 @@
 
 **A coding agent that lives in your terminal.** Ask a question, get an answer — no UI, no context switching. When you need to drive it from code, the same agent runs as a service with an OpenAI-compatible HTTP API and ACP over WebSocket.
 
-<!-- DEMO PLACEHOLDER ---------------------------------------------------------
-     Replace this block with the recorded GIF once it is ready. Use an absolute
-     URL so the image also renders in the PyPI description (relative paths do
-     not resolve there):
+![fj running in the terminal](https://raw.githubusercontent.com/caesar0301/flowjet/main/docs/assets/fj-demo.gif)
 
-     ![fj running in the terminal](https://raw.githubusercontent.com/caesar0301/flowjet/main/docs/assets/fj-demo.gif)
----------------------------------------------------------------------------- -->
-
-> _Demo GIF coming soon — `fj` in action._
+> _`fj` answering a real question about this repo — live dashboard, tool calls, and the final answer, all in the terminal._
 
 | Surface | Command | Use it when |
 |---------|---------|-------------|
@@ -107,7 +101,7 @@ Skills and MCP servers go in the same file:
 
 ```yaml
 skills:
-  - ~/.soothe/skills/my-reviewer
+  - ~/.flowjet/skills/my-reviewer
 
 mcp_servers:
   - name: filesystem
