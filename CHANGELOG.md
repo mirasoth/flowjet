@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.3] — 2026-11-16
+
+### Fixed
+
+- **Friendlier CLI errors.** Raw provider/library exceptions often chain the same type name several times (e.g. `InternalServerError: litellm.InternalServerError: InternalServerError: OpenAIException - Missing credentials…`). `format_cli_error` now strips those redundant type-name prefixes and maps known errors (missing credentials, auth, rate limit, context-length, connection) to a one-line summary plus an actionable hint on a second line (`→ Set OPENAI_API_KEY … / Run flowjet setup`). Unknown errors keep their type and message, just without the noise. Regression tests in `tests/unit/test_errors.py`.
+
+### Changed
+
+- **`soothe` floor bumped to `>=1.3.2`** (`uv.lock` refreshed). Picks up the latest soothe 1.3.2 runtime; no flowjet-facing API changes.
+
+- **Removed legacy soothe config migration.** `~/.soothe/config` is no longer auto-copied into the flowjet home on first use — the flowjet home (`~/.flowjet/config/nano.yml`) is the single source of truth. `flowjet.home.ensure_flowjet_config` / `migrate_legacy_config` and their call sites in `cli/setup_cmd.py`, `core/agent/config.py` and `server/__main__.py` are gone; `tests/unit/test_home.py` trimmed accordingly. Existing copied configs are left in place.
+
+- **Slimmer CLI help.** `_cli_description` / `_cli_epilog` and the per-flag `help` strings are condensed to the essentials; the `doctor-fix` command and verbose notes were pruned from the epilog (the command still works). Default new-provider name in `fj setup` is `default` (was `flowjet-default`).
+
 ## [2.2.2] — 2026-11-13
 
 ### Changed
