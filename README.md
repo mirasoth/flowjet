@@ -38,7 +38,7 @@ fj -l                        # list recent threads
 
 `-f` is scoped to your current project, so work in other checkouts never hijacks your thread.
 
-On an interactive terminal, `fj` shows a live dashboard: a status badge, a one-line strip (step X/N, elapsed, tokens, last updated), the current action, an activity history (tool calls plus the agent's intermediate reasoning between them) and an answer preview. Piped or redirected output stays plain text with no progress content. Display is tunable via `NO_COLOR`, `FJ_FORCE_COLOR`, `FJ_PROGRESS_WIDTH` and `FJ_SNAPSHOT`.
+On an interactive terminal, `fj` shows a live dashboard whose title is the liveness status (badge plus step X/N, elapsed, tokens and last updated), followed by the current action with any narration/answer preview appended on the same line, then an activity history (tool calls plus the agent's intermediate reasoning between them). Piped or redirected output stays plain text with no progress content. Display is tunable via `NO_COLOR`, `FJ_FORCE_COLOR`, `FJ_PROGRESS_WIDTH` and `FJ_SNAPSHOT`.
 
 Shell completion predicts full queries, not just flags:
 

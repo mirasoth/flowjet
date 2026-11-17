@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.4] — 2026-11-17
+
+### Changed
+
+- **The live dashboard panel title is now the liveness status display.** The `FlowJet Agent` label is gone; the status badge (`● LIVE` / `✓ DONE` / `✗ FAILED` / `⏸ PAUSED`) and the step/elapsed/tokens/last-updated strip now share the title border on one line, with the spinner still animating while the run is live. The body starts directly with the current action, so the two former heading/meta rows no longer consume vertical space. Narrow terminals progressively compact the strip (tighter separators, then values only, then an ellipsis). Non-TTY output is unchanged.
+
+- **The dashboard's narration preview now shares the current-action line.** The separate `Answer · …` row (and its blank spacer) is gone; intermediate AI narration is appended inline after ` · ` on the first body row, styled dim green and width-bounded together with the action so narrow terminals still stay on one line. The liveness title remains directly above. Non-TTY output is unchanged.
+
+- **`soothe` floor bumped to `>=1.3.3`** (`uv.lock` refreshed). Picks up the latest soothe 1.3.3 runtime; no flowjet-facing API changes.
+
 ## [2.2.3] — 2026-11-16
 
 ### Fixed

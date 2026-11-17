@@ -588,7 +588,7 @@ async def test_stream_query_narration_enters_cli_activity_even_without_streaming
     assert out.getvalue().startswith(full + "\n")
     reasoning = [a.label for a in status.state.activity if a.kind == "reasoning"]
     assert len(reasoning) == 1 and full in reasoning[-1]
-    assert status.state.answer_preview is None  # --no-stream has no preview row
+    assert status.state.answer_preview is None  # --no-stream has no inline preview
 
 
 @pytest.mark.asyncio

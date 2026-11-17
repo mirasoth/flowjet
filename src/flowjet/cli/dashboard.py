@@ -13,6 +13,11 @@ the old hand-rolled 0.08s asyncio spinner). By default ``transient=True`` so the
 live panel is erased when the run finishes, leaving only the final answer.
 Set ``FJ_SNAPSHOT=1`` (or ``true``/``yes``) to keep the last frame on screen as
 a DONE / FAILED / PAUSED snapshot visible above the final answer.
+
+The panel title is the liveness status display: spinner + status badge + the
+compact step/elapsed/tokens/updated strip. The body starts with the action line
+— which also carries the narration preview inline — so no separate heading,
+meta row, answer row or product-name chrome takes up space.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, TextIO
 
+from flowjet.cli.progress import _truncate_cols
 from flowjet.cli.render import _clean, make_console, terminal_metrics
 
 # Spinner glyphs for the LIVE badge (the old single-line renderer is gone).
@@ -32,13 +38,15 @@ _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _DEFAULT_WIDTH = 72
 _DEFAULT_HEIGHT = 24
 # Activity is a rolling log of COMPLETED tool calls only. In-flight / partial
-# tool calls have exactly one home — the action line below the meta strip — so
+# tool calls have exactly one home — the first body row (the action line) — so
 # they are never appended to this history.
 _ACTIVITY_MAX = 8
 _REFRESH_PER_SECOND = 8.0
 _TAIL_MIN = 2
 _TAIL_MAX = 6
-# Rows taken by the panel chrome, heading, summary table and answer preview.
+# Rows reserved for the panel chrome and history heading. The liveness status
+# sits on the title border and the narration preview shares the action line, so
+# neither costs a body row.
 _CHROME_ROWS = 14
 # Ceiling for a reasoning stretch before it is truncated into one panel row.
 _REASONING_MAX_CHARS = 2000
@@ -64,6 +72,11 @@ _STATUS_BADGES: dict[str, tuple[str, str]] = {
 def _one_line(text: Any, limit: int) -> str:
     """Single-line, control-character-free, width-bounded panel text."""
     return _clean(text, limit=max(1, limit)).strip()
+
+
+def _clean_line(text: Any, cols: int) -> str:
+    """Clean untrusted text; callers fit each segment to its column budget."""
+    return _one_line(text, max(1, cols * 4 + 64))
 
 
 def _duration(seconds: float) -> str:
@@ -126,6 +139,7 @@ class DashboardState:
     # line directly below the step/elapsed/tokens/updated strip.
     in_flight_tool: str | None = None
     in_flight_color: str = "yellow"
+    # Narration preview rendered inline on the action line (no separate row).
     answer_preview: str | None = None
     total_tokens: int | None = None
     failed_tools: int = 0
@@ -180,14 +194,6 @@ def build_dashboard(
     badge, badge_color = _STATUS_BADGES.get(state.status, _STATUS_BADGES["LIVE"])
     border = badge_color
 
-    # Heading is state only. The in-flight action has exactly one home: the
-    # main line below. Repeating it here (and in the activity tail) made the
-    # same long command appear three times in one panel.
-    heading = Text()
-    if frame and state.status == "LIVE":
-        heading.append(f"{frame} ", style=style("bold cyan"))
-    heading.append(badge, style=style(f"bold {badge_color}"))
-
     step = f"{state.step} / {state.steps}" if state.step is not None and state.steps else "—"
     stage = state.phase
     if stage == "Working" and state.current_tool:
@@ -198,9 +204,9 @@ def build_dashboard(
             if state.tool_args_preview
             else state.current_tool
         )
-    # Step / Elapsed / Tokens / Updated share ONE compact line instead of four
-    # label rows. Empty Step and Tokens are skipped rather than printing a "—"
-    # placeholder that wastes a row. Narrow terminals drop the labels.
+    # Step / Elapsed / Tokens / Updated share ONE compact status strip instead
+    # of four label rows. Empty Step and Tokens are skipped rather than printing
+    # a "—" placeholder that wastes space. Narrow terminals drop the labels.
     parts: list[tuple[str, str]] = []
     if step != "—":
         parts.append(("Step", step))
@@ -211,38 +217,66 @@ def build_dashboard(
     if state.failed_tools:
         parts.append(("Failed tools", str(state.failed_tools)))
     meta_full = " · ".join(f"{key} {value}" for key, value in parts)
-    meta_short = " · ".join(value for _, value in parts)
-    meta_budget = max(16, width - 6)
-    meta = meta_full if len(meta_full) <= meta_budget else meta_short
+    # The badge shares the title's cell budget, so a tighter-separator copy
+    # keeps the labels legible where the full strip no longer fits; values-only
+    # is the last resort and ``_one_line`` still ellipsises the remainder.
+    meta_tight = "·".join(f"{key} {value}" for key, value in parts)
+    meta_values = " · ".join(value for _, value in parts)
+    line_budget = max(16, width - 6)
 
-    # Meta first, then the tool call being assembled/executed as the panel's
-    # main line. Partial arg chunks update ``in_flight_tool`` in place, so a
-    # command whose args have not fully arrived is still visible here. Generic
-    # phases ("Thinking", …) are the fallback when no tool is in flight. No
-    # key/value table: its label gutter would push the action out of alignment
-    # with the meta line and the Activity rows.
+    # The panel title IS the liveness status display: spinner + status badge +
+    # the compact status strip. Rich reserves ``width - 4`` cells for a title
+    # and pads it with one space on each side, leaving ``width - 6`` for text.
+    title = Text()
+    if frame and state.status == "LIVE":
+        title.append(f"{frame} ", style=style("bold cyan"))
+    title.append(badge, style=style(f"bold {badge_color}"))
+    title.append(" · ", style=style("dim"))
+    status_budget = max(1, line_budget - title.cell_len)
+    status = next(
+        (
+            candidate
+            for candidate in (meta_full, meta_tight, meta_values)
+            if len(candidate) <= status_budget
+        ),
+        meta_values,
+    )
+    title.append(_one_line(status, status_budget), style=style("dim"))
+
+    # The body starts with the tool call being assembled/executed as its main
+    # line. Partial arg chunks update ``in_flight_tool`` in place, so a command
+    # whose args have not fully arrived is still visible here. Generic phases
+    # ("Thinking", …) are the fallback when no tool is in flight. Narration /
+    # answer previews are appended to this SAME line (dim green, after " · ")
+    # instead of getting their own row. No key/value table: its label gutter
+    # would push the action out of alignment with the Activity rows.
     action = state.in_flight_tool or stage
     action_color = state.in_flight_color if state.in_flight_tool else state.color
-    blocks: list[Any] = [
-        heading,
-        Text(_one_line(meta, meta_budget), style=style("dim")),
-        Text(_one_line(action, meta_budget), style=style(f"bold {action_color}")),
-    ]
-
-    if state.answer_preview:
-        blocks.append(Text(""))
-        blocks.append(
-            Text(
-                f"Answer · {_one_line(state.answer_preview, width - 12)}",
-                style=style("dim green"),
-            )
+    action_text = _clean_line(action, line_budget)
+    preview = _clean_line(state.answer_preview, line_budget) if state.answer_preview else ""
+    action_line = Text()
+    if preview:
+        separator = " · "
+        sep_cols = Text(separator).cell_len
+        # Leave room for the separator and at least one preview column.
+        action_cols = max(1, line_budget - sep_cols - 1)
+        action_line.append(
+            _truncate_cols(action_text, action_cols), style=style(f"bold {action_color}")
         )
+        action_line.append(separator, style=style("dim"))
+        preview_cols = max(1, line_budget - action_line.cell_len)
+        action_line.append(_truncate_cols(preview, preview_cols), style=style("dim green"))
+    else:
+        action_line.append(
+            _truncate_cols(action_text, line_budget), style=style(f"bold {action_color}")
+        )
+    blocks: list[Any] = [action_line]
 
     # Activity is a completion log: only tool calls that have returned (✓ / ✗).
     # Reasoning stretches are still reduced into ``state.activity`` for ACP
-    # parity and the answer-preview reset, but they belong to the Answer row;
-    # in-flight / partial tool calls belong to the action line above. Neither
-    # gets a row here.
+    # parity and the answer-preview reset, but they surface only as the inline
+    # preview on the action line above; in-flight / partial tool calls own that
+    # line's action text. Neither gets a separate row here.
     history = [item for item in state.activity if item.kind == "event" and item.ok is not None]
     tail = history[-_tail_limit(height) :]
     if tail:
@@ -264,7 +298,7 @@ def build_dashboard(
 
     return Panel(
         Group(*blocks),
-        title="FlowJet Agent",
+        title=title,
         title_align="left",
         border_style=style(border),
         padding=(0, 1),

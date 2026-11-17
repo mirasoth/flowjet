@@ -216,11 +216,14 @@ def test_cli_narration_stays_in_state_but_not_in_activity(
         color=False,
     )
     # No tool completed in this run, so there is no Activity section and no
-    # reasoning row — the narration is visible on the Answer preview line.
+    # reasoning row — the narration is appended inline to the current-action
+    # line (there is no separate Answer row anymore).
     assert "Activity" not in rendered
     assert "›" not in rendered
-    assert "Answer" in rendered
-    assert "先查一下 CI 状态" in rendered
+    assert "Answer" not in rendered
+    lines = rendered.splitlines()
+    assert len(lines) == 3
+    assert "先查一下 CI 状态" in lines[1]
     assert out.startswith(full + "\n")  # stdout unchanged
     assert seen["reasoning"]
 

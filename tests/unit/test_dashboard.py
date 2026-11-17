@@ -201,8 +201,8 @@ def test_update_tool_activity_grows_one_action_line_for_partial_chunks() -> None
 
     out = _render(dash.state)
     lines = out.splitlines()
-    meta_idx = next(i for i, line in enumerate(lines) if "Elapsed" in line)
-    assert "run_command sleep 180 && echo done" in lines[meta_idx + 1]
+    title_idx = next(i for i, line in enumerate(lines) if "Elapsed" in line)
+    assert "run_command sleep 180 && echo done" in lines[title_idx + 1]
     assert "Activity" not in out
 
     # ToolCompleted → one ✓ row in Activity and the action line is cleared.
@@ -226,8 +226,8 @@ def test_in_flight_tool_survives_unrelated_phase_updates() -> None:
     dash.update("Thinking", color="cyan")
     assert dash.state.in_flight_tool == "run_command git commi"
     lines = _render(dash.state).splitlines()
-    meta_idx = next(i for i, line in enumerate(lines) if "Elapsed" in line)
-    assert "run_command git commi" in lines[meta_idx + 1]
+    title_idx = next(i for i, line in enumerate(lines) if "Elapsed" in line)
+    assert "run_command git commi" in lines[title_idx + 1]
     assert "Activity" not in "\n".join(lines)
 
 
@@ -298,23 +298,25 @@ def test_build_dashboard_renders_multi_line_summary() -> None:
         ],
     )
     out = _render(state)
-    assert len(out.splitlines()) > 8  # a real multi-line region, not one status line
-    assert "LIVE" in out
-    assert "FlowJet Agent" in out
+    lines = out.splitlines()
+    assert len(lines) >= 7  # a real multi-line region, not one status line
+    assert "FlowJet Agent" not in out
     assert "Stage" not in out and "Reading · cli.py" in out
     assert "Step" in out and "2 / 5" in out
-    # The duplicate Tool row, the Stage label gutter and the heading's copy
-    # are gone; only the main line and the *completed* history row carry it.
+    # The duplicate Tool row and the Stage label gutter are gone; only the
+    # action line and the *completed* history row carry the stage text.
     assert "Tool" not in out and "read_file" not in out
     assert "● LIVE  Reading" not in out
     assert out.count("Reading · cli.py") == 2
     assert "Elapsed" in out and "12s" in out
     assert "Tokens" in out and "12.3K" in out
     assert "Updated" in out
-    # Step/Elapsed/Tokens/Updated share ONE meta line, not four label rows.
-    meta = [line for line in out.splitlines() if "Elapsed" in line]
-    assert len(meta) == 1
-    assert "Step" in meta[0] and "Tokens" in meta[0] and "Updated" in meta[0]
+    # Badge + Step/Elapsed/Tokens/Updated share ONE line: the panel title.
+    title = [line for line in lines if "Elapsed" in line]
+    assert len(title) == 1
+    assert title[0] == lines[0]
+    assert "● LIVE" in title[0]
+    assert "Step" in title[0] and "Tokens" in title[0] and "Updated" in title[0]
     assert "Activity (2)" in out and "Thinking" in out and "42ms" in out
 
 
@@ -326,12 +328,68 @@ def test_build_dashboard_status_badges(status: str, badge: str) -> None:
     state = DashboardState(phase="Working", status=status, started_at=100.0, updated_at=time.time())
     out = _render(state, frame="" if status != "LIVE" else "⠋")
     assert badge in out
+    assert badge in out.splitlines()[0]  # the badge is the panel title
+    assert "FlowJet Agent" not in out
     if status != "LIVE":
         assert "⠋" not in out
 
 
-def test_build_dashboard_meta_row_omits_empty_values() -> None:
-    """Screenshot case: Step — and Tokens — must not occupy two rows."""
+def test_build_dashboard_title_is_the_liveness_status_display() -> None:
+    """Badge + status strip live on the border; no product name or extra rows."""
+    state = DashboardState(
+        phase="Boundary",
+        status="LIVE",
+        started_at=100.0,
+        updated_at=time.time(),
+    )
+    lines = _render(state).splitlines()
+    title = lines[0]
+    assert title.startswith("╭─ ⠋ ● LIVE · ")
+    assert "Elapsed" in title and "Updated" in title
+    assert "FlowJet Agent" not in "\n".join(lines)
+    # No separate heading / meta rows repeat the badge or the status strip.
+    assert sum("LIVE" in line for line in lines) == 1
+    assert sum("Elapsed" in line for line in lines) == 1
+    assert lines[1].lstrip("│ ").startswith("Boundary")
+
+
+def test_build_dashboard_merges_answer_preview_into_the_action_line() -> None:
+    """No separate Answer row: narration rides on the first body line."""
+    preview = "Let me resolve the message metadata dict for the Vol.02 message"
+    state = DashboardState(
+        phase="Boundary",
+        status="LIVE",
+        answer_preview=preview,
+        started_at=100.0,
+        updated_at=time.time(),
+    )
+    out = _render(state)
+    lines = out.splitlines()
+    assert len(lines) == 3  # title border, action line, bottom border
+    assert "Answer" not in out
+    assert lines[1].lstrip("│ ").startswith("Boundary · ")
+    assert "Let me resolve the message metadata dict" in lines[1]
+    assert out.count("Let me resolve") == 1
+
+
+def test_build_dashboard_merged_action_stays_one_line_on_narrow_terminals() -> None:
+    state = DashboardState(
+        phase="Boundary",
+        status="LIVE",
+        answer_preview="Let me resolve the message metadata dict for Vol.02 and more",
+        started_at=100.0,
+        updated_at=time.time(),
+    )
+    lines = _render(state, width=36).splitlines()
+    assert len(lines) == 3
+    assert "Answer" not in "\n".join(lines)
+    assert all(len(line) == 36 for line in lines)
+    assert "Boundary" in lines[1]
+    assert "Let me resolve" in lines[1]
+
+
+def test_build_dashboard_title_status_omits_empty_values() -> None:
+    """Screenshot case: empty Step and Tokens must not appear at all."""
     state = DashboardState(
         phase="ls mirasoth/flowjet",
         status="LIVE",
@@ -340,14 +398,14 @@ def test_build_dashboard_meta_row_omits_empty_values() -> None:
     )
     out = _render(state)
     assert "—" not in out
-    meta = [line for line in out.splitlines() if "Elapsed" in line]
-    assert len(meta) == 1
-    assert "Updated" in meta[0]
-    assert "Step" not in meta[0] and "Tokens" not in meta[0]
+    title = [line for line in out.splitlines() if "Elapsed" in line]
+    assert len(title) == 1
+    assert "Updated" in title[0]
+    assert "Step" not in title[0] and "Tokens" not in title[0]
     assert out.count("ls mirasoth/flowjet") == 1
 
 
-def test_build_dashboard_meta_row_stays_one_line_on_narrow_terminals() -> None:
+def test_build_dashboard_title_status_stays_one_line_on_narrow_terminals() -> None:
     state = DashboardState(
         phase="Thinking",
         step=2,
@@ -356,12 +414,14 @@ def test_build_dashboard_meta_row_stays_one_line_on_narrow_terminals() -> None:
         started_at=100.0,
         updated_at=time.time(),
     )
-    out = _render(state, width=36)
-    assert len([line for line in out.splitlines() if "2 / 5" in line]) == 1
+    lines = _render(state, width=36).splitlines()
+    assert "● LIVE" in lines[0]
+    assert len([line for line in lines if "2 / 5" in line]) == 1
+    assert all(len(line) == 36 for line in lines)
 
 
-def test_build_dashboard_stage_sits_below_meta_and_is_left_aligned() -> None:
-    """Meta line first; the action line follows, starting at the same column."""
+def test_build_dashboard_action_is_the_first_body_row_and_is_left_aligned() -> None:
+    """Status lives on the title; the action opens the body, left-aligned."""
     state = DashboardState(
         phase="grep def main in cli/cli.py",
         status="LIVE",
@@ -371,10 +431,10 @@ def test_build_dashboard_stage_sits_below_meta_and_is_left_aligned() -> None:
         updated_at=time.time(),
     )
     lines = _render(state).splitlines()
-    meta_idx = next(i for i, line in enumerate(lines) if "Updated" in line)
+    assert "● LIVE" in lines[0] and "Updated" in lines[0]
     stage_idx = next(i for i, line in enumerate(lines) if "grep def main" in line)
-    assert stage_idx == meta_idx + 1
-    assert lines[stage_idx].index("grep") == lines[meta_idx].index("Step")
+    assert stage_idx == 1  # immediately below the title border
+    assert lines[stage_idx].index("grep") == 2  # border + one padding column
     assert "Stage" not in _render(state)
 
 

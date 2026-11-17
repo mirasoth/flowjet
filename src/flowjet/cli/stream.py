@@ -454,7 +454,7 @@ def accumulate_ai_text(current: str, message: AIMessage) -> str:
 
 
 def _status_preview(text: str) -> str:
-    """Single-line preview of AI narration for the dashboard's answer row."""
+    """Single-line preview of AI narration for the dashboard's action line."""
     line = re.sub(r"\s+", " ", text.strip())
     if not line:
         return "Writing answer…"
@@ -481,8 +481,8 @@ class AnswerWriter:
     """Buffer answer text; preview narration in the dashboard; print only at end.
 
     Multi-step agent turns emit intermediate AI text ("Let me try…") before tool
-    calls. That stays in the dashboard's answer-preview row. ``finish()`` always
-    writes the full buffer so the finalized response is never truncated.
+    calls. That stays inline on the dashboard's current-action line. ``finish()``
+    always writes the full buffer so the finalized response is never truncated.
     """
 
     def __init__(
@@ -516,7 +516,7 @@ class AnswerWriter:
                 self._last_preview_at = now
         else:
             # ``--no-stream`` shows no narration preview; keep the phase update
-            # without populating the dashboard's answer row.
+            # without populating the dashboard's inline preview.
             self._status.update("Writing answer…", color="green")
 
     def reset_for_tools(self) -> None:

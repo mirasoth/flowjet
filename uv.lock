@@ -1069,7 +1069,7 @@ wheels = [
 
 [[package]]
 name = "flowjet"
-version = "2.2.3"
+version = "2.2.4"
 source = { editable = "." }
 dependencies = [
     { name = "rich" },
@@ -1118,7 +1118,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.0" },
     { name = "s3fs", marker = "extra == 'server'", specifier = ">=2024.6" },
-    { name = "soothe", specifier = ">=1.3.2,<2.0.0" },
+    { name = "soothe", specifier = ">=1.3.3,<2.0.0" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=5.0.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.32.0" },
 ]
@@ -4211,7 +4211,7 @@ wheels = [
 
 [[package]]
 name = "soothe"
-version = "1.3.2"
+version = "1.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
@@ -4232,9 +4232,9 @@ dependencies = [
     { name = "soothe-nano" },
     { name = "watchdog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e6/93/23c4ba21eabd9c813af63f02bc31239f9bc8ef132e01d7b145896d979311/soothe-1.3.2.tar.gz", hash = "sha256:e186500692992bfc319aae48c303035a25df66ba11ca7d632a5ff627007d93ee", size = 684479, upload-time = "2026-11-16T03:54:05.159Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/05/55/ec63da178c7f0f832fb709b940c0eb32565cc072d60fa94f3fc54a7b2fd4/soothe-1.3.3.tar.gz", hash = "sha256:2103b3208fe5c5aaedd7d9c60b887e11cad5a3cf7254f28f2adc0f9183fd4632", size = 685254, upload-time = "2026-11-17T02:04:53.591Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/57/84/6120953d4fecaf15aa68ada0840f5f83befdee8179520f8bb1aee682c7f5/soothe-1.3.2-py3-none-any.whl", hash = "sha256:8a44be88fcc6ae54cac3b2d9db236d7abb3efcf2166f92aa0f6ec6e57dfb478b", size = 871419, upload-time = "2026-11-16T03:54:02.838Z" },
+    { url = "https://files.pythonhosted.org/packages/27/61/8f10b4e73b4cc35c7bbcc7f300cbcea63af9aab38145c229ba4c3e326da5/soothe-1.3.3-py3-none-any.whl", hash = "sha256:2c007866e2c28d2c788251c1529ab9f40b3ad88dee25910673230ee079fc2c79", size = 872128, upload-time = "2026-11-17T02:04:51.598Z" },
 ]
 
 [[package]]
