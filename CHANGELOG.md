@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.5] — 2026-11-19
+
 ### Fixed
 
 - **`fjf` no longer reprints historical questions before a fresh one.** With consecutive `ask_user` turns, resuming a paused thread used to echo the checkpoint's pending (already answered) question panel before `stream_query` rendered the new question — so the previous questions stacked above the latest one. The resume path now only sets `resume_value` and leaves question rendering to `stream_query`, which renders exactly one panel using the newest question set even when a run emits several `__interrupt__` chunks. Regression tests in `tests/unit/test_cli.py`, `tests/unit/test_stream.py` and `tests/integration/test_cli_stream_progress.py`.
