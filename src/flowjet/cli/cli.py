@@ -662,30 +662,14 @@ async def run_async(args: argparse.Namespace) -> int:
                 # query text is their answer — resume the run instead of
                 # starting a new turn. ``fjf`` (follow) hits this path when the
                 # previous run ended on a question.
+                #
+                # Do NOT re-render the checkpoint's pending questions here.
+                # They were already shown when the run paused; re-printing them
+                # puts the answered (historical) questions above the fresh ones
+                # a resumed run may ask next. ``stream_query`` is the single
+                # place question panels are rendered.
                 resume_value: Any = None
-                pending = await _detect_pending_interrupt(agent, thread_id)
-                if pending is not None:
-                    from flowjet.cli.stream import format_questions_block
-
-                    questions = pending.get("questions") or ()
-                    if isinstance(questions, list):
-                        questions = tuple(q for q in questions if isinstance(q, dict))
-                    else:
-                        questions = ()
-                    # Print the questions so the user sees what they're answering.
-                    # This path runs before stream_query starts, so there is no
-                    # dashboard instance yet: use the shared TTY renderer (the
-                    # same one the in-run pause uses) with a plain-text fallback.
-                    if questions:
-                        try:
-                            from flowjet.cli.render import write_questions
-
-                            rendered = write_questions(questions, thread_id, sys.stdout)
-                        except ImportError:
-                            rendered = False
-                        if not rendered:
-                            sys.stdout.write(format_questions_block(questions, thread_id))
-                            sys.stdout.flush()
+                if await _detect_pending_interrupt(agent, thread_id) is not None:
                     resume_value = {"answers": [args.query_text]}
                 if args.no_stream:
                     result = await invoke_query(

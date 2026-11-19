@@ -742,6 +742,48 @@ async def test_stream_query_paused_snapshot_precedes_questions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_query_consecutive_interrupts_show_only_newest() -> None:
+    """Only the newest question set is rendered when a run interrupts twice."""
+    older = [
+        {
+            "header": "Rebase strategy",
+            "question": "Which ref should I rebase onto?",
+            "options": [{"label": "origin (Recommended)", "description": "Use origin"}],
+        }
+    ]
+    newest = [
+        {
+            "header": "Merge strategy",
+            "question": "How should I merge the changes?",
+            "options": [{"label": "Squash (Recommended)", "description": "One commit"}],
+        }
+    ]
+    out = StringIO()
+    agent = _FakeAgent(
+        [
+            _interrupt_chunk(older),
+            _interrupt_chunk(newest),
+        ]
+    )
+    result = await stream_query(
+        agent,  # type: ignore[arg-type]
+        "continue",
+        thread_id="t-consecutive",
+        live_answer=True,
+        out=out,
+        err=StringIO(),
+        progress=ProgressDashboard(out, enabled=False),
+    )
+    assert result == INTERRUPTED
+    output = out.getvalue()
+    assert "How should I merge the changes?" in output
+    assert "Which ref should I rebase onto?" not in output
+    assert "Rebase strategy" not in output
+    # Exactly one question panel, not one per interrupt.
+    assert output.count("Paused for input") == 1
+
+
+@pytest.mark.asyncio
 async def test_stream_query_non_ask_user_interrupt_continues() -> None:
     """A non-ask_user interrupt (no questions) does not set INTERRUPTED."""
     out = StringIO()

@@ -228,6 +228,60 @@ def test_cli_narration_stays_in_state_but_not_in_activity(
     assert seen["reasoning"]
 
 
+def test_cli_resume_shows_only_newest_question_on_consecutive_ask_user(
+    live_stream_runtime: dict[str, Any],
+    run_fj_live_stream: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Answering a pending question must not reprint the historical questions.
+
+    Regression for consecutive ``ask_user`` turns: the checkpoint carries the
+    (already answered) questions, and the resumed run immediately asks a new
+    one. Only the newest question panel belongs in this invocation's output.
+    """
+    from langgraph.types import Interrupt
+
+    from flowjet.cli import cli as cli_mod
+
+    historical = {
+        "header": "Rebase strategy",
+        "question": "Which ref should I rebase onto?",
+        "options": [{"label": "origin (Recommended)", "description": "Use origin"}],
+    }
+    newest = {
+        "header": "Merge strategy",
+        "question": "How should I produce the single squashed commit?",
+        "options": [{"label": "Keep my tree (Recommended)", "description": "Keep it"}],
+    }
+
+    async def fake_pending(*_a: object, **_k: object) -> dict[str, object]:
+        return {"type": "ask_user", "questions": [historical]}
+
+    monkeypatch.setattr(cli_mod, "_detect_pending_interrupt", fake_pending)
+    live_stream_runtime["chunks"] = [
+        (
+            (),
+            "updates",
+            {
+                "__interrupt__": (
+                    Interrupt(
+                        value={"type": "ask_user", "questions": [newest]},
+                        id="int-2",
+                    ),
+                )
+            },
+        )
+    ]
+
+    code, out, err, _seen = run_fj_live_stream(["as", "recommended"])
+    assert code == 0, err
+    assert "How should I produce the single squashed commit?" in out
+    assert "Which ref should I rebase onto?" not in out
+    assert "Rebase strategy" not in out
+    assert out.count("Paused for input") == 1
+    assert "Resume with: fjf -t fj-stream-stub" in out
+
+
 def test_cli_pause_freezes_paused_state_and_keeps_questions_visible(
     live_stream_runtime: dict[str, Any],
     run_fj_live_stream: Any,

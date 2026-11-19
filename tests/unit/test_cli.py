@@ -1008,7 +1008,8 @@ async def test_detect_pending_interrupt_soft_fails_on_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# fjf resume — pending ask_user questions use the shared questions renderer
+# fjf resume — the answered (historical) questions must NOT be reprinted.
+# Only the resumed run's own newest questions are rendered, by stream_query.
 # ---------------------------------------------------------------------------
 
 _FJF_QUESTIONS = (
@@ -1021,30 +1022,38 @@ _FJF_QUESTIONS = (
 
 
 @pytest.mark.asyncio
-async def test_run_async_pending_interrupt_plain_block_on_non_tty(
+async def test_run_async_resume_does_not_reprint_pending_questions(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Piped/scripted output stays byte-identical to the historical block."""
+    """Resume reprints nothing; stream_query renders only its own questions."""
+    import flowjet.cli.stream as stream_mod
     from flowjet.cli import cli as cli_mod
     from flowjet.cli.cli import parse_args, run_async
-    from flowjet.cli.stream import format_questions_block
 
     _patch_run_async_env(monkeypatch, stream_result="ok")
+    seen: dict[str, object] = {}
+
+    async def spy_stream(*_a: object, **_k: object) -> str:
+        seen.update(_k)
+        return "ok"
+
+    monkeypatch.setattr(stream_mod, "stream_query", spy_stream)
 
     async def fake_pending(*_a: object, **_k: object) -> dict[str, object]:
         return {"type": "ask_user", "questions": list(_FJF_QUESTIONS)}
 
     monkeypatch.setattr(cli_mod, "_detect_pending_interrupt", fake_pending)
     assert await run_async(parse_args(["my answer"])) == 0
-    assert capsys.readouterr().out == format_questions_block(_FJF_QUESTIONS, "fj-test")
+    assert capsys.readouterr().out == ""
+    assert seen["resume_value"] == {"answers": ["my answer"]}
 
 
 @pytest.mark.asyncio
-async def test_run_async_pending_interrupt_partitioned_panel_on_tty(
+async def test_run_async_resume_does_not_reprint_pending_questions_on_tty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Before any dashboard exists, the resume path uses the shared TTY renderer."""
+    """Same guarantee on a TTY: no rich panel from the resume pre-print path."""
     from flowjet.cli import cli as cli_mod
     from flowjet.cli.cli import parse_args, run_async
 
@@ -1062,10 +1071,7 @@ async def test_run_async_pending_interrupt_partitioned_panel_on_tty(
     monkeypatch.setattr(sys, "stdout", buf)
     assert await run_async(parse_args(["my answer"])) == 0
     out = buf.getvalue()
-    assert "⏸ Paused for input" in out
-    assert "[Auth method]" in out
-    assert "Which method should I use?" in out
-    assert "★" in out
-    assert "Resume with: fjf -t fj-test <your answer>" in out
-    assert "\n⏸ Paused for input:" not in out  # plain block is NOT used on a TTY
-    assert "Q1" not in out  # single question is not numbered
+    assert "Paused for input" not in out
+    assert "[Auth method]" not in out
+    assert "Which method should I use?" not in out
+    assert "Resume with:" not in out

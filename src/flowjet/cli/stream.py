@@ -705,6 +705,11 @@ async def stream_query(
     last_tool_error: str | None = None
     started_at = time.monotonic()
     interrupted = False
+    # Only the newest question set is shown. A run can emit several
+    # ``__interrupt__`` chunks (nested subgraphs or a replayed interrupt);
+    # rendering each one would stack stale question panels above the current
+    # one. Keep the last set and render it once, after the stream ends.
+    pending_questions: tuple[dict[str, Any], ...] = ()
     # Human-readable label of the latest activity, reported on timeout so the
     # user knows where the run was stuck.
     last_label = "Thinking"
@@ -846,21 +851,11 @@ async def stream_query(
                         if isinstance(event, InterruptWaiting):
                             status.update("Waiting for input…", color="yellow")
                             if event.questions:
-                                # A real ``ask_user`` interrupt pauses the graph.
-                                # Freeze the dashboard as a PAUSED snapshot first,
-                                # then print the questions BELOW it so both stay
-                                # visible; ``finalize`` is idempotent, so the
-                                # ``async with`` exit won't erase the snapshot.
-                                status.finalize(
-                                    "PAUSED",
-                                    duration_s=time.monotonic() - started_at,
-                                    tokens=total_tokens,
-                                )
-                                status.blank()
-                                if not _render_questions(event.questions, thread_id, stdout):
-                                    stdout.write(format_questions_block(event.questions, thread_id))
-                                    stdout.flush()
-                                status.repaint()
+                                # Keep only the newest question set. A run can
+                                # emit several __interrupt__ chunks; rendering
+                                # each immediately would stack stale question
+                                # panels above the current one.
+                                pending_questions = tuple(event.questions)
                                 interrupted = True
                             elif show_tool_calls:
                                 _write_verbose(
@@ -876,6 +871,22 @@ async def stream_query(
                                 exc_type=event.exc_type or event.code,
                                 traceback_text=event.traceback,
                             )
+
+                if interrupted and pending_questions:
+                    # Freeze the dashboard as a PAUSED snapshot first, then print
+                    # ONLY the newest question set BELOW it so both stay visible;
+                    # ``finalize`` is idempotent, so the ``async with`` exit won't
+                    # erase the snapshot.
+                    status.finalize(
+                        "PAUSED",
+                        duration_s=time.monotonic() - started_at,
+                        tokens=total_tokens,
+                    )
+                    status.blank()
+                    if not _render_questions(pending_questions, thread_id, stdout):
+                        stdout.write(format_questions_block(pending_questions, thread_id))
+                        stdout.flush()
+                    status.repaint()
 
     except TimeoutError:
         if isinstance(timeout_cm, asyncio.Timeout) and timeout_cm.expired():
