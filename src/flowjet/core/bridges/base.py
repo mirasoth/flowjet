@@ -24,7 +24,7 @@ from flowjet.core.runtime.isolation.request import IsolatedRunRequest
 
 if TYPE_CHECKING:
     from flowjet.core.runtime.isolation.backend import IsolatingRuntimeBackend
-    from flowjet.core.sandbox.arbox import ArcBoxToolSandboxManager
+    from flowjet.core.sandbox.arbox import ToolSandboxManager
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class AgentAdapterBase:
         *,
         config_path: str | Path | None = None,
         agent_factory: Any | None = None,
-        sandbox_manager: ArcBoxToolSandboxManager | None = None,
+        sandbox_manager: ToolSandboxManager | None = None,
         checkpointer_policy: str | None = "off",
     ) -> None:
         self._agent = agent

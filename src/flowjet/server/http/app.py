@@ -25,7 +25,7 @@ if TYPE_CHECKING:
         SyncAwareWorkspaceResolver,
         WorkspaceResolver,
     )
-    from flowjet.core.sandbox.arbox import ArcBoxToolSandboxManager
+    from flowjet.core.sandbox.arbox import ToolSandboxManager
     from flowjet.core.sandbox.resolver import SandboxAwareWorkspaceResolver
 
 
@@ -53,20 +53,19 @@ def build_backend(settings: Settings) -> RuntimeBackend:
 
 def build_sandbox_manager(
     settings: Settings,
-) -> ArcBoxToolSandboxManager | None:
-    """Build the ArcBox tool-sandbox manager from the nano.yml ``sandbox:`` section.
+) -> ToolSandboxManager | None:
+    """Build the tool-sandbox manager from the nano.yml ``sandbox:`` section.
 
     Returns ``None`` when the sandbox is disabled (the default) — behavior is
     then identical to a host-side tools deployment. Fails loud at startup when
-    the section is enabled but misconfigured (missing image) or the arcbox SDK
-    is not installed.
+    the section is enabled but misconfigured (missing image).
     """
     return ServerRuntimeBuilder.sandbox_manager(settings.nano_config)
 
 
 def build_workspace_resolver(
     settings: Settings,
-    sandbox_manager: ArcBoxToolSandboxManager | None = None,
+    sandbox_manager: ToolSandboxManager | None = None,
 ) -> WorkspaceResolver | SyncAwareWorkspaceResolver | SandboxAwareWorkspaceResolver | None:
     """Construct the workspace resolver based on sync and sandbox settings.
 

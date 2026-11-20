@@ -1,4 +1,12 @@
-"""Server-owned ``sandbox:`` settings parsed from the nano.yml."""
+"""Server-owned ``sandbox:`` settings parsed from the nano.yml.
+
+The sandbox lifecycle (create/connect/kill) is owned by soothe-nano's
+:class:`~soothe_nano.sandbox.ArcBoxBackend` (via ``from_config``); flowjet
+only reads the config fields it needs for **pool management** (LRU eviction,
+idle reaping, workspace staging, disk watermark) and passes the rest through
+to nano at backend construction time. No arcbox SDK symbols are imported or
+called here.
+"""
 
 from __future__ import annotations
 
@@ -78,7 +86,7 @@ class ToolSandboxSettings:
     ``SootheConfig``)::
 
         sandbox:
-          enabled: true            # run tool calls in an arcbox container
+          enabled: true            # run tool calls in a sandbox
           image: <image ref>       # guest image; must ship python3 + coreutils
           vcpus: 2
           mem_mib: 2048
@@ -88,17 +96,20 @@ class ToolSandboxSettings:
           connect_timeout: 60
           idle_timeout_seconds: 300
           max_sandboxes: 8         # 0 (unlimited), None (compute from host CPU), or int
-          orphan_timeout_seconds: null  # daemon-side crash deadline; None derives it
-          recover_orphans: true    # adopt surviving VMs after a restart
-          owner: flowjet           # sandbox label namespace; env FLOWJET_SANDBOX_OWNER
+          min_free_bytes: 0        # refuse turns when guest free space < this (0 = off)
           api_url: null            # daemon connection; env fallback ARCBOX_API_URL
           api_key: null            # daemon credential; env fallback ARCBOX_API_KEY
-          min_free_bytes: 0        # refuse turns when guest free space < this (0 = off)
-          reserved_pad_path: ""    # guest pad file reclaimed once per new sandbox ("" = off)
 
     The remaining ``sandbox:`` keys (``on_deny`` / ``placement_overrides`` /
-    ``max_shuttle_bytes``) belong to soothe-nano's placement policy and are
-    consumed by the agent build itself.
+    ``max_shuttle_bytes`` / ``rootfs_headroom_mib``) belong to soothe-nano's
+    placement policy and agent build and are consumed by the agent build
+    itself — flowjet never reads them.
+
+    The sandbox lifecycle (create/connect/kill) is delegated to
+    soothe-nano's :class:`~soothe_nano.sandbox.ArcBoxBackend` via
+    ``from_config()``; flowjet only manages the **pool** (LRU eviction,
+    idle reaping, workspace staging, disk watermark). No arcbox SDK symbols
+    are imported here.
     """
 
     enabled: bool = False
@@ -107,11 +118,11 @@ class ToolSandboxSettings:
     image: str | None = None
     vcpus: int = 2
     mem_mib: int = 2048
-    # Guest egress. OFF by default: `true` NATs the guest through the ArcBox
-    # host with no per-destination policy (the daemon only knows ENABLED|NONE),
-    # so everything the host can route to — internal network and VPN included —
-    # becomes reachable from agent shell commands. Web access is not lost: the
-    # web tools are host-placement and never run in the guest.
+    # Guest egress. OFF by default: `true` NATs the guest through the sandbox
+    # host with no per-destination policy, so everything the host can route to
+    # — internal network and VPN included — becomes reachable from agent shell
+    # commands. Web access is not lost: the web tools are host-placement and
+    # never run in the guest.
     network: bool = False
     workspace_root: str = "/workspace"
     default_timeout: int = 120
@@ -124,45 +135,14 @@ class ToolSandboxSettings:
     # ``FLOWJET_SANDBOX_MAX`` (int, 0=unlimited) overrides YAML at load time.
     max_sandboxes: int | None = 8
 
-    # Daemon-side deadline for a sandbox whose owner stopped talking to it.
-    # A crashed flowjet-server cannot clean up its VMs, so every sandbox is
-    # created with ``idle_timeout=<orphan deadline>`` + ``on_idle="kill"``
-    # and the manager re-arms that timer while it is alive: expiry therefore
-    # means "the process that owned this sandbox is gone". ``None`` (the
-    # default) derives ``max(900, 3 × idle_timeout_seconds)`` so a long idle
-    # reaper can never be preempted by a daemon kill, and existing configs
-    # without this key keep parsing unchanged; an explicit value must exceed
-    # ``idle_timeout_seconds`` (checked only when the sandbox is enabled).
-    orphan_timeout_seconds: float | None = None
-    # Adopt sandboxes left behind by a previous process (crash / restart) and
-    # pull their guest state before reusing them. Assumes one flowjet process
-    # serves a given workspace at a time (the shipped deployment runs a single
-    # agentspace-flowjet replica); disable to always start from a fresh VM.
-    recover_orphans: bool = True
-    # Label namespace so several flowjet planes sharing one daemon never
-    # recover or reap each other's sandboxes.
-    owner: str = "flowjet"
-
     # Disk watermark: refuse to open a sandbox whose guest has less free
-    # space than this (bytes) at session open. The ArcBox daemon sizes the
-    # sandbox root disk from the guest image plus a small constant margin,
-    # so a write-heavy turn can fill the guest and leave the agent flailing
-    # in ENOSPC errors it cannot fix (its cleanup commands hit the approval
-    # gate). Guarding here turns that spiral into one readable turn error.
-    # ``0`` (the default) disables the probe.
+    # space than this (bytes) at session open. With native rootfs headroom
+    # (ArcBox daemon config ``rootfs_headroom_mib``), the watermark is
+    # satisfied at birth for typical images; ``0`` (the default) disables
+    # the probe.
     min_free_bytes: int = 0
 
-    # Reserved-pad reclaim (sandbox disk headroom). The guest image may ship a
-    # sparse pad file (e.g. ``truncate -s 3G /pad.img`` in the soothe-nano-prod
-    # template) so the ArcBox rootfs formatter — which grows the template's
-    # disk capacity to fit its content — sizes real headroom into the image.
-    # Capacity alone does not help: the pad occupies the space it reserves, so
-    # before the watermark probe on a freshly created (or adopted) sandbox this
-    # file is deleted once, converting the reserved capacity into free space.
-    # Empty (the default) disables the reclaim; when set it must be an
-    # absolute guest path.
-    reserved_pad_path: str = ""
-
+    # Daemon connection — passed through to nano's ArcBoxBackend.from_config().
     api_url: str | None = None
     api_key: str | None = None
 
@@ -178,33 +158,10 @@ class ToolSandboxSettings:
             )
         if self.min_free_bytes < 0:
             raise ValueError("sandbox.min_free_bytes must be a non-negative int (0 = disabled)")
-        if self.reserved_pad_path and not self.reserved_pad_path.startswith("/"):
-            raise ValueError("sandbox.reserved_pad_path must be an absolute guest path when set")
         if self.vcpus < 1:
             raise ValueError("sandbox.vcpus must be >= 1")
         if self.mem_mib < 128:
             raise ValueError("sandbox.mem_mib must be >= 128")
-        if not self.owner:
-            self.owner = os.environ.get("FLOWJET_SANDBOX_OWNER", "flowjet")
-        if self.orphan_timeout_seconds is not None:
-            if self.orphan_timeout_seconds <= 0:
-                raise ValueError("sandbox.orphan_timeout_seconds must be > 0")
-            if self.enabled and self.orphan_timeout_seconds <= self.idle_timeout_seconds:
-                raise ValueError(
-                    "sandbox.orphan_timeout_seconds must exceed idle_timeout_seconds "
-                    "(the daemon-side crash deadline must never preempt the idle reaper)"
-                )
-
-    def effective_orphan_timeout_seconds(self) -> float:
-        """Resolve the daemon-side crash deadline (``None`` derives it).
-
-        Derived as ``max(900, 3 × idle_timeout_seconds)``: high enough that a
-        sandbox the process still holds is never daemon-killed between
-        heartbeats, low enough that an orphan is reaped in bounded time.
-        """
-        if self.orphan_timeout_seconds is not None:
-            return self.orphan_timeout_seconds
-        return max(900.0, self.idle_timeout_seconds * 3.0)
 
     def effective_max_sandboxes(self, *, cpu_count: int | None = None) -> int:
         """Resolve the sandbox cap: env override, explicit int, None, or unlimited.
@@ -215,7 +172,7 @@ class ToolSandboxSettings:
         3. ``None`` → computed from host CPU and per-sandbox vCPUs
 
         Returns ``0`` when the cap is unlimited; callers must treat ``0`` as
-        "no LRU eviction" (see :meth:`ArcBoxToolSandboxManager._make_room`).
+        "no LRU eviction" (see :meth:`ToolSandboxManager._make_room`).
 
         ``cpu_count`` is injectable for deterministic tests; production reads
         :func:`os.cpu_count`.
@@ -249,8 +206,9 @@ class SandboxSettingsLoader:
         """Parse the raw ``sandbox:`` mapping from nano.yml.
 
         Keys the server does not own (``on_deny``, ``placement_overrides``,
-        ``max_shuttle_bytes``) are ignored here — they stay in the loaded
-        ``SootheConfig`` and reach the agent build unchanged.
+        ``max_shuttle_bytes``, ``rootfs_headroom_mib``) are ignored here —
+        they stay in the loaded ``SootheConfig`` and reach the agent build
+        unchanged.
         """
         if not isinstance(section, dict):
             return ToolSandboxSettings()
@@ -298,6 +256,7 @@ class SandboxSettingsLoader:
                 raw = yaml.safe_load(f)
         except yaml.YAMLError as exc:
             raise ValueError(f"Invalid YAML in {path}: {exc}") from exc
+
         if not isinstance(raw, dict):
             return ToolSandboxSettings()
         return cls.parse_section(raw.get("sandbox"))

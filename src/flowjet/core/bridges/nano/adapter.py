@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from flowjet.core.bridges.base import AgentAdapterBase, create_server_agent_instance
 
 if TYPE_CHECKING:
-    from flowjet.core.sandbox.arbox import ArcBoxToolSandboxManager
+    from flowjet.core.sandbox.arbox import ToolSandboxManager
 
 #: Historical name — identical to the shared server instance builder; the
 #: backend flavor follows ``FLOWJET_SERVER_BACKEND``.
@@ -24,7 +24,7 @@ class NanoAgentAdapter(AgentAdapterBase):
     """AgentAdapter wrapping DualModeCoreAgent (one instance per pool worker).
 
     With a ``sandbox_manager`` (nano.yml ``sandbox:`` section), tool calls run
-    in a per-workspace ArcBox microVM: the agent is bound to the workspace's
+    in a per-workspace sandbox: the agent is bound to the workspace's
     sandbox at build time and rebuilt when the worker switches workspaces.
     """
 
@@ -34,7 +34,7 @@ class NanoAgentAdapter(AgentAdapterBase):
 def nano_adapter_factory(
     *,
     config_path: str | None = None,
-    sandbox_manager: ArcBoxToolSandboxManager | None = None,
+    sandbox_manager: ToolSandboxManager | None = None,
 ):
     """Return a zero-arg factory suitable for ThreadPool / IsolatingRuntimeBackend."""
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from flowjet.core.sandbox.arbox import ArcBoxToolSandboxManager
+from flowjet.core.sandbox.arbox import ToolSandboxManager
 
 
 class SandboxAwareWorkspaceResolver:
@@ -17,12 +17,12 @@ class SandboxAwareWorkspaceResolver:
     the guest pull must land before the sync checkpoint sees the workspace.
     """
 
-    def __init__(self, inner: Any, manager: ArcBoxToolSandboxManager) -> None:
+    def __init__(self, inner: Any, manager: ToolSandboxManager) -> None:
         self._inner = inner
         self._manager = manager
 
     @property
-    def manager(self) -> ArcBoxToolSandboxManager:
+    def manager(self) -> ToolSandboxManager:
         return self._manager
 
     def resolve(self, session: str, metadata: dict[str, Any] | None = None) -> Path:

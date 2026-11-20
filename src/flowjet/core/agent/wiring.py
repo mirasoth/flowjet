@@ -23,7 +23,7 @@ if TYPE_CHECKING:
         SyncAwareWorkspaceResolver,
         WorkspaceResolver,
     )
-    from flowjet.core.sandbox.arbox import ArcBoxToolSandboxManager
+    from flowjet.core.sandbox.arbox import ToolSandboxManager
     from flowjet.core.sandbox.resolver import SandboxAwareWorkspaceResolver
 
 
@@ -38,8 +38,8 @@ class ServerRuntimeBuilder:
     default local-only :class:`WorkspaceResolver` is used.
 
     When the nano.yml enables the ``sandbox:`` section, tool calls run in a
-    per-workspace ArcBox microVM: a
-    :class:`~flowjet.core.sandbox.arbox.ArcBoxToolSandboxManager` stages the
+    per-workspace sandbox: a
+    :class:`~flowjet.core.sandbox.arbox.ToolSandboxManager` stages the
     workspace host↔guest and the adapters bind soothe-nano's sandbox backend
     at agent build time. The AgentRuntime isolation is unchanged (in-process
     thread pool).
@@ -95,20 +95,21 @@ class ServerRuntimeBuilder:
         return cast("RuntimeBackend", build_isolating_nano_backend(**common))
 
     @classmethod
-    def sandbox_manager(cls, config_path: str | None) -> ArcBoxToolSandboxManager | None:
-        """Build the ArcBox tool-sandbox manager from the nano.yml ``sandbox:`` section.
+    def sandbox_manager(cls, config_path: str | None) -> ToolSandboxManager | None:
+        """Build the tool-sandbox manager from the nano.yml ``sandbox:`` section.
 
         Returns ``None`` when the sandbox is disabled (the default) — behavior
         is then identical to a host-side tools deployment. Fails loud at
-        startup when the section is enabled but misconfigured (missing image)
-        or the arcbox SDK is not installed.
+        startup when the section is enabled but misconfigured (missing image).
+        The arcbox SDK availability is checked lazily by nano's
+        ``ArcBoxBackend.from_config()`` on first use.
         """
-        from flowjet.core.sandbox.arbox import ArcBoxToolSandboxManager
+        from flowjet.core.sandbox.arbox import ToolSandboxManager
 
         sandbox_settings: ToolSandboxSettings = SandboxSettingsLoader.load(config_path)
         if not sandbox_settings.enabled:
             return None
-        manager = ArcBoxToolSandboxManager(sandbox_settings)
+        manager = ToolSandboxManager(sandbox_settings)
         manager.validate_runtime()
         return manager
 
@@ -122,7 +123,7 @@ class ServerRuntimeBuilder:
         sync_config_path: str | None,
         content_source: str | None,
         allow_external_workspace: bool,
-        sandbox_manager: ArcBoxToolSandboxManager | None = None,
+        sandbox_manager: ToolSandboxManager | None = None,
         watched_subdirs: Sequence[str] | None = None,
     ) -> WorkspaceResolver | SyncAwareWorkspaceResolver | SandboxAwareWorkspaceResolver | None:
         """Construct the workspace resolver based on sync and sandbox settings.

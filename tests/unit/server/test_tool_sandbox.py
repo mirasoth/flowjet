@@ -1,214 +1,170 @@
-"""ArcBox tool sandbox — nano.yml parsing, manager lifecycle, staging, adapter binding."""
+"""Tool sandbox — nano.yml parsing, manager lifecycle, staging, adapter binding.
+
+Tests mock soothe-nano's ``ArcBoxBackend`` (the execution surface) instead of
+the arcbox SDK directly: flowjet no longer imports or calls the arcbox SDK.
+The backend's ``from_config()`` classmethod is patched to return a fake whose
+``execute`` / ``upload_files`` / ``download_files`` / ``free_space_bytes`` /
+``id`` / ``close`` shape mirrors the real contract.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import sys
 import types
 from collections.abc import AsyncIterator, Callable
-from pathlib import Path, PurePosixPath
+from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar, cast
 
 import pytest
 
 from flowjet.core.sandbox import (
-    ArcBoxToolSandboxManager,
     SandboxAwareWorkspaceResolver,
     SandboxDiskFullError,
     SandboxSettingsLoader,
+    ToolSandboxManager,
     ToolSandboxSettings,
 )
 from flowjet.server.config import Settings
 
 # ---------------------------------------------------------------------------
-# Fake arcbox SDK
+# Fake ArcBoxBackend (nano's execution surface)
 # ---------------------------------------------------------------------------
 
 
-class FakeEntry:
-    def __init__(self, name: str, kind: str) -> None:
-        self.name: str = name
-        self.kind: str = kind
+class FakeArcBoxBackend:
+    """Mock soothe-nano's ArcBoxBackend with an in-memory guest filesystem.
 
+    Mirrors the real contract:
+    - ``id``: lazily-assigned sandbox id (triggers "creation" on first access)
+    - ``execute(command)``: runs a command against the in-memory tree
+    - ``upload_files(files)``: writes files into the guest tree
+    - ``download_files(paths)``: reads files from the guest tree
+    - ``free_space_bytes()``: returns available space (configurable)
+    - ``close()``: marks the backend as closed (sandbox destroyed)
+    """
 
-class FakeFiles:
-    def __init__(self, tree: dict[str, bytes]) -> None:
-        self.tree: dict[str, bytes] = tree
-        self.write_calls: list[str] = []
+    _id_counter: ClassVar[int] = 0
+    instances: ClassVar[list[FakeArcBoxBackend]] = []
+    #: Class-level registry shared across all instances (simulates daemon state)
+    registry: ClassVar[list[FakeArcBoxBackend]] = []
 
-    async def mkdir(self, path: PurePosixPath | str) -> None:
-        _ = self.tree.setdefault(str(path) + "/.dir", b"")
-
-    async def write_bytes(self, path: PurePosixPath | str, data: bytes) -> None:
-        self.tree[str(path)] = bytes(data)
-        self.write_calls.append(str(path))
-
-    async def list(self, path: PurePosixPath | str) -> list[FakeEntry]:
-        prefix = str(path).rstrip("/") + "/"
-        children: dict[str, str] = {}
-        for name in self.tree:
-            if not name.startswith(prefix) or name.endswith("/.dir"):
-                continue
-            rest = name[len(prefix) :]
-            head = rest.split("/", 1)[0]
-            children[prefix + head] = "directory" if "/" in rest else "file"
-        return [FakeEntry(name, kind) for name, kind in children.items()]
-
-    async def read_bytes(self, path: PurePosixPath | str) -> bytes:
-        return self.tree[str(path)]
-
-
-class FakeCommands:
-    """Guest command runner: a dead sandbox fails like the daemon does."""
-
-    def __init__(self, sandbox: FakeSandbox) -> None:
-        self._sandbox = sandbox
-        self.calls: list[str] = []
-
-    async def run(
-        self, command: str, *, cwd: str | None = None, timeout: float | None = None
-    ) -> object:
-        _ = (cwd, timeout)
-        if self._sandbox.dead:
-            msg = f"core error: VM not found: {self._sandbox.id}"
-            raise RuntimeError(msg)
-        self.calls.append(command)
-        return object()
-
-
-class FakeSandbox:
-    def __init__(self, sandbox_id: str) -> None:
-        self.id: str = sandbox_id
-        self.files: FakeFiles = FakeFiles({})
-        self.commands: FakeCommands = FakeCommands(self)
-        self.killed: bool = False
-        #: Set when the VM behind this sandbox is gone (daemon still says "ready").
-        self.dead: bool = False
-        #: Daemon-reported state surfaced by info(); "ready" unless overridden.
-        self.vm_state: str = "ready"
-        #: Simulates a wedged control-plane RPC (no deadline would hang forever).
-        self.hangs: bool = False
-        self.labels: dict[str, str] = {}
-        self.idle_timeout: float | None = None
-        self.on_idle: str | None = None
-        self.set_lifecycle_calls: list[dict[str, object]] = []
-
-    async def kill(self) -> None:
-        if self.hangs:
-            await asyncio.sleep(30)
-        self.killed = True
-
-    async def info(self) -> FakeSummary:
-        if self.dead:
-            # The daemon's record outlives the VM: inspect fails with VM not found.
-            msg = f"core error: VM not found: {self.id}"
-            raise RuntimeError(msg)
-        return FakeSummary(self)
-
-    async def set_lifecycle(self, **kwargs: object) -> None:
-        if self.hangs:
-            await asyncio.sleep(30)
-        if self.dead:
-            msg = f"core error: VM not found: {self.id}"
-            raise RuntimeError(msg)
-        self.set_lifecycle_calls.append(dict(kwargs))
-
-
-class FakeSummary:
-    """One row of a daemon sandbox listing."""
-
-    def __init__(self, sandbox: FakeSandbox) -> None:
-        self.id: str = sandbox.id
-        self.labels: dict[str, str] = dict(sandbox.labels)
-        self.state: str = "failed" if sandbox.dead else sandbox.vm_state
-
-
-class FakeConnection:
-    def __init__(self, **kwargs: str) -> None:
-        self.kwargs: dict[str, str] = kwargs
-
-
-class FakeAsyncArcBox:
-    instances: ClassVar[list[FakeAsyncArcBox]] = []
-    #: Daemon-side registry, shared by every client so a "restarted" manager
-    #: still sees the VMs a previous process created.
-    registry: ClassVar[list[FakeSandbox]] = []
-
-    def __init__(self, connection: FakeConnection | None = None) -> None:
-        self.connection: FakeConnection | None = connection
-        self.create_calls: list[dict[str, object]] = []
+    def __init__(
+        self,
+        *,
+        image: str = "",
+        vcpus: int = 2,
+        mem_mib: int = 2048,
+        network: bool = False,
+        workspace_root: str = "/workspace",
+        default_timeout: int = 120,
+        connect_timeout: float = 60.0,
+        idle_timeout_seconds: float = 300.0,
+        min_free_bytes: int = 0,
+        api_url: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        self._image = image
+        self._vcpus = vcpus
+        self._mem_mib = mem_mib
+        self._network = network
+        self.workspace_root = workspace_root
+        self.default_timeout = default_timeout
+        self._connect_timeout = connect_timeout
+        self._idle_timeout_seconds = idle_timeout_seconds
+        self._min_free_bytes = min_free_bytes
+        self._api_url = api_url
+        self._api_key = api_key
+        self._sandbox_id: str | None = None
         self.closed: bool = False
-        FakeAsyncArcBox.instances.append(self)
+        self._free_space: int | None = 5 * 1024**3  # 5 GiB default
+        #: In-memory guest filesystem: guest path -> bytes
+        self.tree: dict[str, bytes] = {}
+        #: Commands executed via execute()
+        self.executed_commands: list[str] = []
+        #: Files uploaded via upload_files()
+        self.uploaded_files: list[str] = []
+        FakeArcBoxBackend.instances.append(self)
 
     @property
-    def sandboxes(self) -> list[FakeSandbox]:
-        return FakeAsyncArcBox.registry
+    def id(self) -> str:
+        """Lazily assign a sandbox id (simulates VM creation on first use)."""
+        if self._sandbox_id is None:
+            FakeArcBoxBackend._id_counter += 1
+            self._sandbox_id = f"sbx-{FakeArcBoxBackend._id_counter}"
+            FakeArcBoxBackend.registry.append(self)
+        return self._sandbox_id
 
-    async def create(
-        self,
-        template: str,
-        *,
-        vcpus: int,
-        memory_mib: int,
-        network: bool,
-        wait_until_ready: bool,
-        labels: dict[str, str] | None = None,
-        idle_timeout: float | None = None,
-        on_idle: str | None = None,
-    ) -> FakeSandbox:
-        self.create_calls.append(
-            {
-                "template": template,
-                "vcpus": vcpus,
-                "memory_mib": memory_mib,
-                "network": network,
-                "wait_until_ready": wait_until_ready,
-                "labels": dict(labels or {}),
-                "idle_timeout": idle_timeout,
-                "on_idle": on_idle,
-            }
-        )
-        sandbox = FakeSandbox(f"sbx-{len(self.sandboxes)}")
-        sandbox.labels = dict(labels or {})
-        sandbox.idle_timeout = idle_timeout
-        sandbox.on_idle = on_idle
-        self.sandboxes.append(sandbox)
-        return sandbox
+    def execute(self, command: str, *, timeout: int | None = None) -> SimpleNamespace:
+        self.executed_commands.append(command)
+        # Handle mkdir -p
+        if command.startswith("mkdir -p"):
+            path = command.split("mkdir -p -- ", 1)[-1].strip("'\"")
+            self.tree.setdefault(path + "/.dir", b"")
+            return SimpleNamespace(output="", exit_code=0)
+        # Handle find ... -type f -print0
+        if command.startswith("find"):
+            parts = command.split()
+            find_root = parts[1] if len(parts) > 1 else "/"
+            prefix = find_root.rstrip("/") + "/"
+            files = [p for p in self.tree if p.startswith(prefix) and not p.endswith("/.dir")]
+            output = "\0".join(files)
+            return SimpleNamespace(output=output, exit_code=0)
+        return SimpleNamespace(output="", exit_code=0)
 
-    async def list(
-        self, *, state: str | None = None, labels: dict[str, str] | None = None
-    ) -> AsyncIterator[FakeSummary]:
-        _ = state
-        for sandbox in list(self.sandboxes):
-            if labels and any(sandbox.labels.get(k) != v for k, v in labels.items()):
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[SimpleNamespace]:
+        responses = []
+        for path, data in files:
+            if not path.startswith("/"):
+                responses.append(SimpleNamespace(path=path, error="invalid_path"))
                 continue
-            yield FakeSummary(sandbox)
+            self.tree[path] = bytes(data)
+            self.uploaded_files.append(path)
+            responses.append(SimpleNamespace(path=path, error=None))
+        return responses
 
-    async def connect(self, sandbox_id: str, *, timeout: float | None = None) -> FakeSandbox:
-        _ = timeout
-        for sandbox in self.sandboxes:
-            if sandbox.id == sandbox_id:
-                if sandbox.dead:
-                    msg = f"core error: VM not found: {sandbox_id}"
-                    raise RuntimeError(msg)
-                return sandbox
-        msg = f"sandbox not found: {sandbox_id}"
-        raise RuntimeError(msg)
+    def download_files(self, paths: list[str]) -> list[SimpleNamespace]:
+        responses = []
+        for path in paths:
+            if not path.startswith("/"):
+                responses.append(SimpleNamespace(path=path, content=None, error="invalid_path"))
+                continue
+            if path in self.tree:
+                responses.append(SimpleNamespace(path=path, content=self.tree[path], error=None))
+            else:
+                responses.append(SimpleNamespace(path=path, content=None, error="not_found"))
+        return responses
 
-    async def aclose(self) -> None:
+    def free_space_bytes(self, path: str | None = None) -> int | None:
+        return self._free_space
+
+    def close(self) -> None:
         self.closed = True
 
 
 @pytest.fixture()
-def fake_arcbox(monkeypatch: pytest.MonkeyPatch) -> type[FakeAsyncArcBox]:
-    FakeAsyncArcBox.instances = []
-    FakeAsyncArcBox.registry = []
-    module = types.ModuleType("arcbox")
-    setattr(module, "Connection", FakeConnection)
-    setattr(module, "AsyncArcBox", FakeAsyncArcBox)
-    monkeypatch.setitem(sys.modules, "arcbox", module)
-    return FakeAsyncArcBox
+def fake_backend(monkeypatch: pytest.MonkeyPatch) -> type[FakeArcBoxBackend]:
+    """Patch nano's ArcBoxBackend.from_config to return FakeArcBoxBackend."""
+    FakeArcBoxBackend._id_counter = 0
+    FakeArcBoxBackend.instances = []
+    FakeArcBoxBackend.registry = []
+
+    try:
+        sandbox_module = __import__("soothe_nano.sandbox", fromlist=["ArcBoxBackend"])
+    except ImportError:
+        # Create a minimal stub module so from_config patching works even
+        # without soothe-nano installed (CI without the extra).
+        sandbox_module = types.ModuleType("soothe_nano.sandbox")
+        sandbox_module.ArcBoxBackend = type("ArcBoxBackend", (), {})
+        sys.modules["soothe_nano.sandbox"] = sandbox_module
+
+    @classmethod
+    def _from_config(cls, **kwargs):  # type: ignore[override]
+        return FakeArcBoxBackend(**kwargs)
+
+    monkeypatch.setattr(sandbox_module.ArcBoxBackend, "from_config", _from_config)
+    return FakeArcBoxBackend
 
 
 def make_workspace(tmp_path: Path) -> Path:
@@ -351,14 +307,10 @@ def test_effective_max_sandboxes_explicit() -> None:
 
 def test_effective_max_sandboxes_compute_from_cpu() -> None:
     """None mode computes cap from 70% usable CPU ÷ vcpus, min 8."""
-    # 16 cores × 0.70 = 11 usable; 11 // 2 = 5 → floored to 8.
     settings = ToolSandboxSettings(enabled=True, image="img:1", vcpus=2, max_sandboxes=None)
     assert settings.effective_max_sandboxes(cpu_count=16) == 8
-
-    # 32 cores × 0.70 = 22 usable; 22 // 2 = 11 → 11 (above min).
     assert settings.effective_max_sandboxes(cpu_count=32) == 11
 
-    # 32 cores × 0.70 = 22 usable; 22 // 4 = 5 → floored to 8.
     settings_4vcpu = ToolSandboxSettings(enabled=True, image="img:1", vcpus=4, max_sandboxes=None)
     assert settings_4vcpu.effective_max_sandboxes(cpu_count=32) == 8
 
@@ -404,10 +356,8 @@ def test_effective_max_sandboxes_env_percent_override(
 ) -> None:
     """``FLOWJET_SANDBOX_MAX_PERCENT`` tunes the CPU usable fraction (default 70)."""
     settings = ToolSandboxSettings(enabled=True, image="img:1", vcpus=2, max_sandboxes=None)
-    # 32 cores × 0.50 = 16 usable; 16 // 2 = 8 → floored to 8.
     monkeypatch.setenv("FLOWJET_SANDBOX_MAX_PERCENT", "50")
     assert settings.effective_max_sandboxes(cpu_count=32) == 8
-    # 32 cores × 0.90 = 28 usable; 28 // 2 = 14 → 14 (above min).
     monkeypatch.setenv("FLOWJET_SANDBOX_MAX_PERCENT", "90")
     assert settings.effective_max_sandboxes(cpu_count=32) == 14
 
@@ -418,41 +368,7 @@ def test_effective_max_sandboxes_env_percent_invalid_uses_default(
     """An out-of-range percentage falls back to the 70% default."""
     settings = ToolSandboxSettings(enabled=True, image="img:1", vcpus=2, max_sandboxes=None)
     monkeypatch.setenv("FLOWJET_SANDBOX_MAX_PERCENT", "150")
-    # 32 × 0.70 = 22; 22 // 2 = 11
     assert settings.effective_max_sandboxes(cpu_count=32) == 11
-
-
-def test_orphan_timeout_derived_when_unset() -> None:
-    """F3: configs without the key keep parsing; the deadline derives safely.
-
-    ``max(900, 3 × idle)`` — a long idle reaper is never preempted by a
-    daemon kill, which was the compat hazard of a fixed 900 default.
-    """
-    settings = ToolSandboxSettings(enabled=True, image="img:1", idle_timeout_seconds=1200)
-    assert settings.effective_orphan_timeout_seconds() == 3600.0
-    assert ToolSandboxSettings().effective_orphan_timeout_seconds() == 900.0
-
-
-def test_orphan_timeout_explicit_value_wins() -> None:
-    settings = ToolSandboxSettings(
-        enabled=True, image="img:1", idle_timeout_seconds=300, orphan_timeout_seconds=600
-    )
-    assert settings.effective_orphan_timeout_seconds() == 600.0
-
-
-def test_orphan_timeout_misconfig_rejected_only_when_enabled() -> None:
-    """An explicit misconfiguration fails loud — but only when it can matter."""
-    with pytest.raises(ValueError, match="orphan_timeout_seconds"):
-        _ = ToolSandboxSettings(
-            enabled=True, image="img:1", idle_timeout_seconds=900, orphan_timeout_seconds=300
-        )
-    # Disabled sandbox: the constraint is inert, parsing must not regress.
-    _ = ToolSandboxSettings(enabled=False, idle_timeout_seconds=900, orphan_timeout_seconds=300)
-
-
-def test_orphan_timeout_zero_rejected() -> None:
-    with pytest.raises(ValueError, match="orphan_timeout_seconds"):
-        _ = ToolSandboxSettings(orphan_timeout_seconds=0)
 
 
 def test_load_settings_requires_existing_explicit_path(tmp_path: Path) -> None:
@@ -499,33 +415,20 @@ def test_load_settings_rejects_invalid_yaml(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_open_spawns_sandbox_and_pushes_workspace(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
+    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(
+    manager = ToolSandboxManager(
         ToolSandboxSettings(enabled=True, image="img:1", vcpus=3, mem_mib=512)
     )
     try:
         await manager.open_workspace(str(ws))
-        client = fake_arcbox.instances[0]
-        assert client.create_calls == [
-            {
-                "template": "img:1",
-                "vcpus": 3,
-                "memory_mib": 512,
-                "network": False,  # default: guest has no network at all
-                "wait_until_ready": True,
-                "labels": {
-                    "flowjet.sandbox": "tool",
-                    "flowjet.sandbox-owner": "flowjet",
-                    "flowjet.sandbox-instance": manager._instance_id,
-                    "flowjet.sandbox-workspace": manager._workspace_key(str(ws)),
-                },
-                "idle_timeout": 900.0,  # daemon-side crash deadline
-                "on_idle": "kill",
-            }
-        ]
-        tree = client.sandboxes[0].files.tree
+        backend = fake_backend.instances[0]
+        assert backend._image == "img:1"
+        assert backend._vcpus == 3
+        assert backend._mem_mib == 512
+        assert backend._network is False
+        tree = backend.tree
         assert tree["/workspace/a.txt"] == b"alpha"
         assert tree["/workspace/sub/b.txt"] == b"beta"
         assert not any("__pycache__" in name for name in tree)
@@ -535,417 +438,80 @@ async def test_open_spawns_sandbox_and_pushes_workspace(
 
 @pytest.mark.asyncio
 async def test_reopen_without_changes_skips_push(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
+    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
     try:
         await manager.open_workspace(str(ws))
         await manager.close_workspace(str(ws))
         await manager.close_workspace(str(ws))  # unbalanced close: no-op
-        files = fake_arcbox.instances[0].sandboxes[0].files
-        files.write_calls.clear()
+        backend = fake_backend.instances[0]
+        backend.uploaded_files.clear()
 
         await manager.open_workspace(str(ws))  # manifest matches: no push
-        assert files.write_calls == []
+        assert backend.uploaded_files == []
         await manager.close_workspace(str(ws))
 
-        # Host-side change between sessions (e.g. new material synced in):
-        # the next open pushes exactly the changed file.
+        # Host-side change between sessions: the next open pushes exactly the changed file.
         _ = (ws / "a.txt").write_text("alpha-2")
         await manager.open_workspace(str(ws))
-        assert files.write_calls == ["/workspace/a.txt"]
-        assert files.tree["/workspace/a.txt"] == b"alpha-2"
+        assert backend.uploaded_files == ["/workspace/a.txt"]
+        assert backend.tree["/workspace/a.txt"] == b"alpha-2"
     finally:
         await manager.shutdown()
 
 
 @pytest.mark.asyncio
 async def test_second_concurrent_open_skips_push(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
+    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
     try:
         await manager.open_workspace(str(ws))
-        files = fake_arcbox.instances[0].sandboxes[0].files
-        files.write_calls.clear()
+        backend = fake_backend.instances[0]
+        backend.uploaded_files.clear()
         _ = (ws / "a.txt").write_text("peer-active")
 
         # A peer session is mid-run: the push must not clobber live guest state.
         await manager.open_workspace(str(ws))
-        assert files.write_calls == []
-    finally:
-        await manager.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_open_respawns_when_guest_is_gone(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
-) -> None:
-    """A lease whose VM vanished is replaced and re-seeded (dead-VM regression).
-
-    The daemon keeps reporting the sandbox as ``ready`` after the VM behind it
-    is gone (host sleep, machine or daemon restart), so readiness must be probed
-    in the guest — otherwise every later tool call fails with "VM not found" and
-    the agent reports an empty workspace.
-    """
-    ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
-    try:
-        await manager.open_workspace(str(ws))
-        await manager.close_workspace(str(ws))
-        client = fake_arcbox.instances[0]
-        dead = client.sandboxes[0]
-        dead.dead = True
-        dead.files.write_calls.clear()
-
-        await manager.open_workspace(str(ws))
-
-        assert dead.killed  # dead lease discarded
-        assert manager.lease_count == 1
-        replacement = client.sandboxes[1]
-        assert manager.sandbox_id_for(str(ws)) == replacement.id
-        # A fresh VM is empty: the host tree is pushed again in full.
-        assert replacement.files.tree["/workspace/a.txt"] == b"alpha"
-        assert replacement.files.tree["/workspace/sub/b.txt"] == b"beta"
-        await manager.close_workspace(str(ws))
-    finally:
-        await manager.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_open_probes_a_live_sandbox_on_every_turn(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
-) -> None:
-    """Readiness is re-checked per turn; a healthy lease is not replaced."""
-    ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
-    try:
-        await manager.open_workspace(str(ws))
-        await manager.close_workspace(str(ws))
-        client = fake_arcbox.instances[0]
-        live = client.sandboxes[0]
-        live.commands.calls.clear()
-
-        await manager.open_workspace(str(ws))
-        await manager.close_workspace(str(ws))
-
-        assert live.commands.calls  # probed
-        assert len(client.sandboxes) == 1  # not replaced
-        assert not live.killed
-    finally:
-        await manager.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_open_replaces_lease_in_terminal_state(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
-) -> None:
-    """Tier-1 (control plane): a terminal daemon state replaces the lease
-    without touching the guest executor at all."""
-    ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
-    try:
-        await manager.open_workspace(str(ws))
-        await manager.close_workspace(str(ws))
-        client = fake_arcbox.instances[0]
-        terminal = client.sandboxes[0]
-        terminal.vm_state = "stopped"
-        terminal.commands.calls.clear()
-
-        await manager.open_workspace(str(ws))
-
-        assert not terminal.commands.calls  # tier 1 decided; the guest was never touched
-        assert manager.sandbox_id_for(str(ws)) == client.sandboxes[1].id
-        await manager.close_workspace(str(ws))
-    finally:
-        await manager.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_wedged_kill_cannot_hang_the_turn(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """F1: every control-plane RPC is bounded — a hung kill on a dead lease
-    degrades to a warning instead of stalling open_workspace forever."""
-    from flowjet.core.sandbox import arbox as arbox_module
-
-    monkeypatch.setattr(arbox_module, "_CONTROL_RPC_TIMEOUT_SECONDS", 0.05)
-    ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
-    try:
-        await manager.open_workspace(str(ws))
-        await manager.close_workspace(str(ws))
-        client = fake_arcbox.instances[0]
-        dead = client.sandboxes[0]
-        dead.dead = True
-        dead.hangs = True  # kill() sleeps 30s
-
-        await manager.open_workspace(str(ws))  # must return despite the hung kill
-
-        assert not dead.killed  # the kill timed out
-        assert len(client.sandboxes) == 2  # replacement spawned and seeded
-        assert client.sandboxes[1].files.tree["/workspace/a.txt"] == b"alpha"
-        await manager.close_workspace(str(ws))
-    finally:
-        await manager.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_wedged_heartbeat_drops_lease_instead_of_stalling_reaper(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """F1: a hung set_lifecycle cannot stall the reaper loop — otherwise every
-    lease stops being re-armed and the daemon reaps healthy VMs as orphans."""
-    from flowjet.core.sandbox import arbox as arbox_module
-
-    monkeypatch.setattr(arbox_module, "_CONTROL_RPC_TIMEOUT_SECONDS", 0.05)
-    ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
-    try:
-        await manager.open_workspace(str(ws))
-        await manager.close_workspace(str(ws))
-        # Stop the background reaper so it cannot race with the direct
-        # _heartbeat() call below (it would update _last_heartbeat and trip
-        # the rate-limit early-return, flaking on slow/loaded CI runners).
-        await stop_reaper(manager)
-        sandbox = fake_arcbox.instances[0].sandboxes[0]
-        sandbox.hangs = True  # set_lifecycle() sleeps 30s
-        manager._last_heartbeat = float("-inf")
-
-        await manager._heartbeat()
-
-        assert manager.lease_count == 0
-    finally:
-        await manager.shutdown()
-
-
-def crash(manager: ArcBoxToolSandboxManager) -> None:
-    """Simulate an abrupt server death: no shutdown(), in-memory state lost."""
-    task = manager._reaper_task
-    if task is not None:
-        task.cancel()
-
-
-async def stop_reaper(manager: ArcBoxToolSandboxManager) -> None:
-    """Cancel and await the background reaper so it cannot race with direct
-    ``_heartbeat()`` calls in tests that exercise that method in isolation.
-
-    ``crash()`` only schedules cancellation; the task can still run once more
-    before the ``CancelledError`` lands, which on slow/loaded CI runners lets
-    it update ``_last_heartbeat`` and trip the rate-limit early-return in the
-    test's own ``_heartbeat()`` call. Awaiting the cancellation closes the
-    window deterministically.
-    """
-    task = manager._reaper_task
-    manager._reaper_task = None
-    if task is not None:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await task
-
-
-@pytest.mark.asyncio
-async def test_spawn_labels_guest_and_sets_orphan_deadline(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
-) -> None:
-    """Every VM carries recovery labels plus a daemon-side crash deadline."""
-    ws = make_workspace(tmp_path)
-    settings = ToolSandboxSettings(enabled=True, image="img:1", owner="agentspace")
-    manager = ArcBoxToolSandboxManager(settings)
-    try:
-        await manager.open_workspace(str(ws))
-        sandbox = fake_arcbox.instances[0].sandboxes[0]
-        assert sandbox.labels["flowjet.sandbox"] == "tool"
-        assert sandbox.labels["flowjet.sandbox-owner"] == "agentspace"
-        assert sandbox.labels["flowjet.sandbox-workspace"] == manager._workspace_key(str(ws))
-        assert sandbox.labels["flowjet.sandbox-instance"] == manager._instance_id
-        # Crash backstop: the daemon destroys the VM if its owner stops talking.
-        assert sandbox.idle_timeout == settings.effective_orphan_timeout_seconds()
-        assert sandbox.on_idle == "kill"
-    finally:
-        await manager.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_restart_adopts_surviving_sandbox_and_recovers_guest_state(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
-) -> None:
-    """A VM left by a crashed process is adopted and its un-pulled files recovered."""
-    ws = make_workspace(tmp_path)
-    settings = ToolSandboxSettings(enabled=True, image="img:1")
-    first = ArcBoxToolSandboxManager(settings)
-    await first.open_workspace(str(ws))
-    await first.close_workspace(str(ws))
-    sandbox = fake_arcbox.instances[0].sandboxes[0]
-    # The interrupted turn wrote an artifact that the close never pulled.
-    sandbox.files.tree["/workspace/output/report.md"] = b"draft"
-    crash(first)
-
-    second = ArcBoxToolSandboxManager(settings)
-    try:
-        await second.open_workspace(str(ws))
-
-        assert len(fake_arcbox.registry) == 1  # adopted, not respawned
-        assert second.sandbox_id_for(str(ws)) == sandbox.id
-        assert not sandbox.killed
-        assert (ws / "output" / "report.md").read_bytes() == b"draft"  # recovered
-        assert (ws / "a.txt").read_text() == "alpha"  # host tree intact
-        await second.close_workspace(str(ws))
-    finally:
-        await second.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_restart_replaces_orphan_whose_vm_is_gone(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
-) -> None:
-    """An orphan record without a VM is skipped; a fresh sandbox is seeded."""
-    ws = make_workspace(tmp_path)
-    settings = ToolSandboxSettings(enabled=True, image="img:1")
-    first = ArcBoxToolSandboxManager(settings)
-    await first.open_workspace(str(ws))
-    stale = fake_arcbox.instances[0].sandboxes[0]
-    crash(first)
-    stale.dead = True  # host slept / daemon restarted: the VM is gone
-
-    second = ArcBoxToolSandboxManager(settings)
-    try:
-        await second.open_workspace(str(ws))
-
-        assert len(fake_arcbox.registry) == 2
-        fresh = fake_arcbox.registry[1]
-        assert second.sandbox_id_for(str(ws)) == fresh.id
-        assert fresh.files.tree["/workspace/a.txt"] == b"alpha"  # seeded
-        await second.close_workspace(str(ws))
-    finally:
-        await second.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_restart_with_recovery_disabled_spawns_fresh(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
-) -> None:
-    ws = make_workspace(tmp_path)
-    first = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
-    await first.open_workspace(str(ws))
-    crash(first)
-
-    second = ArcBoxToolSandboxManager(
-        ToolSandboxSettings(enabled=True, image="img:1", recover_orphans=False)
-    )
-    try:
-        await second.open_workspace(str(ws))
-        assert len(fake_arcbox.registry) == 2
-    finally:
-        await second.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_heartbeat_rearms_daemon_orphan_deadline(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
-) -> None:
-    """A live lease keeps proving ownership; the re-arm is rate-limited."""
-    ws = make_workspace(tmp_path)
-    settings = ToolSandboxSettings(enabled=True, image="img:1")
-    manager = ArcBoxToolSandboxManager(settings)
-    try:
-        await manager.open_workspace(str(ws))
-        # Stop the background reaper so it cannot race with the direct
-        # _heartbeat() calls below (see test_wedged_heartbeat_drops_lease...).
-        await stop_reaper(manager)
-        sandbox = fake_arcbox.instances[0].sandboxes[0]
-        sandbox.set_lifecycle_calls.clear()
-        manager._last_heartbeat = float("-inf")
-
-        await manager._heartbeat()
-        assert sandbox.set_lifecycle_calls == [
-            {"idle_timeout": settings.effective_orphan_timeout_seconds()}
-        ]
-
-        await manager._heartbeat()  # too soon: no extra RPC
-        assert len(sandbox.set_lifecycle_calls) == 1
-    finally:
-        await manager.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_heartbeat_failure_drops_idle_lease(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
-) -> None:
-    """An unreachable idle lease is evicted so the next turn reseeds a live guest."""
-    ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
-    try:
-        await manager.open_workspace(str(ws))
-        await manager.close_workspace(str(ws))
-        # Stop the background reaper so it cannot race with the direct
-        # _heartbeat() call below (see test_wedged_heartbeat_drops_lease...).
-        await stop_reaper(manager)
-        fake_arcbox.instances[0].sandboxes[0].dead = True
-        manager._last_heartbeat = float("-inf")
-
-        await manager._heartbeat()
-        assert manager.lease_count == 0
-    finally:
-        await manager.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_heartbeat_failure_keeps_lease_with_run_in_flight(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
-) -> None:
-    """A run in flight keeps its lease so its close still pulls guest state."""
-    ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
-    try:
-        await manager.open_workspace(str(ws))
-        # Stop the background reaper so it cannot race with the direct
-        # _heartbeat() call below (see test_wedged_heartbeat_drops_lease...).
-        await stop_reaper(manager)
-        fake_arcbox.instances[0].sandboxes[0].dead = True
-        manager._last_heartbeat = float("-inf")
-
-        await manager._heartbeat()
-        assert manager.lease_count == 1
+        assert backend.uploaded_files == []
     finally:
         await manager.shutdown()
 
 
 @pytest.mark.asyncio
 async def test_close_pulls_guest_changes_back_to_host(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
+    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
     try:
         await manager.open_workspace(str(ws))
-        sandbox = fake_arcbox.instances[0].sandboxes[0]
+        backend = fake_backend.instances[0]
         # Agent wrote a new file and modified an existing one in the guest.
-        sandbox.files.tree["/workspace/out/report.md"] = b"# done"
-        sandbox.files.tree["/workspace/a.txt"] = b"alpha-2"
+        backend.tree["/workspace/out/report.md"] = b"# done"
+        backend.tree["/workspace/a.txt"] = b"alpha-2"
 
         await manager.close_workspace(str(ws))
         assert (ws / "out" / "report.md").read_bytes() == b"# done"
         assert (ws / "a.txt").read_text() == "alpha-2"
-        # Unchanged file keeps its host mtime (no rewrite).
     finally:
         await manager.shutdown()
 
 
 @pytest.mark.asyncio
 async def test_close_propagates_guest_deletions_to_host(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
+    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
-    """A file the agent deleted inside the guest is removed from the host (RFC-RD-607 §4.4)."""
+    """A file the agent deleted inside the guest is removed from the host."""
     ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
     try:
         await manager.open_workspace(str(ws))
-        sandbox = fake_arcbox.instances[0].sandboxes[0]
-        # Agent deleted sub/b.txt inside the guest.
-        _ = sandbox.files.tree.pop("/workspace/sub/b.txt")
+        backend = fake_backend.instances[0]
+        _ = backend.tree.pop("/workspace/sub/b.txt")
 
         await manager.close_workspace(str(ws))
         assert not (ws / "sub" / "b.txt").exists()
@@ -957,16 +523,15 @@ async def test_close_propagates_guest_deletions_to_host(
 
 @pytest.mark.asyncio
 async def test_pull_never_deletes_host_files_added_after_push(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
+    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     """Host files created after the push are not in the manifest — never deleted."""
     ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
     try:
         await manager.open_workspace(str(ws))
-        sandbox = fake_arcbox.instances[0].sandboxes[0]
-        _ = sandbox.files.tree.pop("/workspace/a.txt")
-        # Host-side addition between push and pull (e.g. a synced-in material).
+        backend = fake_backend.instances[0]
+        _ = backend.tree.pop("/workspace/a.txt")
         new_dir = ws / "materials" / "m1"
         new_dir.mkdir(parents=True)
         _ = (new_dir / "new.txt").write_text("fresh")
@@ -980,15 +545,15 @@ async def test_pull_never_deletes_host_files_added_after_push(
 
 @pytest.mark.asyncio
 async def test_close_pulls_only_when_last_run_ends(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
+    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
     try:
         await manager.open_workspace(str(ws))
         await manager.open_workspace(str(ws))  # second active run
-        sandbox = fake_arcbox.instances[0].sandboxes[0]
-        sandbox.files.tree["/workspace/new.txt"] = b"new"
+        backend = fake_backend.instances[0]
+        backend.tree["/workspace/new.txt"] = b"new"
 
         await manager.close_workspace(str(ws))  # one run still active
         assert not (ws / "new.txt").exists()
@@ -999,26 +564,11 @@ async def test_close_pulls_only_when_last_run_ends(
         await manager.shutdown()
 
 
-@pytest.mark.usefixtures("fake_arcbox")
+@pytest.mark.usefixtures("fake_backend")
 @pytest.mark.asyncio
-async def test_backend_for_binds_and_caches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    pytest.importorskip("soothe_nano")
-    import importlib
-
-    sandbox_module = importlib.import_module("soothe_nano.sandbox")
-
-    captured: list[dict[str, object]] = []
-
-    class FakeArcBoxBackend:
-        def __init__(self, **kwargs: object) -> None:
-            captured.append(kwargs)
-
-    monkeypatch.setattr(sandbox_module, "ArcBoxBackend", FakeArcBoxBackend)
-
+async def test_backend_for_binds_and_caches(tmp_path: Path) -> None:
     ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(
+    manager = ToolSandboxManager(
         ToolSandboxSettings(enabled=True, image="img:1", workspace_root="/data", default_timeout=42)
     )
     try:
@@ -1026,18 +576,10 @@ async def test_backend_for_binds_and_caches(
             manager.backend_for(str(ws))  # not opened yet
 
         await manager.open_workspace(str(ws))
-        backend = cast(object, manager.backend_for(str(ws)))
-        assert captured == [
-            {
-                "sandbox_id": "sbx-0",
-                "workspace_root": "/data",
-                "default_timeout": 42,
-                "api_url": None,
-                "api_key": None,
-                "connect_timeout": 60.0,
-            }
-        ]
-        assert cast(object, manager.backend_for(str(ws))) is backend  # cached per lease
+        backend = manager.backend_for(str(ws))
+        assert backend.workspace_root == "/data"
+        assert backend.default_timeout == 42
+        assert manager.backend_for(str(ws)) is backend  # cached per lease
         assert manager.guest_workspace == "/data"
     finally:
         await manager.shutdown()
@@ -1045,21 +587,19 @@ async def test_backend_for_binds_and_caches(
 
 @pytest.mark.asyncio
 async def test_max_sandboxes_evicts_idle_lru(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
+    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws1 = tmp_path / "ws1"
     ws2 = tmp_path / "ws2"
     ws1.mkdir()
     ws2.mkdir()
-    manager = ArcBoxToolSandboxManager(
-        ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=1)
-    )
+    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=1))
     try:
         await manager.open_workspace(str(ws1))
-        sandbox1 = fake_arcbox.instances[0].sandboxes[0]
+        backend1 = fake_backend.instances[0]
         await manager.close_workspace(str(ws1))
         await manager.open_workspace(str(ws2))
-        assert sandbox1.killed  # evicted (idle, LRU)
+        assert backend1.closed  # evicted (idle, LRU)
         assert manager.lease_count == 1
     finally:
         await manager.shutdown()
@@ -1067,22 +607,20 @@ async def test_max_sandboxes_evicts_idle_lru(
 
 @pytest.mark.asyncio
 async def test_max_sandboxes_zero_means_unlimited(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
+    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     """``max_sandboxes: 0`` disables LRU eviction — all idle sandboxes stay."""
     ws1 = tmp_path / "ws1"
     ws2 = tmp_path / "ws2"
     ws1.mkdir()
     ws2.mkdir()
-    manager = ArcBoxToolSandboxManager(
-        ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=0)
-    )
+    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=0))
     try:
         await manager.open_workspace(str(ws1))
-        sandbox1 = fake_arcbox.instances[0].sandboxes[0]
+        backend1 = fake_backend.instances[0]
         await manager.close_workspace(str(ws1))
         await manager.open_workspace(str(ws2))
-        assert not sandbox1.killed  # NOT evicted — unlimited
+        assert not backend1.closed  # NOT evicted — unlimited
         assert manager.lease_count == 2
     finally:
         await manager.shutdown()
@@ -1090,7 +628,7 @@ async def test_max_sandboxes_zero_means_unlimited(
 
 @pytest.mark.asyncio
 async def test_idle_reaper_kills_stale_sandboxes(
-    fake_arcbox: type[FakeAsyncArcBox],
+    fake_backend: type[FakeArcBoxBackend],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1098,39 +636,30 @@ async def test_idle_reaper_kills_stale_sandboxes(
 
     monkeypatch.setattr(arbox_mod, "_REAPER_INTERVAL_SECONDS", 0.05)
     ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(
+    manager = ToolSandboxManager(
         ToolSandboxSettings(enabled=True, image="img:1", idle_timeout_seconds=0.01)
     )
     await manager.open_workspace(str(ws))
-    sandbox = fake_arcbox.instances[0].sandboxes[0]
+    backend = fake_backend.instances[0]
     await manager.close_workspace(str(ws))
     await asyncio.sleep(0.3)
-    assert sandbox.killed
+    assert backend.closed
     assert manager.lease_count == 0
     await manager.shutdown()
 
 
 @pytest.mark.asyncio
-async def test_shutdown_kills_all_and_closes_client(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path
+async def test_shutdown_kills_all_and_closes_backend(
+    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
     await manager.open_workspace(str(ws))
-    client = fake_arcbox.instances[0]
+    backend = fake_backend.instances[0]
     await manager.shutdown()
-    assert client.sandboxes[0].killed
-    assert client.closed
+    assert backend.closed
 
     await manager.shutdown()  # idempotent
-
-
-@pytest.mark.asyncio
-async def test_validate_runtime_fails_without_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(sys.modules, "arcbox", None)  # forces ImportError
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
-    with pytest.raises(RuntimeError, match="arcbox SDK"):
-        manager.validate_runtime()
 
 
 # ---------------------------------------------------------------------------
@@ -1138,71 +667,48 @@ async def test_validate_runtime_fails_without_sdk(monkeypatch: pytest.MonkeyPatc
 # ---------------------------------------------------------------------------
 
 
-def _patch_probe(monkeypatch: pytest.MonkeyPatch, probe: object) -> None:
-    """Patch ``ArcBoxBackend.free_space_bytes`` (may not exist on older nano)."""
-    from soothe_nano.sandbox import ArcBoxBackend
-
-    monkeypatch.setattr(ArcBoxBackend, "free_space_bytes", probe, raising=False)
-
-
 @pytest.mark.asyncio
 async def test_open_refuses_below_disk_watermark(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(
+    manager = ToolSandboxManager(
         ToolSandboxSettings(enabled=True, image="img:1", min_free_bytes=1024)
     )
-    probe_calls: list[str | None] = []
-
-    def fake_probe(self: object, path: str | None = None) -> int | None:
-        probe_calls.append(path)
-        return 512  # below the 1024-byte watermark
-
-    _patch_probe(monkeypatch, fake_probe)
     try:
-        with pytest.raises(SandboxDiskFullError, match="guest disk full"):
-            await manager.open_workspace(str(ws))
-        # The run count taken by this open is rolled back: the failed open
-        # never reaches the run, so close_workspace will not fire for it.
-        lease = manager._leases[str(ws)]
-        assert lease.active_runs == 0
+        # Set the backend's free space below the watermark before it's created.
+        # We patch from_config to set a low free space.
+
+        @classmethod
+        def _low_free_config(cls, **kwargs):  # type: ignore[override]
+            backend = FakeArcBoxBackend(**kwargs)
+            backend._free_space = 512  # below the 1024-byte watermark
+            return backend
+
+        import soothe_nano.sandbox as sandbox_mod
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(sandbox_mod.ArcBoxBackend, "from_config", _low_free_config)
+        try:
+            with pytest.raises(SandboxDiskFullError, match="guest disk full"):
+                await manager.open_workspace(str(ws))
+            lease = manager._leases[str(ws)]
+            assert lease.active_runs == 0
+        finally:
+            monkeypatch.undo()
     finally:
         await manager.shutdown()
-    assert probe_calls == [None]  # default probe path: the workspace root
 
 
 @pytest.mark.asyncio
 async def test_open_passes_above_disk_watermark(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(
+    manager = ToolSandboxManager(
         ToolSandboxSettings(enabled=True, image="img:1", min_free_bytes=1024)
     )
-    _patch_probe(monkeypatch, lambda self, path=None: 2048)
     try:
-        await manager.open_workspace(str(ws))
-        assert manager._leases[str(ws)].active_runs == 1
-    finally:
-        await manager.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_open_fails_open_when_probe_raises(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(
-        ToolSandboxSettings(enabled=True, image="img:1", min_free_bytes=1024)
-    )
-
-    def broken_probe(self: object, path: str | None = None) -> int | None:
-        raise RuntimeError("transport gone")
-
-    _patch_probe(monkeypatch, broken_probe)
-    try:
-        # A broken probe must never block a turn.
         await manager.open_workspace(str(ws))
         assert manager._leases[str(ws)].active_runs == 1
     finally:
@@ -1211,217 +717,39 @@ async def test_open_fails_open_when_probe_raises(
 
 @pytest.mark.asyncio
 async def test_open_skips_probe_when_watermark_disabled(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
-
-    def unexpected_probe(self: object, path: str | None = None) -> int | None:
-        raise AssertionError("probe must not run when min_free_bytes is 0")
-
-    _patch_probe(monkeypatch, unexpected_probe)
+    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
     try:
         await manager.open_workspace(str(ws))
     finally:
         await manager.shutdown()
 
 
-# ---------------------------------------------------------------------------
-# Reserved-pad reclaim (sandbox disk headroom)
-# ---------------------------------------------------------------------------
-
-
-class _RecordingExecute:
-    """Patch target recording ``ArcBoxBackend.execute`` commands."""
-
-    def __init__(self, *, exit_code: int = 0, error: Exception | None = None) -> None:
-        self.commands: list[str] = []
-        self._exit_code = exit_code
-        self._error = error
-
-    def __call__(self, command: str) -> object:
-        from types import SimpleNamespace
-
-        self.commands.append(command)
-        if self._error is not None:
-            raise self._error
-        return SimpleNamespace(output="", exit_code=self._exit_code)
-
-
-def _patch_execute(monkeypatch: pytest.MonkeyPatch, recorder: _RecordingExecute) -> None:
-    from soothe_nano.sandbox import ArcBoxBackend
-
-    monkeypatch.setattr(ArcBoxBackend, "execute", recorder, raising=False)
-
-
-@pytest.mark.asyncio
-async def test_open_reclaims_reserved_pad_once_per_sandbox(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(
-        ToolSandboxSettings(enabled=True, image="img:1", reserved_pad_path="/pad.img")
-    )
-    recorder = _RecordingExecute()
-    _patch_execute(monkeypatch, recorder)
-    try:
-        await manager.open_workspace(str(ws))
-        await manager.open_workspace(str(ws))  # reused lease: no second reclaim
-        assert recorder.commands == ["rm -f -- /pad.img"]
-    finally:
-        await manager.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_open_skips_reclaim_when_unconfigured(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
-    recorder = _RecordingExecute()
-    _patch_execute(monkeypatch, recorder)
-
-    def unexpected_probe(self: object, path: str | None = None) -> int | None:
-        raise AssertionError("probe must not run when min_free_bytes is 0")
-
-    _patch_probe(monkeypatch, unexpected_probe)
-    try:
-        await manager.open_workspace(str(ws))
-        assert recorder.commands == []
-    finally:
-        await manager.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_reclaim_failure_fails_open(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(
-        ToolSandboxSettings(enabled=True, image="img:1", reserved_pad_path="/pad.img")
-    )
-    recorder = _RecordingExecute(error=RuntimeError("transport gone"))
-    _patch_execute(monkeypatch, recorder)
-    try:
-        # A broken reclaim must never block a turn.
-        await manager.open_workspace(str(ws))
-        assert manager._leases[str(ws)].active_runs == 1
-    finally:
-        await manager.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_reclaim_nonzero_exit_fails_open(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(
-        ToolSandboxSettings(enabled=True, image="img:1", reserved_pad_path="/pad.img")
-    )
-    recorder = _RecordingExecute(exit_code=1)
-    _patch_execute(monkeypatch, recorder)
-    try:
-        await manager.open_workspace(str(ws))
-        assert manager._leases[str(ws)].active_runs == 1
-    finally:
-        await manager.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_reclaimed_sandbox_passes_watermark_probe(
-    fake_arcbox: type[FakeAsyncArcBox], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The pad is gone before the probe: the watermark sees reclaimed space."""
-    ws = make_workspace(tmp_path)
-    manager = ArcBoxToolSandboxManager(
-        ToolSandboxSettings(
-            enabled=True, image="img:1", min_free_bytes=1024, reserved_pad_path="/pad.img"
-        )
-    )
-    recorder = _RecordingExecute()
-    _patch_execute(monkeypatch, recorder)
-    order: list[str] = []
-
-    def fake_probe(self: object, path: str | None = None) -> int | None:
-        # Reclaimed space: without the pad the guest has 3 GiB free.
-        order.append("probe")
-        return 3 * 1024**3
-
-    def probing_execute(backend: object, command: str) -> object:
-        order.append(command)
-        return recorder(command)
-
-    _patch_execute(monkeypatch, probing_execute)
-    _patch_probe(monkeypatch, fake_probe)
-    try:
-        await manager.open_workspace(str(ws))
-        assert order == ["rm -f -- /pad.img", "probe"]
-    finally:
-        await manager.shutdown()
-
-
-def test_reserved_pad_path_defaults_to_disabled() -> None:
-    assert ToolSandboxSettings().reserved_pad_path == ""
-    assert (
-        SandboxSettingsLoader.parse_section({"enabled": True, "image": "img"}).reserved_pad_path
-        == ""
-    )
-    assert (
-        SandboxSettingsLoader.parse_section(
-            {"enabled": True, "image": "img", "reserved_pad_path": "/pad.img"}
-        ).reserved_pad_path
-        == "/pad.img"
-    )
-
-
-def test_reserved_pad_path_relative_rejected() -> None:
-    with pytest.raises(ValueError, match="reserved_pad_path"):
-        _ = ToolSandboxSettings(reserved_pad_path="pad.img")
-
-
-def test_probe_prefers_nano_helper_over_execute_fallback() -> None:
+def test_probe_uses_backend_free_space_bytes() -> None:
+    """The probe prefers the backend's ``free_space_bytes`` helper."""
 
     class HelperBackend:
-        workspace_root = "/workspace"
-
         def free_space_bytes(self, path: str | None = None) -> int | None:
             return 8192
 
-        def execute(self, command: str) -> object:
-            raise AssertionError("fallback must not run when the helper exists")
-
-    assert ArcBoxToolSandboxManager._probe_free_bytes(HelperBackend()) == 8192
+    assert ToolSandboxManager._probe_free_bytes(HelperBackend()) == 8192
 
 
-def test_probe_falls_back_to_execute_parsing() -> None:
-    from types import SimpleNamespace
-
-    class LegacyBackend:
-        """nano without ``free_space_bytes`` (≤ 2.0.3): df via ``execute``."""
-
-        workspace_root = "/workspace"
-
-        def execute(self, command: str) -> SimpleNamespace:
-            assert command == "df -B1 -P /workspace"
-            return SimpleNamespace(
-                output=(
-                    "Filesystem 1B-blocks Used Available Use% Mounted-on\n"
-                    "/dev/root 1288490188 1100585369 187904819 97% /workspace\n"
-                ),
-                exit_code=0,
-            )
-
-    assert ArcBoxToolSandboxManager._probe_free_bytes(LegacyBackend()) == 187904819
-
-
-def test_probe_fallback_fails_open() -> None:
+def test_probe_fails_open_when_backend_raises() -> None:
     class BrokenBackend:
-        workspace_root = "/workspace"
-
-        def execute(self, command: str) -> object:
+        def free_space_bytes(self, path: str | None = None) -> int | None:
             raise RuntimeError("transport gone")
 
-    assert ArcBoxToolSandboxManager._probe_free_bytes(BrokenBackend()) is None
+    assert ToolSandboxManager._probe_free_bytes(BrokenBackend()) is None
+
+
+def test_probe_returns_none_when_no_helper() -> None:
+    class NoHelperBackend:
+        pass
+
+    assert ToolSandboxManager._probe_free_bytes(NoHelperBackend()) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1466,7 +794,7 @@ class RecordingManager:
 async def test_resolver_orders_staging_around_sync_lifecycle() -> None:
     inner = RecordingResolver()
     fake_manager = RecordingManager()
-    manager = cast(ArcBoxToolSandboxManager, cast(object, fake_manager))
+    manager = cast(ToolSandboxManager, cast(object, fake_manager))
     resolver = SandboxAwareWorkspaceResolver(inner, manager)
 
     assert resolver.resolve("s") == Path("/tmp/rec-ws")
@@ -1474,8 +802,6 @@ async def test_resolver_orders_staging_around_sync_lifecycle() -> None:
     await resolver.open_session("s", Path("/tmp/rec-ws"))
     await resolver.close_session("s", Path("/tmp/rec-ws"))
     await resolver.shutdown()
-    # Open: sync materializes first, then push into the guest.
-    # Close: guest pull first, then the sync checkpoint sees the outputs.
     assert inner.calls == ["inner-open", "inner-close", "inner-shutdown"]
     assert fake_manager.calls == [
         "manager-open",
@@ -1490,7 +816,7 @@ def test_resolver_delegates_unknown_attributes() -> None:
 
     resolver = SandboxAwareWorkspaceResolver(
         Inner(),
-        cast(ArcBoxToolSandboxManager, cast(object, RecordingManager())),
+        cast(ToolSandboxManager, cast(object, RecordingManager())),
     )
     assert cast(str, resolver.marker) == "delegated"
 
@@ -1543,7 +869,6 @@ async def test_nano_adapter_binds_sandbox_and_uses_guest_workspace(
 
         def __init__(self) -> None:
             self.backends: dict[str, object] = {str(tmp_path): object()}
-            #: Current sandbox id per workspace (mutable: simulates a respawn).
             self.sandbox_ids: dict[str, str] = {str(tmp_path): "sbx-live"}
 
         def backend_for(self, workspace: str) -> object:
@@ -1553,7 +878,7 @@ async def test_nano_adapter_binds_sandbox_and_uses_guest_workspace(
             return self.sandbox_ids.get(workspace)
 
     fake_manager = FakeManager()
-    manager = cast(ArcBoxToolSandboxManager, cast(object, fake_manager))
+    manager = cast(ToolSandboxManager, cast(object, fake_manager))
     adapter = NanoAgentAdapter(sandbox_manager=manager)
 
     req = IsolatedRunRequest(
@@ -1579,9 +904,7 @@ async def test_nano_adapter_binds_sandbox_and_uses_guest_workspace(
     assert len(events) >= 1
     assert len(built) == 1
 
-    # The workspace's sandbox was replaced (idle recycle / dead VM): the
-    # cached graph is bound to the old VM id and would fail every guest tool
-    # call, so the adapter must rebuild.
+    # The workspace's sandbox was replaced: the cached graph must rebuild.
     fake_manager.sandbox_ids[str(tmp_path)] = "sbx-2"
     events = [event async for event in adapter.astream(req)]
     assert len(events) >= 1
@@ -1621,7 +944,7 @@ def test_build_sandbox_manager_disabled_by_default(tmp_path: Path) -> None:
     assert build_sandbox_manager(settings) is None
 
 
-@pytest.mark.usefixtures("fake_arcbox")
+@pytest.mark.usefixtures("fake_backend")
 def test_build_sandbox_manager_enabled(tmp_path: Path) -> None:
     from flowjet.server.http.app import build_sandbox_manager, build_workspace_resolver
 

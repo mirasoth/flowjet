@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 from flowjet.core.bridges.base import AgentAdapterBase, create_server_agent_instance
 
 if TYPE_CHECKING:
-    from flowjet.core.sandbox.arbox import ArcBoxToolSandboxManager
+    from flowjet.core.sandbox.arbox import ToolSandboxManager
 
 #: Historical name — identical to the shared server instance builder; the
 #: backend flavor follows ``FLOWJET_SERVER_BACKEND``.
@@ -40,7 +40,7 @@ class SootheAgentAdapter(AgentAdapterBase):
 def soothe_adapter_factory(
     *,
     config_path: str | None = None,
-    sandbox_manager: ArcBoxToolSandboxManager | None = None,
+    sandbox_manager: ToolSandboxManager | None = None,
 ):
     """Return a zero-arg factory suitable for ThreadPool / IsolatingRuntimeBackend."""
 

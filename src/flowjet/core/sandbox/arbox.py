@@ -1,9 +1,15 @@
-"""ArcBox microVM lease lifecycle and host↔guest workspace staging."""
+"""Sandbox lease lifecycle and host↔guest workspace staging.
+
+The sandbox lifecycle (create/connect/kill) is owned by soothe-nano's
+:class:`~soothe_nano.sandbox.ArcBoxBackend` (via ``from_config``); this
+module only manages the **pool** — one backend per workspace, LRU eviction
+above the cap, idle reaping, host↔guest workspace staging, and the disk
+watermark guard. No arcbox SDK symbols are imported here.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import shlex
 import time
@@ -11,7 +17,6 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from flowjet.core.ids import short_hex
 from flowjet.core.sandbox.settings import ToolSandboxSettings
 
 logger = logging.getLogger(__name__)
@@ -21,83 +26,6 @@ _PUSH_SKIP_DIRS = frozenset({".workspace", "__pycache__", ".git"})
 # Guest-side dirs that are never pulled back to the host workspace.
 _PULL_SKIP_DIRS = frozenset({"__pycache__", ".git"})
 _REAPER_INTERVAL_SECONDS = 5.0
-
-# Sandbox labels: the only cross-process channel to the daemon, so crash
-# recovery can tell "my VM", "a live peer's VM" and "a dead process's VM" apart.
-_LABEL_MANAGED = "flowjet.sandbox"
-_LABEL_OWNER = "flowjet.sandbox-owner"
-_LABEL_INSTANCE = "flowjet.sandbox-instance"
-_LABEL_WORKSPACE = "flowjet.sandbox-workspace"
-_MANAGED_VALUE = "tool"
-
-_HEARTBEAT_INTERVAL_SECONDS = 60.0
-"""How often to re-arm the daemon-side orphan deadline on live leases."""
-
-_STARTUP_SCAN_TIMEOUT_SECONDS = 15.0
-"""Bound on the startup orphan scan; recovery is best effort, boot is not."""
-
-_PROBE_COMMAND = "true"
-"""Trivial guest command used as the readiness probe's guest tier.
-
-The daemon's sandbox *records* outlive the VMs behind them: after a host
-sleep, a machine restart or a daemon restart, `list()` still reports a
-sandbox as ``ready`` while every call fails with ``VM not found``. That is a
-control-plane fact, caught by the probe's first tier (``sandbox.info()``);
-the guest command is the second tier, catching a wedged guest (VM present,
-nothing executing).
-"""
-
-_PROBE_TIMEOUT_SECONDS = 20.0
-"""Deadline for one readiness probe (the SDK kills the guest process group)."""
-
-_PROBE_BRIDGE_GRACE_SECONDS = 5.0
-"""Extra headroom over the probe deadline for the SDK round-trip itself."""
-
-_INFO_PROBE_TIMEOUT_SECONDS = 10.0
-"""Deadline for the control-plane tier of the readiness probe (one unary RPC)."""
-
-_CONTROL_RPC_TIMEOUT_SECONDS = 15.0
-"""Deadline for one control-plane lifecycle RPC (kill / set_lifecycle).
-
-The SDK's per-RPC deadline is opt-in (``Connection(request_timeout)``) and the
-manager does not configure it, so every lifecycle call needs its own bound: a
-wedged call would otherwise stall the reaper loop — and a stalled heartbeat
-reads to the daemon exactly like a dead owner, which gets *healthy* VMs
-reaped at their deadlines.
-"""
-
-_TERMINAL_SANDBOX_STATES = frozenset({"stopping", "stopped", "failed"})
-"""Guest states no turn can run in; a lease in one of them must be replaced."""
-
-
-def _import_arcbox() -> Any:
-    """Lazily import the external arcbox SDK with an actionable error."""
-    try:
-        import arcbox  # type: ignore[import-not-found]
-    except ImportError as exc:  # pragma: no cover - environment-dependent
-        raise RuntimeError(
-            "sandbox.enabled=true in nano.yml requires the arcbox SDK, which ships "
-            "transitively via soothe-nano (a dependency of soothe). Reinstall flowjet "
-            "or run `arcbox serve` on the host. Remove the sandbox: section or set "
-            "sandbox.enabled=false to run tools host-side."
-        ) from exc
-    return arcbox
-
-
-@dataclass
-class _SandboxLease:
-    """One live guest VM bound to a host workspace path."""
-
-    sandbox: Any
-    backend: Any | None = None
-    # Host-side snapshot: rel path -> (size, mtime_ns) at last successful
-    # push/pull. Used to skip unchanged transfers.
-    manifest: dict[str, tuple[int, int]] = field(default_factory=dict)
-    active_runs: int = 0
-    last_used: float = field(default_factory=time.monotonic)
-    # Adopted from a previous process: pull the guest once before pushing, so
-    # artifacts written by the crashed turn are recovered instead of clobbered.
-    adopted: bool = False
 
 
 def _format_bytes(n: int) -> str:
@@ -111,23 +39,10 @@ def _format_bytes(n: int) -> str:
     return f"{n} B"
 
 
-def _parse_df_available(output: str, root: str) -> int | None:
-    """Available bytes from POSIX ``df`` output (``None`` when unparseable)."""
-    for line in output.splitlines():
-        fields = line.split()
-        # POSIX df format: Filesystem 1B-blocks Used Available Use% Mounted-on
-        if len(fields) >= 4 and fields[-1] == root:
-            try:
-                return int(fields[3])
-            except ValueError:
-                return None
-    return None
-
-
 class SandboxDiskFullError(RuntimeError):
     """The guest sandbox disk is below the configured free-space watermark.
 
-    Raised by :meth:`ArcBoxToolSandboxManager.open_workspace` before the turn
+    Raised by :meth:`ToolSandboxManager.open_workspace` before the turn
     starts, so the failure surfaces as one readable turn error instead of a
     mid-run ENOSPC spiral the agent cannot fix on its own.
     """
@@ -141,6 +56,10 @@ class WorkspaceStager:
     guest ``workspace_root``; at close the guest tree is pulled back so the
     sync checkpoint and external readers still see agent outputs. Transfers
     skip files whose (size, mtime) match the manifest of the last transfer.
+
+    File operations go through the sandbox backend's ``execute()`` (for
+    ``mkdir -p`` and ``find``-based listing) and ``upload_files()`` /
+    ``download_files()`` (for byte transfers). No arcbox SDK types are used.
     """
 
     def __init__(self, settings: ToolSandboxSettings) -> None:
@@ -152,7 +71,7 @@ class WorkspaceStager:
     async def push(
         self,
         workspace: str,
-        sandbox: Any,
+        backend: Any,
         manifest: dict[str, tuple[int, int]],
     ) -> dict[str, tuple[int, int]]:
         """Upload the host workspace tree into the guest (skip unchanged).
@@ -165,6 +84,9 @@ class WorkspaceStager:
             return manifest
         pushed = 0
         next_manifest: dict[str, tuple[int, int]] = {}
+        # Collect changed files and ensure guest directories exist.
+        dirs_to_make: list[PurePosixPath] = []
+        files_to_upload: list[tuple[str, bytes]] = []
         for item in sorted(root.rglob("*")):
             rel = item.relative_to(root)
             if any(part in _PUSH_SKIP_DIRS for part in rel.parts):
@@ -172,10 +94,7 @@ class WorkspaceStager:
             if item.is_symlink():
                 continue
             if item.is_dir():
-                try:
-                    await sandbox.files.mkdir(self.guest_path(rel))
-                except Exception:  # noqa: BLE001
-                    logger.debug("Sandbox mkdir failed for %s", rel, exc_info=True)
+                dirs_to_make.append(self.guest_path(rel))
                 continue
             if not item.is_file():
                 continue
@@ -186,10 +105,27 @@ class WorkspaceStager:
                 continue
             try:
                 data = await asyncio.to_thread(item.read_bytes)
-                await sandbox.files.write_bytes(self.guest_path(rel), data)
+                guest_p = str(self.guest_path(rel))
+                files_to_upload.append((guest_p, data))
                 pushed += 1
             except Exception:  # noqa: BLE001
-                logger.warning("Sandbox push failed for %s", rel, exc_info=True)
+                logger.warning("Sandbox push read failed for %s", rel, exc_info=True)
+        # Create guest directories (best effort).
+        for guest_dir in dirs_to_make:
+            try:
+                await asyncio.to_thread(
+                    backend.execute, f"mkdir -p -- {shlex.quote(str(guest_dir))}"
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("Sandbox mkdir failed for %s", guest_dir, exc_info=True)
+        # Upload changed files in one batch.
+        if files_to_upload:
+            try:
+                await asyncio.to_thread(backend.upload_files, files_to_upload)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Sandbox push upload failed for %d files", len(files_to_upload), exc_info=True
+                )
         if pushed:
             logger.info("Sandbox push for %s: %d files", workspace, pushed)
         return next_manifest
@@ -197,16 +133,16 @@ class WorkspaceStager:
     async def pull(
         self,
         workspace: str,
-        sandbox: Any,
+        backend: Any,
         manifest: dict[str, tuple[int, int]],
     ) -> dict[str, tuple[int, int]]:
         """Download the guest workspace tree back to the host (skip identical).
 
-        Deletion propagation (RFC-RD-607 §4.4): files the agent deleted inside
-        the guest are absent from its tree and are removed from the host too.
-        Only paths recorded in the push manifest are eligible — host files
-        created after the push are never in it, so they can never be deleted
-        by this path. Returns the manifest for the next push.
+        Deletion propagation: files the agent deleted inside the guest are
+        absent from its tree and are removed from the host too. Only paths
+        recorded in the push manifest are eligible — host files created after
+        the push are never in it, so they can never be deleted by this path.
+        Returns the manifest for the next push.
         """
         root = Path(workspace)
         guest_root = PurePosixPath(self._settings.workspace_root)
@@ -215,41 +151,66 @@ class WorkspaceStager:
         next_manifest: dict[str, tuple[int, int]] = {}
         guest_files: set[str] = set()
 
-        async def walk(guest_dir: PurePosixPath, rel_dir: PurePosixPath) -> None:
-            nonlocal pulled
-            entries = await sandbox.files.list(guest_dir)
-            for entry in entries:
-                raw = PurePosixPath(entry.name)
-                try:
-                    # SDK entries carry the full guest path.
-                    rel_entry = raw.relative_to(guest_root)
-                except ValueError:
-                    # Basename-only entries (defensive).
-                    rel_entry = rel_dir / raw
-                if any(part in _PULL_SKIP_DIRS for part in rel_entry.parts):
-                    continue
-                guest_path = guest_root / rel_entry
-                if entry.kind == "directory":
-                    await walk(guest_path, rel_entry)
-                    continue
-                if entry.kind != "file":
-                    continue
-                guest_files.add(rel_entry.as_posix())
-                data = await sandbox.files.read_bytes(guest_path)
-                dest = root / Path(*rel_entry.parts)
-                if dest.is_file():
-                    existing = await asyncio.to_thread(dest.read_bytes)
-                    if existing == data:
-                        stat = dest.stat()
-                        next_manifest[str(rel_entry)] = (stat.st_size, stat.st_mtime_ns)
-                        continue
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                await asyncio.to_thread(dest.write_bytes, data)
-                stat = dest.stat()
-                next_manifest[str(rel_entry)] = (stat.st_size, stat.st_mtime_ns)
-                pulled += 1
+        # List the guest tree via execute() + find.
+        try:
+            listing = await asyncio.to_thread(
+                backend.execute,
+                f"find {shlex.quote(str(guest_root))} -type f -print0",
+            )
+            output = getattr(listing, "output", "") or ""
+            exit_code = getattr(listing, "exit_code", 0)
+        except Exception:  # noqa: BLE001
+            logger.warning("Sandbox pull: guest listing failed for %s", workspace, exc_info=True)
+            return manifest
+        if exit_code not in (0, None):
+            logger.warning("Sandbox pull: guest find failed (exit=%s) for %s", exit_code, workspace)
+            return manifest
 
-        await walk(guest_root, PurePosixPath("."))
+        raw_paths = [p for p in output.split("\0") if p]
+        download_paths: list[str] = []
+        for raw in raw_paths:
+            try:
+                rel_entry = PurePosixPath(raw).relative_to(guest_root)
+            except ValueError:
+                continue
+            if any(part in _PULL_SKIP_DIRS for part in rel_entry.parts):
+                continue
+            guest_files.add(rel_entry.as_posix())
+            download_paths.append(raw)
+
+        # Download all guest files in one batch.
+        contents: dict[str, bytes] = {}
+        if download_paths:
+            try:
+                responses = await asyncio.to_thread(backend.download_files, download_paths)
+                for resp in responses:
+                    path = getattr(resp, "path", "")
+                    content = getattr(resp, "content", None)
+                    error = getattr(resp, "error", None)
+                    if content is not None and not error:
+                        contents[path] = content
+            except Exception:  # noqa: BLE001
+                logger.warning("Sandbox pull: download failed for %s", workspace, exc_info=True)
+
+        for raw_path, data in contents.items():
+            try:
+                rel_entry = PurePosixPath(raw_path).relative_to(guest_root)
+            except ValueError:
+                continue
+            dest = root / Path(*rel_entry.parts)
+            if dest.is_file():
+                existing = await asyncio.to_thread(dest.read_bytes)
+                if existing == data:
+                    stat = dest.stat()
+                    next_manifest[str(rel_entry)] = (stat.st_size, stat.st_mtime_ns)
+                    continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(dest.write_bytes, data)
+            stat = dest.stat()
+            next_manifest[str(rel_entry)] = (stat.st_size, stat.st_mtime_ns)
+            pulled += 1
+
+        # Propagate guest deletions to host (only for paths in the manifest).
         for rel in manifest:
             if rel in guest_files:
                 continue
@@ -281,8 +242,26 @@ class WorkspaceStager:
         return next_manifest
 
 
-class ArcBoxToolSandboxManager:
-    """Per-workspace ArcBox sandboxes for sandboxed tool execution.
+@dataclass
+class _SandboxLease:
+    """One live sandbox backend bound to a host workspace path."""
+
+    backend: Any
+    # Host-side snapshot: rel path -> (size, mtime_ns) at last successful
+    # push/pull. Used to skip unchanged transfers.
+    manifest: dict[str, tuple[int, int]] = field(default_factory=dict)
+    active_runs: int = 0
+    last_used: float = field(default_factory=time.monotonic)
+
+
+class ToolSandboxManager:
+    """Per-workspace sandbox backends for sandboxed tool execution.
+
+    Each workspace gets its own :class:`~soothe_nano.sandbox.ArcBoxBackend`
+    (created via ``from_config()``), which manages the sandbox lifecycle
+    (create/connect/kill) internally. This manager only handles the **pool**:
+    LRU eviction above the cap, idle reaping, workspace staging, and the disk
+    watermark guard.
 
     All async methods run on the server's main event loop (driven by the
     workspace resolver lifecycle hooks); :meth:`backend_for` is sync and may
@@ -292,22 +271,11 @@ class ArcBoxToolSandboxManager:
     def __init__(self, settings: ToolSandboxSettings) -> None:
         self._settings = settings
         self._stager = WorkspaceStager(settings)
-        self._client: Any | None = None
         self._leases: dict[str, _SandboxLease] = {}
         self._locks_lock = asyncio.Lock()
         self._workspace_locks: dict[str, asyncio.Lock] = {}
         self._reaper_task: asyncio.Task[None] | None = None
         self._started = False
-        # Identity of *this* process on the daemon: sandboxes carrying a
-        # different instance id were left behind by a previous process.
-        self._instance_id = short_hex()
-        # Workspace key -> orphaned sandbox id, populated once at startup.
-        self._recoverable: dict[str, str] = {}
-        # Sentinel that guarantees the first heartbeat always fires: using 0.0
-        # would skip it whenever time.monotonic() < _HEARTBEAT_INTERVAL_SECONDS,
-        # which happens on freshly-booted CI runners (and any host under 60s of
-        # uptime). -inf makes the elapsed check always exceed the interval.
-        self._last_heartbeat = float("-inf")
 
     @property
     def settings(self) -> ToolSandboxSettings:
@@ -318,9 +286,16 @@ class ArcBoxToolSandboxManager:
         return len(self._leases)
 
     def validate_runtime(self) -> None:
-        """Fail loud at startup when the SDK is missing (daemon is checked lazily)."""
-        if self._settings.enabled:
-            _import_arcbox()
+        """Fail loud at startup when the sandbox config is invalid.
+
+        The actual SDK availability check is deferred to nano's
+        ``ArcBoxBackend.from_config()`` — flowjet does not import the arcbox
+        SDK directly.
+        """
+        # Nothing to validate beyond what __post_init__ already checked.
+        # The arcbox SDK presence is nano's concern (from_config raises
+        # ArcBoxError if the SDK is missing, and the builder falls back to
+        # host execution with a warning).
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -329,14 +304,8 @@ class ArcBoxToolSandboxManager:
     async def _ensure_started(self) -> None:
         if self._started:
             return
-        self._client = self._new_client()
         self._started = True
-        # Recover what a previous process left behind *before* the first turn
-        # can spawn a duplicate VM for the same workspace.
-        await self._scan_orphans()
-        self._reaper_task = asyncio.create_task(
-            self._reap_idle(), name="arcbox-tool-sandbox-reaper"
-        )
+        self._reaper_task = asyncio.create_task(self._reap_idle(), name="tool-sandbox-reaper")
         max_sb = self._settings.effective_max_sandboxes()
         if max_sb == 0:
             cap_desc = "unlimited"
@@ -345,7 +314,7 @@ class ArcBoxToolSandboxManager:
         else:
             cap_desc = "explicit"
         logger.info(
-            "ArcBox tool sandbox started: image=%s vcpus=%d mem_mib=%d max=%d (%s) network=%s",
+            "Tool sandbox started: image=%s vcpus=%d mem_mib=%d max=%d (%s) network=%s",
             self._settings.image,
             self._settings.vcpus,
             self._settings.mem_mib,
@@ -353,26 +322,6 @@ class ArcBoxToolSandboxManager:
             cap_desc,
             self._settings.network,
         )
-
-    def _new_client(self) -> Any:
-        arcbox = _import_arcbox()
-        connection_kwargs: dict[str, Any] = {}
-        if self._settings.api_url:
-            connection_kwargs["api_url"] = self._settings.api_url
-        if self._settings.api_key:
-            connection_kwargs["api_key"] = self._settings.api_key
-        connection = arcbox.Connection(**connection_kwargs) if connection_kwargs else None
-        return arcbox.AsyncArcBox(connection)
-
-    async def _reconnect(self) -> None:
-        """Drop the cached client and dial the daemon again (post-crash retry)."""
-        old, self._client = self._client, None
-        if old is not None:
-            try:
-                await old.aclose()
-            except Exception:  # noqa: BLE001
-                logger.debug("ArcBox client close during reconnect failed", exc_info=True)
-        self._client = self._new_client()
 
     async def shutdown(self) -> None:
         reaper = self._reaper_task
@@ -386,28 +335,24 @@ class ArcBoxToolSandboxManager:
         leases = list(self._leases.values())
         self._leases.clear()
         for lease in leases:
-            await self._kill_lease(lease)
-        if self._client is not None:
-            try:
-                await self._client.aclose()
-            except Exception:  # noqa: BLE001
-                logger.warning("ArcBox client close failed", exc_info=True)
-            self._client = None
+            await self._close_lease(lease)
         self._started = False
 
-    async def _kill_lease(self, lease: _SandboxLease) -> None:
+    async def _close_lease(self, lease: _SandboxLease) -> None:
+        """Close a lease's backend (destroys the sandbox if self-managed)."""
         try:
-            await asyncio.wait_for(lease.sandbox.kill(), timeout=_CONTROL_RPC_TIMEOUT_SECONDS)
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 - best effort either way
-            logger.warning("ArcBox sandbox kill failed", exc_info=True)
+            close = getattr(lease.backend, "close", None)
+            if close is not None:
+                result = close()
+                if hasattr(result, "__await__"):
+                    await result
+        except Exception:  # noqa: BLE001 - best effort
+            logger.debug("Sandbox backend close failed", exc_info=True)
 
     async def _reap_idle(self) -> None:
         while True:
             await asyncio.sleep(_REAPER_INTERVAL_SECONDS)
             try:
-                await self._heartbeat()
                 now = time.monotonic()
                 stale = [
                     (key, lease)
@@ -416,143 +361,17 @@ class ArcBoxToolSandboxManager:
                     and (now - lease.last_used) > self._settings.idle_timeout_seconds
                 ]
                 for key, lease in stale:
-                    logger.info("ArcBox tool sandbox idle-recycled (workspace=%s)", key)
+                    logger.info("Tool sandbox idle-recycled (workspace=%s)", key)
                     self._leases.pop(key, None)
-                    await self._kill_lease(lease)
+                    await self._close_lease(lease)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
-                logger.exception("ArcBox tool sandbox reaper error")
-
-    async def _heartbeat(self) -> None:
-        """Re-arm the daemon-side orphan deadline for every live lease.
-
-        ``set_lifecycle(idle_timeout=...)`` restarts the countdown, so a lease
-        whose owning process died stops being re-armed and the daemon destroys
-        it after ``orphan_timeout_seconds``. That is crash cleanup with no
-        cross-process coordination and no startup kill-list.
-
-        A lease that cannot be re-armed is unreachable: drop it so the next
-        turn spawns (or adopts) a usable sandbox instead of binding to a corpse.
-        A lease with a run in flight is left in place — the per-turn probe will
-        replace it, while dropping it now would skip that run's close-pull.
-        """
-        now = time.monotonic()
-        if now - self._last_heartbeat < _HEARTBEAT_INTERVAL_SECONDS:
-            return
-        self._last_heartbeat = now
-        for workspace, lease in list(self._leases.items()):
-            try:
-                await asyncio.wait_for(
-                    lease.sandbox.set_lifecycle(
-                        idle_timeout=self._settings.effective_orphan_timeout_seconds()
-                    ),
-                    timeout=_CONTROL_RPC_TIMEOUT_SECONDS,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001
-                if lease.active_runs > 0:
-                    continue
-                logger.warning(
-                    "ArcBox heartbeat failed (workspace=%s, sandbox=%s); dropping lease",
-                    workspace,
-                    getattr(lease.sandbox, "id", "?"),
-                    exc_info=True,
-                )
-                self._leases.pop(workspace, None)
+                logger.exception("Tool sandbox reaper error")
 
     # ------------------------------------------------------------------
-    # Crash recovery (restart of this process)
+    # Pool management
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _workspace_key(workspace: str) -> str:
-        """Stable, label-safe fingerprint of a host workspace path."""
-        return hashlib.sha256(workspace.encode()).hexdigest()[:16]
-
-    def _labels(self, workspace: str) -> dict[str, str]:
-        return {
-            _LABEL_MANAGED: _MANAGED_VALUE,
-            _LABEL_OWNER: self._settings.owner,
-            _LABEL_INSTANCE: self._instance_id,
-            _LABEL_WORKSPACE: self._workspace_key(workspace),
-        }
-
-    async def _scan_orphans(self) -> None:
-        """Index sandboxes left behind by a previous process (best effort)."""
-        if not self._settings.recover_orphans or self._client is None:
-            return
-        try:
-            await asyncio.wait_for(self._collect_orphans(), timeout=_STARTUP_SCAN_TIMEOUT_SECONDS)
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001
-            logger.warning("ArcBox orphan scan failed; restarting without recovery", exc_info=True)
-
-    async def _collect_orphans(self) -> None:
-        """List owner-scoped sandboxes that belong to another instance.
-
-        Nothing is destroyed here: a rolling update may run two processes under
-        one owner, and killing a live peer's VM would corrupt it. Unclaimed
-        orphans are reaped by the daemon deadline instead.
-        """
-        assert self._client is not None
-        async for summary in self._client.list(
-            labels={_LABEL_MANAGED: _MANAGED_VALUE, _LABEL_OWNER: self._settings.owner}
-        ):
-            labels = getattr(summary, "labels", None) or {}
-            # Re-check client-side: older daemons may ignore the filter.
-            if labels.get(_LABEL_MANAGED) != _MANAGED_VALUE:
-                continue
-            if labels.get(_LABEL_OWNER) != self._settings.owner:
-                continue
-            if labels.get(_LABEL_INSTANCE) == self._instance_id:
-                continue
-            workspace_key = labels.get(_LABEL_WORKSPACE)
-            if not workspace_key:
-                continue
-            self._recoverable[workspace_key] = summary.id
-            logger.info(
-                "ArcBox orphan sandbox available for recovery: %s (workspace=%s)",
-                summary.id,
-                workspace_key,
-            )
-
-    async def _adopt(self, workspace: str) -> _SandboxLease | None:
-        """Reuse a sandbox left behind by a previous process, if it is alive.
-
-        A crash leaves the VM running with whatever the interrupted turn had
-        written but never pulled; adopting it recovers those files and avoids a
-        cold boot. Returns ``None`` when there is no candidate or its VM is gone
-        (in which case the daemon deadline reaps the stale record).
-        """
-        if not self._settings.recover_orphans or self._client is None:
-            return None
-        sandbox_id = self._recoverable.pop(self._workspace_key(workspace), None)
-        if sandbox_id is None:
-            return None
-        try:
-            sandbox = await self._client.connect(sandbox_id, timeout=self._settings.connect_timeout)
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001
-            logger.info(
-                "ArcBox orphan sandbox %s is no longer reachable; spawning a fresh one",
-                sandbox_id,
-            )
-            return None
-        lease = _SandboxLease(sandbox=sandbox, adopted=True)
-        if not await self._lease_is_live(lease):
-            await self._kill_lease(lease)
-            return None
-        self._leases[workspace] = lease
-        logger.info(
-            "ArcBox tool sandbox adopted after restart (workspace=%s, id=%s)",
-            workspace,
-            sandbox_id,
-        )
-        return lease
 
     async def _make_room_unlocked(self) -> None:
         """Evict least-recently-used idle sandboxes above the effective cap."""
@@ -568,15 +387,15 @@ class ArcBoxToolSandboxManager:
                 # Every sandbox is busy: exceeding the cap is better than
                 # deadlocking the request.
                 logger.warning(
-                    "ArcBox tool sandbox at max_sandboxes=%d with all sandboxes "
+                    "Tool sandbox at max_sandboxes=%d with all sandboxes "
                     "busy; spawning an extra sandbox",
                     max_sandboxes,
                 )
                 return
             key, lease = min(candidates, key=lambda kv: kv[1].last_used)
-            logger.info("ArcBox tool sandbox evicted for room (workspace=%s)", key)
+            logger.info("Tool sandbox evicted for room (workspace=%s)", key)
             self._leases.pop(key, None)
-            await self._kill_lease(lease)
+            await self._close_lease(lease)
 
     def _workspace_lock(self, workspace: str) -> asyncio.Lock:
         lock = self._workspace_locks.get(workspace)
@@ -589,178 +408,47 @@ class ArcBoxToolSandboxManager:
     # Session lifecycle (main loop)
     # ------------------------------------------------------------------
 
-    async def _lease_is_live(self, lease: _SandboxLease) -> bool:
-        """Return ``True`` when the lease's guest is present and usable.
-
-        Two tiers, cheap first:
-
-        1. **Control plane** — ``sandbox.info()`` is one unary RPC, "always
-           fresh, never cached", with no lifecycle side effects and no guest
-           execution. It catches the observed failure class (the daemon's
-           record outliving the VM: ``VM not found``) and terminal states.
-        2. **Guest round-trip** — a trivial command catches a wedged guest
-           (VM present, nothing executing). Commands run as independent
-           process groups, so this never queues behind a peer's long-running
-           command.
-
-        Probing is the only way to tell "empty workspace" from "dead sandbox" —
-        the difference between an agent that works and one that reports an
-        empty workspace.
-        """
-        info = getattr(lease.sandbox, "info", None)
-        if info is not None:
-            try:
-                snapshot = await asyncio.wait_for(info(), timeout=_INFO_PROBE_TIMEOUT_SECONDS)
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001 - any failure means "not usable"
-                logger.warning(
-                    "ArcBox control-plane probe failed (sandbox=%s); the lease will be replaced",
-                    getattr(lease.sandbox, "id", "?"),
-                    exc_info=True,
-                )
-                return False
-            state = str(getattr(snapshot, "state", "")).lower()
-            if state in _TERMINAL_SANDBOX_STATES:
-                logger.warning(
-                    "ArcBox sandbox %s is in terminal state %r; the lease will be replaced",
-                    getattr(lease.sandbox, "id", "?"),
-                    state,
-                )
-                return False
-        try:
-            await asyncio.wait_for(
-                lease.sandbox.commands.run(_PROBE_COMMAND, timeout=_PROBE_TIMEOUT_SECONDS),
-                timeout=_PROBE_TIMEOUT_SECONDS + _PROBE_BRIDGE_GRACE_SECONDS,
-            )
-        except Exception:  # noqa: BLE001 - any failure means "not usable"
-            logger.warning(
-                "ArcBox readiness probe failed (sandbox=%s); the lease will be replaced",
-                getattr(lease.sandbox, "id", "?"),
-                exc_info=True,
-            )
-            return False
-        return True
-
     async def open_workspace(self, workspace: str) -> None:
         """Ensure a *usable* sandbox for ``workspace`` and stage host files into it.
 
-        Readiness invariant (once per turn, on the main loop, before the agent
-        streams): a lease whose guest no longer answers is dropped, and every
-        path that yields a new guest — spawn after a death, spawn after a
-        restart, or adoption of a crashed process's VM — seeds it, so the agent
-        never sees an empty workspace where the host has files.
-
-        A reused lease with a peer turn mid-run keeps its guest state (fresher
-        than the host copy) and skips the push, except right after a reseed:
-        a fresh or adopted VM has no current state to protect.
+        Creates a self-managing ``ArcBoxBackend`` via ``from_config()`` on
+        first open (the sandbox VM is created lazily on first ``execute``);
+        reuses it on subsequent opens. The host tree is pushed into the guest
+        ``workspace_root`` on a fresh lease; a reused lease with a peer turn
+        mid-run keeps its guest state (fresher than the host copy) and skips
+        the push.
         """
         await self._ensure_started()
         lock = self._workspace_lock(workspace)
         async with lock:
             lease = self._leases.get(workspace)
-            carried_runs = 0
-            seeded = False
-            if lease is not None and not await self._lease_is_live(lease):
-                # Runs still counted on the dead lease stay counted on its
-                # replacement so peer open/close pairs stay balanced.
-                carried_runs = lease.active_runs
-                logger.warning(
-                    "ArcBox tool sandbox for %s is gone (id=%s); respawning",
-                    workspace,
-                    lease.sandbox.id,
-                )
-                self._leases.pop(workspace, None)
-                await self._kill_lease(lease)
-                lease = None
-            if lease is None:
-                # After a restart the previous process's VM may still be alive
-                # (and hold un-pulled artifacts): adopt it before spawning.
-                lease = await self._adopt(workspace)
-                seeded = lease is not None
             if lease is None:
                 await self._make_room_unlocked()
                 lease = await self._spawn(workspace)
                 seeded = True
-            if seeded:
-                lease.active_runs = carried_runs
-            if seeded and self._settings.reserved_pad_path:
-                # A fresh (or adopted) sandbox still carries the image's
-                # reserved pad file; reclaim it once so the watermark probe
-                # sees the real free space and the agent gets the headroom.
-                await self._reclaim_reserved_pad(workspace, lease)
+            else:
+                seeded = False
             lease.active_runs += 1
             lease.last_used = time.monotonic()
             if lease.active_runs > 1 and not seeded:
                 # A peer session is mid-run on this sandbox: its guest state
                 # is the freshest, a host push could clobber live edits.
                 logger.debug(
-                    "ArcBox tool sandbox: skipping host push for %s (%d active runs)",
+                    "Tool sandbox: skipping host push for %s (%d active runs)",
                     workspace,
                     lease.active_runs,
                 )
                 return
-            if lease.adopted:
-                # Recover the crashed turn's guest writes first, then top up
-                # from the host (materials uploaded while the process was down).
-                lease.manifest = await self._stager.pull(workspace, lease.sandbox, {})
-                lease.adopted = False
-            lease.manifest = await self._stager.push(workspace, lease.sandbox, lease.manifest)
+            lease.manifest = await self._stager.push(workspace, lease.backend, lease.manifest)
             await self._ensure_free_disk(workspace, lease)
-
-    async def _reclaim_reserved_pad(self, workspace: str, lease: _SandboxLease) -> None:
-        """Delete the image's reserved pad file once, on a fresh sandbox.
-
-        The guest image reserves disk headroom as a sparse pad file so the
-        ArcBox rootfs formatter sizes the template's capacity to fit; the pad
-        itself occupies that space, so the capacity is not usable until it is
-        deleted. Runs once per sandbox (``seeded`` only — a reused lease was
-        already reclaimed), is idempotent (``rm -f``), and fails open: a broken
-        reclaim only leaves the sandbox at the image-capacity slack, never
-        blocks a turn.
-        """
-        backend = self.backend_for(workspace)
-        pad = self._settings.reserved_pad_path
-        command = f"rm -f -- {shlex.quote(pad)}"
-        try:
-            response = await asyncio.to_thread(backend.execute, command)
-        except Exception:  # noqa: BLE001 -- reclaim is best effort by contract
-            logger.warning(
-                "ArcBox reserved-pad reclaim failed (workspace=%s, sandbox=%s, pad=%s); "
-                "continuing with image-capacity slack",
-                workspace,
-                lease.sandbox.id,
-                pad,
-                exc_info=True,
-            )
-            return
-        if getattr(response, "exit_code", 0) not in (0, None):
-            logger.warning(
-                "ArcBox reserved-pad reclaim failed (workspace=%s, sandbox=%s, pad=%s, "
-                "exit=%s); continuing with image-capacity slack",
-                workspace,
-                lease.sandbox.id,
-                pad,
-                response.exit_code,
-            )
-            return
-        logger.info(
-            "ArcBox reserved pad reclaimed (workspace=%s, sandbox=%s, pad=%s)",
-            workspace,
-            lease.sandbox.id,
-            pad,
-        )
 
     async def _ensure_free_disk(self, workspace: str, lease: _SandboxLease) -> None:
         """Refuse the turn when the guest disk is below the free-space watermark.
 
-        The ArcBox daemon sizes the sandbox root disk from the guest image
-        (content plus a small constant margin), so a write-heavy turn can
-        fill the guest and leave the agent flailing in ENOSPC errors it
-        cannot fix — its cleanup commands (`rm -rf /...`) hit the approval
-        gate, and the turn dies with an opaque "tool failed". Failing fast
-        here surfaces one readable error instead. The probe failing itself
-        is warn-only (fail open): a broken probe must never block a turn.
+        With native rootfs headroom (ArcBox daemon ``rootfs_headroom_mib``),
+        the watermark is satisfied at birth for typical images. The probe
+        failing itself is warn-only (fail open): a broken probe must never
+        block a turn.
 
         Accountancy note: ``active_runs`` was already incremented for this
         open, and a raise here means the caller's ``close_workspace`` never
@@ -770,14 +458,12 @@ class ArcBoxToolSandboxManager:
         threshold = self._settings.min_free_bytes
         if threshold <= 0:
             return
-        backend = self.backend_for(workspace)
-        free = await asyncio.to_thread(self._probe_free_bytes, backend)
+        free = await asyncio.to_thread(self._probe_free_bytes, lease.backend)
         if free is None:
             logger.warning(
-                "ArcBox guest disk probe failed (workspace=%s, sandbox=%s); "
+                "Tool sandbox guest disk probe failed (workspace=%s); "
                 "continuing without the watermark check",
                 workspace,
-                lease.sandbox.id,
             )
             return
         if free >= threshold:
@@ -786,9 +472,8 @@ class ArcBoxToolSandboxManager:
         message = (
             f"guest disk full: {self._settings.workspace_root} has "
             f"{_format_bytes(free)} free, below the {_format_bytes(threshold)} minimum "
-            f"(sandbox.min_free_bytes). The ArcBox daemon sizes the sandbox root "
-            f"disk from the guest image, so the workspace must be cleaned or the "
-            f"sandbox disk enlarged before this turn can run."
+            f"(sandbox.min_free_bytes). The sandbox root disk must be cleaned "
+            f"or the headroom enlarged before this turn can run."
         )
         raise SandboxDiskFullError(message)
 
@@ -796,27 +481,19 @@ class ArcBoxToolSandboxManager:
     def _probe_free_bytes(backend: Any) -> int | None:
         """Guest free space at the workspace root, or ``None`` (fail open).
 
-        Prefers soothe-nano's :meth:`ArcBoxBackend.free_space_bytes`; falls
-        back to one ``df -B1 -P`` through ``execute`` for nano releases
-        without the helper, so the watermark works against any nano ≥ 2.0.
+        Uses the backend's ``free_space_bytes()`` helper (one ``df`` round-trip).
+        Returns ``None`` when the probe itself fails so callers can fail open.
         Never raises.
         """
         probe = getattr(backend, "free_space_bytes", None)
-        if callable(probe):
-            try:
-                result: int | None = probe()
-                return result
-            except Exception:  # noqa: BLE001 -- probe is best effort by contract
-                logger.debug("ArcBox guest disk probe errored", exc_info=True)
-                return None
+        if not callable(probe):
+            return None
         try:
-            response = backend.execute(f"df -B1 -P {shlex.quote(backend.workspace_root)}")
+            result: int | None = probe()
+            return result
         except Exception:  # noqa: BLE001 -- probe is best effort by contract
-            logger.debug("ArcBox guest disk probe errored", exc_info=True)
+            logger.debug("Sandbox guest disk probe errored", exc_info=True)
             return None
-        if response.exit_code not in (0, None):
-            return None
-        return _parse_df_available(response.output, backend.workspace_root)
 
     async def close_workspace(self, workspace: str) -> None:
         """Pull guest files back to the host workspace when the last run ends."""
@@ -833,50 +510,33 @@ class ArcBoxToolSandboxManager:
             if lease.active_runs > 0:
                 return
             try:
-                lease.manifest = await self._stager.pull(workspace, lease.sandbox, lease.manifest)
+                lease.manifest = await self._stager.pull(workspace, lease.backend, lease.manifest)
             except Exception:  # noqa: BLE001
                 # Best-effort: a failed pull must not fail the response, but
                 # the sync checkpoint will miss guest-side outputs.
-                logger.warning("ArcBox tool sandbox pull failed for %s", workspace, exc_info=True)
+                logger.warning("Tool sandbox pull failed for %s", workspace, exc_info=True)
 
     async def _spawn(self, workspace: str) -> _SandboxLease:
-        sandbox = await self._create(workspace)
-        lease = _SandboxLease(sandbox=sandbox)
+        """Create a self-managing ArcBoxBackend via nano's from_config()."""
+        from soothe_nano.sandbox import ArcBoxBackend
+
+        backend = ArcBoxBackend.from_config(
+            image=self._settings.image or "",
+            vcpus=self._settings.vcpus,
+            mem_mib=self._settings.mem_mib,
+            network=self._settings.network,
+            workspace_root=self._settings.workspace_root,
+            default_timeout=self._settings.default_timeout,
+            connect_timeout=self._settings.connect_timeout,
+            idle_timeout_seconds=self._settings.idle_timeout_seconds,
+            min_free_bytes=self._settings.min_free_bytes,
+            api_url=self._settings.api_url,
+            api_key=self._settings.api_key,
+        )
+        lease = _SandboxLease(backend=backend)
         self._leases[workspace] = lease
-        logger.info("ArcBox tool sandbox ready (workspace=%s, id=%s)", workspace, sandbox.id)
+        logger.info("Tool sandbox ready (workspace=%s)", workspace)
         return lease
-
-    async def _create(self, workspace: str) -> Any:
-        """Create one guest with labels and a daemon-side orphan deadline.
-
-        ``idle_timeout`` + ``on_idle="kill"`` is the crash backstop: if this
-        process dies without cleaning up, the daemon destroys the VM once the
-        deadline (re-armed by :meth:`_heartbeat`) expires. One reconnect retry
-        covers a daemon that is itself restarting.
-        """
-        assert self._client is not None
-        kwargs: dict[str, Any] = {
-            "vcpus": self._settings.vcpus,
-            "memory_mib": self._settings.mem_mib,
-            "network": self._settings.network,
-            "wait_until_ready": True,
-            "labels": self._labels(workspace),
-            "idle_timeout": self._settings.effective_orphan_timeout_seconds(),
-            "on_idle": "kill",
-        }
-        try:
-            return await self._client.create(self._settings.image, **kwargs)
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "ArcBox sandbox create failed for %s; reconnecting and retrying once",
-                workspace,
-                exc_info=True,
-            )
-            await self._reconnect()
-            assert self._client is not None
-            return await self._client.create(self._settings.image, **kwargs)
 
     # ------------------------------------------------------------------
     # Agent binding (worker threads)
@@ -886,17 +546,21 @@ class ArcBoxToolSandboxManager:
         """Id of the guest currently bound to ``workspace`` (``None`` if unopened).
 
         This is the cache key adapters must use for a built agent: a reused
-        lease keeps its id, while every replacement (idle recycle, dead VM,
-        LRU eviction, respawn) yields a new one. "Same id" therefore means "the
-        backend inside the cached agent still points at this live guest" —
-        which a workspace path alone cannot tell, since it is stable across
-        sandbox generations.
+        lease keeps its id, while every replacement (idle recycle, LRU
+        eviction) yields a new one. "Same id" therefore means "the backend
+        inside the cached agent still points at this live guest" — which a
+        workspace path alone cannot tell, since it is stable across sandbox
+        generations.
         """
         lease = self._leases.get(workspace)
-        return lease.sandbox.id if lease is not None else None
+        if lease is None:
+            return None
+        # The backend's id property triggers lazy sandbox creation if needed.
+        backend_id = getattr(lease.backend, "id", None)
+        return str(backend_id) if backend_id is not None else None
 
     def backend_for(self, workspace: str) -> Any:
-        """Return the :class:`ArcBoxBackend` bound to the workspace's sandbox.
+        """Return the sandbox backend bound to the workspace.
 
         Sync and thread-safe: called from pool worker threads after
         :meth:`open_workspace` completed on the main loop. The backend is
@@ -907,20 +571,9 @@ class ArcBoxToolSandboxManager:
         lease = self._leases.get(workspace)
         if lease is None:
             raise RuntimeError(
-                f"no ArcBox sandbox open for workspace {workspace!r}; open_workspace must run first"
+                f"no sandbox open for workspace {workspace!r}; open_workspace must run first"
             )
         lease.last_used = time.monotonic()
-        if lease.backend is None:
-            from soothe_nano.sandbox import ArcBoxBackend
-
-            lease.backend = ArcBoxBackend(
-                sandbox_id=lease.sandbox.id,
-                workspace_root=self._settings.workspace_root,
-                default_timeout=self._settings.default_timeout,
-                api_url=self._settings.api_url,
-                api_key=self._settings.api_key,
-                connect_timeout=self._settings.connect_timeout,
-            )
         return lease.backend
 
     @property
@@ -930,7 +583,7 @@ class ArcBoxToolSandboxManager:
 
 
 __all__ = [
-    "ArcBoxToolSandboxManager",
+    "ToolSandboxManager",
     "SandboxDiskFullError",
     "WorkspaceStager",
 ]
