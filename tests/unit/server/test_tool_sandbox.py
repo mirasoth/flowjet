@@ -1,8 +1,8 @@
 """Tool sandbox — nano.yml parsing, manager lifecycle, staging, adapter binding.
 
-Tests mock soothe-nano's ``ArcBoxBackend`` (the execution surface) instead of
-the arcbox SDK directly: flowjet no longer imports or calls the arcbox SDK.
-The backend's ``from_config()`` classmethod is patched to return a fake whose
+Tests mock soothe-nano's sandbox backend factory (``create_sandbox_backend``)
+instead of any specific backend SDK: flowjet is backend-agnostic and delegates
+construction to nano's factory. The factory is patched to return a fake whose
 ``execute`` / ``upload_files`` / ``download_files`` / ``free_space_bytes`` /
 ``id`` / ``close`` shape mirrors the real contract.
 """
@@ -29,12 +29,75 @@ from flowjet.core.sandbox import (
 from flowjet.server.config import Settings
 
 # ---------------------------------------------------------------------------
-# Fake ArcBoxBackend (nano's execution surface)
+# Helpers: build backend config dicts in the new multi-backend format
+# ---------------------------------------------------------------------------
+
+
+def _backend_cfg(
+    *,
+    image: str = "img:1",
+    vcpus: int = 2,
+    mem_mib: int = 2048,
+    network: bool = False,
+    workspace_root: str = "/workspace",
+    default_timeout: int = 120,
+    connect_timeout: float = 60.0,
+    idle_timeout_seconds: float = 300.0,
+    min_free_bytes: int = 0,
+    api_url: str | None = None,
+    api_key: str | None = None,
+) -> dict:
+    """Build a ``sandbox.backend`` dict in the multi-backend config format."""
+    arcbox: dict = {"image": image, "vcpus": vcpus, "mem_mib": mem_mib}
+    if network:
+        arcbox["network"] = True
+    if workspace_root != "/workspace":
+        arcbox["workspace_root"] = workspace_root
+    if default_timeout != 120:
+        arcbox["default_timeout"] = default_timeout
+    if connect_timeout != 60.0:
+        arcbox["connect_timeout"] = connect_timeout
+    if idle_timeout_seconds != 300.0:
+        arcbox["idle_timeout_seconds"] = idle_timeout_seconds
+    if min_free_bytes != 0:
+        arcbox["min_free_bytes"] = min_free_bytes
+    if api_url is not None:
+        arcbox["api_url"] = api_url
+    if api_key is not None:
+        arcbox["api_key"] = api_key
+    return {"type": "arcbox", "arcbox": arcbox}
+
+
+def _settings(
+    *,
+    enabled: bool = True,
+    max_sandboxes: int | None = 8,
+    idle_timeout_seconds: float = 300.0,
+    min_free_bytes: int = 0,
+    **backend_kwargs,
+) -> ToolSandboxSettings:
+    """Build ToolSandboxSettings with the new backend config format."""
+    backend = _backend_cfg(
+        idle_timeout_seconds=idle_timeout_seconds,
+        min_free_bytes=min_free_bytes,
+        **backend_kwargs,
+    )
+    return ToolSandboxSettings(
+        enabled=enabled,
+        backend=backend,
+        max_sandboxes=max_sandboxes,
+        idle_timeout_seconds=idle_timeout_seconds,
+        min_free_bytes=min_free_bytes,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fake sandbox backend (nano's execution surface)
 # ---------------------------------------------------------------------------
 
 
 class FakeArcBoxBackend:
-    """Mock soothe-nano's ArcBoxBackend with an in-memory guest filesystem.
+    """Mock sandbox backend with an in-memory guest filesystem.
 
     Mirrors the real contract:
     - ``id``: lazily-assigned sandbox id (triggers "creation" on first access)
@@ -145,25 +208,74 @@ class FakeArcBoxBackend:
 
 @pytest.fixture()
 def fake_backend(monkeypatch: pytest.MonkeyPatch) -> type[FakeArcBoxBackend]:
-    """Patch nano's ArcBoxBackend.from_config to return FakeArcBoxBackend."""
+    """Patch nano's create_sandbox_backend factory to return FakeArcBoxBackend.
+
+    The factory takes a ``SandboxBackendConfig`` and dispatches to the
+    registered backend. We patch it to extract the ``arcbox`` sub-config and
+    construct a ``FakeArcBoxBackend`` from its fields.
+    """
     FakeArcBoxBackend._id_counter = 0
     FakeArcBoxBackend.instances = []
     FakeArcBoxBackend.registry = []
 
-    try:
-        sandbox_module = __import__("soothe_nano.sandbox", fromlist=["ArcBoxBackend"])
-    except ImportError:
-        # Create a minimal stub module so from_config patching works even
-        # without soothe-nano installed (CI without the extra).
-        sandbox_module = types.ModuleType("soothe_nano.sandbox")
-        sandbox_module.ArcBoxBackend = type("ArcBoxBackend", (), {})
-        sys.modules["soothe_nano.sandbox"] = sandbox_module
-
-    @classmethod
-    def _from_config(cls, **kwargs):  # type: ignore[override]
+    def _fake_create(config):
+        """Fake factory: extract arcbox config fields and build a FakeArcBoxBackend."""
+        arcbox = getattr(config, "arcbox", None)
+        if arcbox is None:
+            # Try dict-like access for stub configs
+            arcbox = config.get("arcbox") if isinstance(config, dict) else None
+        if arcbox is None:
+            msg = "sandbox.backend.type='arcbox' requires sandbox.backend.arcbox config"
+            raise ValueError(msg)
+        # Extract fields from the ArcBoxBackendConfig (Pydantic model or stub)
+        kwargs = {}
+        for field in (
+            "image",
+            "vcpus",
+            "mem_mib",
+            "network",
+            "workspace_root",
+            "default_timeout",
+            "connect_timeout",
+            "idle_timeout_seconds",
+            "min_free_bytes",
+            "api_url",
+            "api_key",
+        ):
+            val = getattr(arcbox, field, None)
+            if val is None and isinstance(arcbox, dict):
+                val = arcbox.get(field)
+            if val is not None:
+                kwargs[field] = val
         return FakeArcBoxBackend(**kwargs)
 
-    monkeypatch.setattr(sandbox_module.ArcBoxBackend, "from_config", _from_config)
+    # Patch the factory function in nano's sandbox module.
+    try:
+        sandbox_module = __import__("soothe_nano.sandbox", fromlist=["create_sandbox_backend"])
+        monkeypatch.setattr(sandbox_module, "create_sandbox_backend", _fake_create)
+    except ImportError:
+        # Create a minimal stub module so factory patching works even
+        # without soothe-nano installed (CI without the extra).
+        sandbox_module = types.ModuleType("soothe_nano.sandbox")
+        sandbox_module.create_sandbox_backend = _fake_create
+        sys.modules["soothe_nano.sandbox"] = sandbox_module
+
+    # Also patch SandboxBackendConfig so _spawn can construct it without nano.
+    try:
+        config_models = __import__("soothe_nano.config.models", fromlist=["SandboxBackendConfig"])
+        # Keep the real SandboxBackendConfig — it works with the fake factory.
+    except ImportError:
+        # Stub SandboxBackendConfig as a simple namespace that preserves kwargs.
+        class _StubBackendConfig:
+            def __init__(self, **kwargs):
+                self.type = kwargs.get("type", "arcbox")
+                self.arcbox = kwargs.get("arcbox")
+
+        config_models = types.ModuleType("soothe_nano.config.models")
+        config_models.SandboxBackendConfig = _StubBackendConfig
+        sys.modules.setdefault("soothe_nano.config", types.ModuleType("soothe_nano.config"))
+        sys.modules["soothe_nano.config.models"] = config_models
+
     return FakeArcBoxBackend
 
 
@@ -190,40 +302,40 @@ def test_parse_defaults_to_disabled() -> None:
 
 def test_network_defaults_to_off() -> None:
     """Guest egress is opt-in: `true` exposes the host's whole routing table."""
-    assert ToolSandboxSettings().network is False
-    assert SandboxSettingsLoader.parse_section({"enabled": True, "image": "img"}).network is False
+    settings = _settings()
+    assert settings.network is False
     # Explicit opt-in still works.
-    assert SandboxSettingsLoader.parse_section({"network": True}).network is True
+    settings_net = _settings(network=True)
+    assert settings_net.network is True
 
 
 def test_disk_watermark_defaults_to_disabled() -> None:
-    assert ToolSandboxSettings().min_free_bytes == 0
-    assert (
-        SandboxSettingsLoader.parse_section({"enabled": True, "image": "img"}).min_free_bytes == 0
-    )
-    assert (
-        SandboxSettingsLoader.parse_section(
-            {"enabled": True, "image": "img", "min_free_bytes": 524288000}
-        ).min_free_bytes
-        == 524288000
-    )
+    settings = _settings()
+    assert settings.min_free_bytes == 0
+    settings_wm = _settings(min_free_bytes=524288000)
+    assert settings_wm.min_free_bytes == 524288000
 
 
 def test_disk_watermark_negative_rejected() -> None:
     with pytest.raises(ValueError, match="min_free_bytes"):
-        _ = ToolSandboxSettings(min_free_bytes=-1)
+        _ = _settings(min_free_bytes=-1)
 
 
 def test_parse_reads_flowjet_keys_and_ignores_nano_keys() -> None:
     settings = SandboxSettingsLoader.parse_section(
         {
             "enabled": True,
-            "image": "flowjet-server:latest",
-            "vcpus": 4,
-            "mem_mib": 4096,
-            "network": False,
-            "workspace_root": "/data",
-            "default_timeout": 30,
+            "backend": {
+                "type": "arcbox",
+                "arcbox": {
+                    "image": "flowjet-server:latest",
+                    "vcpus": 4,
+                    "mem_mib": 4096,
+                    "network": False,
+                    "workspace_root": "/data",
+                    "default_timeout": 30,
+                },
+            },
             "idle_timeout_seconds": 60,
             "max_sandboxes": 2,
             # nano-owned placement policy keys must be ignored here.
@@ -246,11 +358,11 @@ def test_parse_reads_flowjet_keys_and_ignores_nano_keys() -> None:
 @pytest.mark.parametrize(
     "factory",
     [
-        lambda: ToolSandboxSettings(enabled=True),  # no image
-        lambda: ToolSandboxSettings(enabled=True, image="   "),
-        lambda: ToolSandboxSettings(vcpus=0),
-        lambda: ToolSandboxSettings(mem_mib=64),
-        lambda: ToolSandboxSettings(max_sandboxes=-1),
+        lambda: _settings(image=""),  # empty image
+        lambda: _settings(image="   "),  # whitespace image
+        lambda: _settings(vcpus=0),  # invalid vcpus
+        lambda: _settings(mem_mib=64),  # too little memory
+        lambda: _settings(max_sandboxes=-1),  # negative cap
     ],
 )
 def test_parse_rejects_invalid_settings(factory: Callable[[], ToolSandboxSettings]) -> None:
@@ -261,7 +373,11 @@ def test_parse_rejects_invalid_settings(factory: Callable[[], ToolSandboxSetting
 def test_parse_max_sandboxes_none_maps_to_none() -> None:
     """``max_sandboxes: none`` in YAML maps to ``None`` for compute-sizing."""
     settings = SandboxSettingsLoader.parse_section(
-        {"enabled": True, "image": "img:1", "max_sandboxes": "none"}
+        {
+            "enabled": True,
+            "backend": _backend_cfg(),
+            "max_sandboxes": "none",
+        }
     )
     assert settings.max_sandboxes is None
 
@@ -269,7 +385,11 @@ def test_parse_max_sandboxes_none_maps_to_none() -> None:
 def test_parse_max_sandboxes_zero_means_unlimited() -> None:
     """``max_sandboxes: 0`` means unlimited (no LRU eviction)."""
     settings = SandboxSettingsLoader.parse_section(
-        {"enabled": True, "image": "img:1", "max_sandboxes": 0}
+        {
+            "enabled": True,
+            "backend": _backend_cfg(),
+            "max_sandboxes": 0,
+        }
     )
     assert settings.max_sandboxes == 0
     assert settings.effective_max_sandboxes() == 0
@@ -278,15 +398,23 @@ def test_parse_max_sandboxes_zero_means_unlimited() -> None:
 def test_parse_max_sandboxes_numeric_string_zero() -> None:
     """A numeric string ``"0"`` is coerced to int 0 (unlimited)."""
     settings = SandboxSettingsLoader.parse_section(
-        {"enabled": True, "image": "img:1", "max_sandboxes": "0"}
+        {
+            "enabled": True,
+            "backend": _backend_cfg(),
+            "max_sandboxes": "0",
+        }
     )
     assert settings.max_sandboxes == 0
 
 
 def test_parse_max_sandboxes_explicit_int_preserved() -> None:
-    """An explicit int ``max_sandboxes`` is preserved as-is (back-compat)."""
+    """An explicit int ``max_sandboxes`` is preserved as-is."""
     settings = SandboxSettingsLoader.parse_section(
-        {"enabled": True, "image": "img:1", "max_sandboxes": 3}
+        {
+            "enabled": True,
+            "backend": _backend_cfg(),
+            "max_sandboxes": 3,
+        }
     )
     assert settings.max_sandboxes == 3
 
@@ -294,50 +422,54 @@ def test_parse_max_sandboxes_explicit_int_preserved() -> None:
 def test_parse_max_sandboxes_numeric_string_accepted() -> None:
     """A numeric string (e.g. from YAML without quotes) is coerced to int."""
     settings = SandboxSettingsLoader.parse_section(
-        {"enabled": True, "image": "img:1", "max_sandboxes": "5"}
+        {
+            "enabled": True,
+            "backend": _backend_cfg(),
+            "max_sandboxes": "5",
+        }
     )
     assert settings.max_sandboxes == 5
 
 
 def test_effective_max_sandboxes_explicit() -> None:
     """When ``max_sandboxes`` is an explicit int, ``effective_`` returns it."""
-    settings = ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=4)
+    settings = _settings(max_sandboxes=4)
     assert settings.effective_max_sandboxes() == 4
 
 
 def test_effective_max_sandboxes_compute_from_cpu() -> None:
     """None mode computes cap from 70% usable CPU ÷ vcpus, min 8."""
-    settings = ToolSandboxSettings(enabled=True, image="img:1", vcpus=2, max_sandboxes=None)
+    settings = _settings(vcpus=2, max_sandboxes=None)
     assert settings.effective_max_sandboxes(cpu_count=16) == 8
     assert settings.effective_max_sandboxes(cpu_count=32) == 11
 
-    settings_4vcpu = ToolSandboxSettings(enabled=True, image="img:1", vcpus=4, max_sandboxes=None)
+    settings_4vcpu = _settings(vcpus=4, max_sandboxes=None)
     assert settings_4vcpu.effective_max_sandboxes(cpu_count=32) == 8
 
 
 def test_effective_max_sandboxes_compute_min_floor() -> None:
     """Even a tiny host gets the minimum cap of 8."""
-    settings = ToolSandboxSettings(enabled=True, image="img:1", vcpus=2, max_sandboxes=None)
+    settings = _settings(vcpus=2, max_sandboxes=None)
     assert settings.effective_max_sandboxes(cpu_count=1) == 8
 
 
 def test_effective_max_sandboxes_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """``FLOWJET_SANDBOX_MAX`` env var overrides the YAML value."""
-    settings = ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=None)
+    settings = _settings(max_sandboxes=None)
     monkeypatch.setenv("FLOWJET_SANDBOX_MAX", "5")
     assert settings.effective_max_sandboxes(cpu_count=32) == 5
 
 
 def test_effective_max_sandboxes_env_override_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     """``FLOWJET_SANDBOX_MAX=0`` means unlimited via env override."""
-    settings = ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=4)
+    settings = _settings(max_sandboxes=4)
     monkeypatch.setenv("FLOWJET_SANDBOX_MAX", "0")
     assert settings.effective_max_sandboxes() == 0
 
 
 def test_effective_max_sandboxes_env_override_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """``FLOWJET_SANDBOX_MAX=none`` defers to compute-sizing even if YAML pins a value."""
-    settings = ToolSandboxSettings(enabled=True, image="img:1", vcpus=2, max_sandboxes=4)
+    settings = _settings(vcpus=2, max_sandboxes=4)
     monkeypatch.setenv("FLOWJET_SANDBOX_MAX", "none")
     assert settings.effective_max_sandboxes(cpu_count=32) == 11
 
@@ -346,7 +478,7 @@ def test_effective_max_sandboxes_env_override_falls_back_on_invalid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An unparseable env value falls back to the YAML field."""
-    settings = ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=3)
+    settings = _settings(max_sandboxes=3)
     monkeypatch.setenv("FLOWJET_SANDBOX_MAX", "garbage")
     assert settings.effective_max_sandboxes() == 3
 
@@ -355,7 +487,7 @@ def test_effective_max_sandboxes_env_percent_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``FLOWJET_SANDBOX_MAX_PERCENT`` tunes the CPU usable fraction (default 70)."""
-    settings = ToolSandboxSettings(enabled=True, image="img:1", vcpus=2, max_sandboxes=None)
+    settings = _settings(vcpus=2, max_sandboxes=None)
     monkeypatch.setenv("FLOWJET_SANDBOX_MAX_PERCENT", "50")
     assert settings.effective_max_sandboxes(cpu_count=32) == 8
     monkeypatch.setenv("FLOWJET_SANDBOX_MAX_PERCENT", "90")
@@ -366,7 +498,7 @@ def test_effective_max_sandboxes_env_percent_invalid_uses_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An out-of-range percentage falls back to the 70% default."""
-    settings = ToolSandboxSettings(enabled=True, image="img:1", vcpus=2, max_sandboxes=None)
+    settings = _settings(vcpus=2, max_sandboxes=None)
     monkeypatch.setenv("FLOWJET_SANDBOX_MAX_PERCENT", "150")
     assert settings.effective_max_sandboxes(cpu_count=32) == 11
 
@@ -379,7 +511,10 @@ def test_load_settings_requires_existing_explicit_path(tmp_path: Path) -> None:
 def test_load_settings_from_explicit_path(tmp_path: Path) -> None:
     path = tmp_path / "nano.yml"
     _ = path.write_text(
-        "models:\n  default: gpt-x\nsandbox:\n  enabled: true\n  image: img:1\n  vcpus: 3\n",
+        "models:\n  default: gpt-x\n"
+        "sandbox:\n  enabled: true\n"
+        "  backend:\n    type: arcbox\n"
+        "    arcbox:\n      image: img:1\n      vcpus: 3\n",
         encoding="utf-8",
     )
     settings = SandboxSettingsLoader.load(path)
@@ -396,7 +531,10 @@ def test_load_settings_from_default_path(tmp_path: Path, monkeypatch: pytest.Mon
 
     assert SandboxSettingsLoader.load(None).enabled is False  # no file at all
 
-    _ = default.write_text("sandbox:\n  enabled: true\n  image: img\n", encoding="utf-8")
+    _ = default.write_text(
+        "sandbox:\n  enabled: true\n  backend:\n    type: arcbox\n    arcbox:\n      image: img\n",
+        encoding="utf-8",
+    )
     settings = SandboxSettingsLoader.load(None)
     assert settings.enabled is True and settings.image == "img"
 
@@ -418,9 +556,7 @@ async def test_open_spawns_sandbox_and_pushes_workspace(
     fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ToolSandboxManager(
-        ToolSandboxSettings(enabled=True, image="img:1", vcpus=3, mem_mib=512)
-    )
+    manager = ToolSandboxManager(_settings(image="img:1", vcpus=3, mem_mib=512))
     try:
         await manager.open_workspace(str(ws))
         backend = fake_backend.instances[0]
@@ -441,7 +577,7 @@ async def test_reopen_without_changes_skips_push(
     fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(_settings(image="img:1"))
     try:
         await manager.open_workspace(str(ws))
         await manager.close_workspace(str(ws))
@@ -467,7 +603,7 @@ async def test_second_concurrent_open_skips_push(
     fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(_settings(image="img:1"))
     try:
         await manager.open_workspace(str(ws))
         backend = fake_backend.instances[0]
@@ -486,7 +622,7 @@ async def test_close_pulls_guest_changes_back_to_host(
     fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(_settings(image="img:1"))
     try:
         await manager.open_workspace(str(ws))
         backend = fake_backend.instances[0]
@@ -507,7 +643,7 @@ async def test_close_propagates_guest_deletions_to_host(
 ) -> None:
     """A file the agent deleted inside the guest is removed from the host."""
     ws = make_workspace(tmp_path)
-    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(_settings(image="img:1"))
     try:
         await manager.open_workspace(str(ws))
         backend = fake_backend.instances[0]
@@ -527,7 +663,7 @@ async def test_pull_never_deletes_host_files_added_after_push(
 ) -> None:
     """Host files created after the push are not in the manifest — never deleted."""
     ws = make_workspace(tmp_path)
-    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(_settings(image="img:1"))
     try:
         await manager.open_workspace(str(ws))
         backend = fake_backend.instances[0]
@@ -548,7 +684,7 @@ async def test_close_pulls_only_when_last_run_ends(
     fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(_settings(image="img:1"))
     try:
         await manager.open_workspace(str(ws))
         await manager.open_workspace(str(ws))  # second active run
@@ -569,7 +705,7 @@ async def test_close_pulls_only_when_last_run_ends(
 async def test_backend_for_binds_and_caches(tmp_path: Path) -> None:
     ws = make_workspace(tmp_path)
     manager = ToolSandboxManager(
-        ToolSandboxSettings(enabled=True, image="img:1", workspace_root="/data", default_timeout=42)
+        _settings(image="img:1", workspace_root="/data", default_timeout=42)
     )
     try:
         with pytest.raises(RuntimeError):
@@ -593,7 +729,7 @@ async def test_max_sandboxes_evicts_idle_lru(
     ws2 = tmp_path / "ws2"
     ws1.mkdir()
     ws2.mkdir()
-    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=1))
+    manager = ToolSandboxManager(_settings(image="img:1", max_sandboxes=1))
     try:
         await manager.open_workspace(str(ws1))
         backend1 = fake_backend.instances[0]
@@ -614,7 +750,7 @@ async def test_max_sandboxes_zero_means_unlimited(
     ws2 = tmp_path / "ws2"
     ws1.mkdir()
     ws2.mkdir()
-    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1", max_sandboxes=0))
+    manager = ToolSandboxManager(_settings(image="img:1", max_sandboxes=0))
     try:
         await manager.open_workspace(str(ws1))
         backend1 = fake_backend.instances[0]
@@ -636,9 +772,7 @@ async def test_idle_reaper_kills_stale_sandboxes(
 
     monkeypatch.setattr(arbox_mod, "_REAPER_INTERVAL_SECONDS", 0.05)
     ws = make_workspace(tmp_path)
-    manager = ToolSandboxManager(
-        ToolSandboxSettings(enabled=True, image="img:1", idle_timeout_seconds=0.01)
-    )
+    manager = ToolSandboxManager(_settings(image="img:1", idle_timeout_seconds=0.01))
     await manager.open_workspace(str(ws))
     backend = fake_backend.instances[0]
     await manager.close_workspace(str(ws))
@@ -653,7 +787,7 @@ async def test_shutdown_kills_all_and_closes_backend(
     fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(_settings(image="img:1"))
     await manager.open_workspace(str(ws))
     backend = fake_backend.instances[0]
     await manager.shutdown()
@@ -669,26 +803,40 @@ async def test_shutdown_kills_all_and_closes_backend(
 
 @pytest.mark.asyncio
 async def test_open_refuses_below_disk_watermark(
-    fake_backend: type[FakeArcBoxBackend], tmp_path: Path
+    fake_backend: type[FakeArcBoxBackend],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ToolSandboxManager(
-        ToolSandboxSettings(enabled=True, image="img:1", min_free_bytes=1024)
-    )
+    manager = ToolSandboxManager(_settings(image="img:1", min_free_bytes=1024))
     try:
-        # Set the backend's free space below the watermark before it's created.
-        # We patch from_config to set a low free space.
-
-        @classmethod
-        def _low_free_config(cls, **kwargs):  # type: ignore[override]
+        # Patch the factory to set a low free space on the created backend.
+        def _low_free_create(config):
+            arcbox = getattr(config, "arcbox", None)
+            kwargs = {}
+            for field in (
+                "image",
+                "vcpus",
+                "mem_mib",
+                "network",
+                "workspace_root",
+                "default_timeout",
+                "connect_timeout",
+                "idle_timeout_seconds",
+                "min_free_bytes",
+                "api_url",
+                "api_key",
+            ):
+                val = getattr(arcbox, field, None)
+                if val is not None:
+                    kwargs[field] = val
             backend = FakeArcBoxBackend(**kwargs)
             backend._free_space = 512  # below the 1024-byte watermark
             return backend
 
         import soothe_nano.sandbox as sandbox_mod
 
-        monkeypatch = pytest.MonkeyPatch()
-        monkeypatch.setattr(sandbox_mod.ArcBoxBackend, "from_config", _low_free_config)
+        monkeypatch.setattr(sandbox_mod, "create_sandbox_backend", _low_free_create)
         try:
             with pytest.raises(SandboxDiskFullError, match="guest disk full"):
                 await manager.open_workspace(str(ws))
@@ -705,9 +853,7 @@ async def test_open_passes_above_disk_watermark(
     fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ToolSandboxManager(
-        ToolSandboxSettings(enabled=True, image="img:1", min_free_bytes=1024)
-    )
+    manager = ToolSandboxManager(_settings(image="img:1", min_free_bytes=1024))
     try:
         await manager.open_workspace(str(ws))
         assert manager._leases[str(ws)].active_runs == 1
@@ -720,7 +866,7 @@ async def test_open_skips_probe_when_watermark_disabled(
     fake_backend: type[FakeArcBoxBackend], tmp_path: Path
 ) -> None:
     ws = make_workspace(tmp_path)
-    manager = ToolSandboxManager(ToolSandboxSettings(enabled=True, image="img:1"))
+    manager = ToolSandboxManager(_settings(image="img:1"))
     try:
         await manager.open_workspace(str(ws))
     finally:
@@ -950,7 +1096,9 @@ def test_build_sandbox_manager_enabled(tmp_path: Path) -> None:
 
     settings = _settings_for(
         tmp_path,
-        "sandbox:\n  enabled: true\n  image: flowjet-server:latest\n",
+        "sandbox:\n  enabled: true\n"
+        "  backend:\n    type: arcbox\n"
+        "    arcbox:\n      image: flowjet-server:latest\n",
     )
     manager = build_sandbox_manager(settings)
     assert manager is not None
@@ -961,6 +1109,9 @@ def test_build_sandbox_manager_enabled(tmp_path: Path) -> None:
     assert isinstance(resolver, SandboxAwareWorkspaceResolver)
 
     # Sandbox config missing an image fails loud at startup.
-    bad = _settings_for(tmp_path, "sandbox:\n  enabled: true\n")
-    with pytest.raises(ValueError, match="sandbox.image"):
+    bad = _settings_for(
+        tmp_path,
+        "sandbox:\n  enabled: true\n  backend:\n    type: arcbox\n    arcbox: {}\n",
+    )
+    with pytest.raises(ValueError, match="image"):
         _ = build_sandbox_manager(bad)

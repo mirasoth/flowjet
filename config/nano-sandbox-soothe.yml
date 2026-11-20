@@ -56,19 +56,25 @@ observability:
 security:
   allow_paths_outside_workspace: true
 
-# ArcBox tool sandbox (RFC-005): tool calls run in a per-workspace microVM.
-# The `sandbox:` section is server-owned (SandboxSettingsLoader); the
+# Tool sandbox (multi-backend config format): tool calls run in a per-workspace
+# microVM. The `sandbox:` section is server-owned (SandboxSettingsLoader); the
 # `on_deny`/`placement_overrides`/`max_shuttle_bytes` keys are soothe-nano
 # placement policy (SandboxConfig) and flow through to the agent build.
+# `max_sandboxes` is the pool cap (0=unlimited, None=compute from host CPU).
 sandbox:
   enabled: true
-  image: soothe-nano-prod
-  vcpus: 2
-  mem_mib: 1024
-  network: true
-  workspace_root: /workspace
-  default_timeout: 120
-  connect_timeout: 60
-  idle_timeout_seconds: 300
   max_sandboxes: 8       # 0=unlimited, None=compute from host CPU, or explicit int
+  idle_timeout_seconds: 300
+  min_free_bytes: 0      # 0 disables the watermark probe (native rootfs headroom)
   on_deny: drop
+  backend:
+    type: arcbox
+    arcbox:
+      image: soothe-nano-prod
+      vcpus: 2
+      mem_mib: 1024
+      network: true
+      workspace_root: /workspace
+      default_timeout: 120
+      connect_timeout: 60
+      idle_timeout_seconds: 300

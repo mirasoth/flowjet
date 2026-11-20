@@ -1,17 +1,19 @@
 """Server-owned ``sandbox:`` settings parsed from the nano.yml.
 
 The sandbox lifecycle (create/connect/kill) is owned by soothe-nano's
-:class:`~soothe_nano.sandbox.ArcBoxBackend` (via ``from_config``); flowjet
-only reads the config fields it needs for **pool management** (LRU eviction,
-idle reaping, workspace staging, disk watermark) and passes the rest through
-to nano at backend construction time. No arcbox SDK symbols are imported or
-called here.
+sandbox backend factory (via :func:`create_sandbox_backend`); flowjet
+only reads the config fields it needs for **pool management** (LRU
+eviction, idle reaping, workspace staging, disk watermark) and passes
+the full ``backend`` config to nano at backend construction time. No
+backend SDK symbols are imported or called here — flowjet is
+backend-agnostic and delegates construction to nano's
+:class:`~soothe_nano.sandbox.SandboxBackendFactory`.
 """
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -82,75 +84,62 @@ def compute_max_sandboxes(
 class ToolSandboxSettings:
     """Server-owned ``sandbox:`` keys parsed from the nano.yml.
 
-    nano.yml keys owned by the server (unknown keys are ignored by
-    ``SootheConfig``)::
+    Uses the **multi-backend config format** (breaking change from the old
+    flat ``image`` / ``vcpus`` / etc. fields). The ``backend`` dict is passed
+    verbatim to nano's :func:`~soothe_nano.sandbox.create_sandbox_backend`,
+    which dispatches to the registered factory by ``type``::
 
         sandbox:
-          enabled: true            # run tool calls in a sandbox
-          image: <image ref>       # guest image; must ship python3 + coreutils
-          vcpus: 2
-          mem_mib: 2048
-          network: false           # guest egress; OFF by default
-          workspace_root: /workspace
-          default_timeout: 120
-          connect_timeout: 60
+          enabled: true
+          max_sandboxes: 8         # pool cap (0=unlimited, None=compute)
+          min_free_bytes: 0        # disk watermark (0 = off)
           idle_timeout_seconds: 300
-          max_sandboxes: 8         # 0 (unlimited), None (compute from host CPU), or int
-          min_free_bytes: 0        # refuse turns when guest free space < this (0 = off)
-          api_url: null            # daemon connection; env fallback ARCBOX_API_URL
-          api_key: null            # daemon credential; env fallback ARCBOX_API_KEY
+          backend:
+            type: arcbox
+            arcbox:
+              image: <image ref>    # guest image; must ship python3 + coreutils
+              vcpus: 2
+              mem_mib: 2048
+              network: false        # guest egress; OFF by default
+              workspace_root: /workspace
+              default_timeout: 120
+              connect_timeout: 60
+              idle_timeout_seconds: 300
+              # ... other backend-specific fields
 
-    The remaining ``sandbox:`` keys (``on_deny`` / ``placement_overrides`` /
-    ``max_shuttle_bytes`` / ``rootfs_headroom_mib``) belong to soothe-nano's
-    placement policy and agent build and are consumed by the agent build
-    itself — flowjet never reads them.
+    Pool-management fields (``max_sandboxes``, ``min_free_bytes``,
+    ``idle_timeout_seconds``) live at the ``sandbox:`` top level because they
+    are backend-agnostic. Backend-specific lifecycle fields live under
+    ``sandbox.backend.<type>`` and are opaque to flowjet — it passes them
+    through to nano's factory unchanged.
 
-    The sandbox lifecycle (create/connect/kill) is delegated to
-    soothe-nano's :class:`~soothe_nano.sandbox.ArcBoxBackend` via
-    ``from_config()``; flowjet only manages the **pool** (LRU eviction,
-    idle reaping, workspace staging, disk watermark). No arcbox SDK symbols
-    are imported here.
+    The sandbox lifecycle (create/connect/kill) is delegated to nano's
+    :func:`create_sandbox_backend` via the ``backend`` config; flowjet only
+    manages the **pool** (LRU eviction, idle reaping, workspace staging, disk
+    watermark). No backend SDK symbols are imported here.
     """
 
     enabled: bool = False
-    # Guest image reference; must ship python3 + POSIX coreutils (the nano
-    # sandbox derives file ops from guest-side execute).
-    image: str | None = None
-    vcpus: int = 2
-    mem_mib: int = 2048
-    # Guest egress. OFF by default: `true` NATs the guest through the sandbox
-    # host with no per-destination policy, so everything the host can route to
-    # — internal network and VPN included — becomes reachable from agent shell
-    # commands. Web access is not lost: the web tools are host-placement and
-    # never run in the guest.
-    network: bool = False
-    workspace_root: str = "/workspace"
-    default_timeout: int = 120
-    connect_timeout: float = 60.0
-    idle_timeout_seconds: float = 300.0
-    # Default cap of 8 sandboxes. ``0`` means unlimited — no LRU eviction.
-    # ``None`` means compute from host CPU (70% usable, overridable via
-    # ``FLOWJET_SANDBOX_MAX_PERCENT``) and per-sandbox vCPUs, with a hard
-    # minimum of 8. A positive int pins the cap explicitly. The env var
-    # ``FLOWJET_SANDBOX_MAX`` (int, 0=unlimited) overrides YAML at load time.
+    # Raw backend config dict — passed verbatim to nano's factory. Contains
+    # ``type`` + the backend-specific sub-config (e.g. ``arcbox: {...}``).
+    backend: dict[str, Any] = field(default_factory=dict)
+    # Pool cap: ``0`` = unlimited (no LRU eviction), ``None`` = compute from
+    # host CPU, positive int = explicit cap. Env override:
+    # ``FLOWJET_SANDBOX_MAX`` (int, 0=unlimited).
     max_sandboxes: int | None = 8
-
     # Disk watermark: refuse to open a sandbox whose guest has less free
-    # space than this (bytes) at session open. With native rootfs headroom
-    # (ArcBox daemon config ``rootfs_headroom_mib``), the watermark is
-    # satisfied at birth for typical images; ``0`` (the default) disables
-    # the probe.
+    # space than this (bytes) at session open. ``0`` disables the probe.
     min_free_bytes: int = 0
-
-    # Daemon connection — passed through to nano's ArcBoxBackend.from_config().
-    api_url: str | None = None
-    api_key: str | None = None
+    # Idle reaper: destroy a sandbox whose last-used timestamp is older than
+    # this (seconds). Also read from the backend config as a fallback for
+    # logging when the backend defines its own idle timeout.
+    idle_timeout_seconds: float = 300.0
 
     def __post_init__(self) -> None:
-        if self.enabled and not (self.image and self.image.strip()):
+        if self.enabled and not self.backend:
             raise ValueError(
-                "sandbox.enabled=true in nano.yml requires sandbox.image "
-                "(the guest image reference, e.g. the server image)."
+                "sandbox.enabled=true in nano.yml requires sandbox.backend "
+                "(e.g. type: arcbox + arcbox: {...})"
             )
         if self.max_sandboxes is not None and self.max_sandboxes < 0:
             raise ValueError(
@@ -158,10 +147,61 @@ class ToolSandboxSettings:
             )
         if self.min_free_bytes < 0:
             raise ValueError("sandbox.min_free_bytes must be a non-negative int (0 = disabled)")
-        if self.vcpus < 1:
-            raise ValueError("sandbox.vcpus must be >= 1")
-        if self.mem_mib < 128:
-            raise ValueError("sandbox.mem_mib must be >= 128")
+
+    # ------------------------------------------------------------------
+    # Backend config accessors (read-through to the raw dict)
+    # ------------------------------------------------------------------
+
+    @property
+    def backend_type(self) -> str:
+        """The backend type discriminator (e.g. ``"arcbox"``)."""
+        return str(self.backend.get("type", "arcbox"))
+
+    @property
+    def _backend_config(self) -> dict[str, Any]:
+        """The backend-specific sub-config (e.g. ``arcbox: {...}``)."""
+        sub = self.backend.get(self.backend_type, {})
+        return dict(sub) if isinstance(sub, dict) else {}
+
+    @property
+    def image(self) -> str | None:
+        """Guest image reference from the backend config (for logging)."""
+        return self._backend_config.get("image")
+
+    @property
+    def vcpus(self) -> int:
+        """Per-sandbox vCPU allocation from the backend config (for logging/cap)."""
+        return int(self._backend_config.get("vcpus", 2))
+
+    @property
+    def mem_mib(self) -> int:
+        """Per-sandbox memory (MiB) from the backend config (for logging)."""
+        return int(self._backend_config.get("mem_mib", 2048))
+
+    @property
+    def network(self) -> bool:
+        """Guest network egress from the backend config (for logging)."""
+        return bool(self._backend_config.get("network", False))
+
+    @property
+    def workspace_root(self) -> str:
+        """Guest workspace root path from the backend config (for staging)."""
+        return str(self._backend_config.get("workspace_root", "/workspace"))
+
+    @property
+    def default_timeout(self) -> int:
+        """Fallback execute timeout from the backend config."""
+        return int(self._backend_config.get("default_timeout", 120))
+
+    @property
+    def connect_timeout(self) -> float:
+        """Connect timeout from the backend config."""
+        return float(self._backend_config.get("connect_timeout", 60.0))
+
+    @property
+    def backend_idle_timeout_seconds(self) -> float:
+        """Idle timeout from the backend config (for the reaper)."""
+        return float(self._backend_config.get("idle_timeout_seconds", self.idle_timeout_seconds))
 
     def effective_max_sandboxes(self, *, cpu_count: int | None = None) -> int:
         """Resolve the sandbox cap: env override, explicit int, None, or unlimited.
@@ -205,18 +245,22 @@ class SandboxSettingsLoader:
     def parse_section(section: Any) -> ToolSandboxSettings:
         """Parse the raw ``sandbox:`` mapping from nano.yml.
 
-        Keys the server does not own (``on_deny``, ``placement_overrides``,
-        ``max_shuttle_bytes``, ``rootfs_headroom_mib``) are ignored here —
-        they stay in the loaded ``SootheConfig`` and reach the agent build
-        unchanged.
+        Reads the new multi-backend format (``sandbox.backend.type`` +
+        ``sandbox.backend.<type>``). Pool-management keys (``max_sandboxes``,
+        ``min_free_bytes``, ``idle_timeout_seconds``) are read from the
+        ``sandbox:`` top level. The remaining ``sandbox:`` keys (``on_deny``,
+        ``placement_overrides``, ``max_shuttle_bytes``) belong to soothe-nano's
+        placement policy and stay in the loaded ``SootheConfig`` — flowjet
+        never reads them.
         """
         if not isinstance(section, dict):
             return ToolSandboxSettings()
-        known = {
-            f
-            for f in ToolSandboxSettings.__dataclass_fields__  # type: ignore[attr-defined]
-        }
-        values = {k: section[k] for k in section if k in known}
+        # Pool-management fields owned by flowjet.
+        pool_keys = {"max_sandboxes", "min_free_bytes", "idle_timeout_seconds"}
+        values: dict[str, Any] = {}
+        for k in ("enabled", "backend", *pool_keys):
+            if k in section:
+                values[k] = section[k]
         # ``max_sandboxes: None`` in YAML parses as the string "none"; map
         # that to ``None`` so :meth:`effective_max_sandboxes` computes the cap.
         # ``max_sandboxes: 0`` means unlimited (no LRU eviction).

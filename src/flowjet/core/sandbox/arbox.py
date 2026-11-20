@@ -1,10 +1,11 @@
 """Sandbox lease lifecycle and host↔guest workspace staging.
 
 The sandbox lifecycle (create/connect/kill) is owned by soothe-nano's
-:class:`~soothe_nano.sandbox.ArcBoxBackend` (via ``from_config``); this
-module only manages the **pool** — one backend per workspace, LRU eviction
-above the cap, idle reaping, host↔guest workspace staging, and the disk
-watermark guard. No arcbox SDK symbols are imported here.
+sandbox backend factory (:func:`~soothe_nano.sandbox.create_sandbox_backend`);
+this module only manages the **pool** — one backend per workspace, LRU
+eviction above the cap, idle reaping, host↔guest workspace staging, and the
+disk watermark guard. No backend SDK symbols are imported here; flowjet is
+backend-agnostic and delegates construction to nano's factory.
 """
 
 from __future__ import annotations
@@ -59,7 +60,7 @@ class WorkspaceStager:
 
     File operations go through the sandbox backend's ``execute()`` (for
     ``mkdir -p`` and ``find``-based listing) and ``upload_files()`` /
-    ``download_files()`` (for byte transfers). No arcbox SDK types are used.
+    ``download_files()`` (for byte transfers). No backend SDK types are used.
     """
 
     def __init__(self, settings: ToolSandboxSettings) -> None:
@@ -257,11 +258,11 @@ class _SandboxLease:
 class ToolSandboxManager:
     """Per-workspace sandbox backends for sandboxed tool execution.
 
-    Each workspace gets its own :class:`~soothe_nano.sandbox.ArcBoxBackend`
-    (created via ``from_config()``), which manages the sandbox lifecycle
-    (create/connect/kill) internally. This manager only handles the **pool**:
-    LRU eviction above the cap, idle reaping, workspace staging, and the disk
-    watermark guard.
+    Each workspace gets its own sandbox backend (created via nano's
+    :func:`~soothe_nano.sandbox.create_sandbox_backend` factory), which
+    manages the sandbox lifecycle (create/connect/kill) internally. This
+    manager only handles the **pool**: LRU eviction above the cap, idle
+    reaping, workspace staging, and the disk watermark guard.
 
     All async methods run on the server's main event loop (driven by the
     workspace resolver lifecycle hooks); :meth:`backend_for` is sync and may
@@ -288,14 +289,14 @@ class ToolSandboxManager:
     def validate_runtime(self) -> None:
         """Fail loud at startup when the sandbox config is invalid.
 
-        The actual SDK availability check is deferred to nano's
-        ``ArcBoxBackend.from_config()`` — flowjet does not import the arcbox
-        SDK directly.
+        The actual backend SDK availability check is deferred to nano's
+        :func:`create_sandbox_backend` factory — flowjet does not import any
+        backend SDK directly.
         """
         # Nothing to validate beyond what __post_init__ already checked.
-        # The arcbox SDK presence is nano's concern (from_config raises
-        # ArcBoxError if the SDK is missing, and the builder falls back to
-        # host execution with a warning).
+        # The backend SDK presence is nano's concern (the factory raises if
+        # the SDK is missing, and the builder falls back to host execution
+        # with a warning).
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -411,9 +412,9 @@ class ToolSandboxManager:
     async def open_workspace(self, workspace: str) -> None:
         """Ensure a *usable* sandbox for ``workspace`` and stage host files into it.
 
-        Creates a self-managing ``ArcBoxBackend`` via ``from_config()`` on
-        first open (the sandbox VM is created lazily on first ``execute``);
-        reuses it on subsequent opens. The host tree is pushed into the guest
+        Creates a sandbox backend via nano's factory on first open (the
+        sandbox VM is created lazily on first ``execute``); reuses it on
+        subsequent opens. The host tree is pushed into the guest
         ``workspace_root`` on a fresh lease; a reused lease with a peer turn
         mid-run keeps its guest state (fresher than the host copy) and skips
         the push.
@@ -517,22 +518,18 @@ class ToolSandboxManager:
                 logger.warning("Tool sandbox pull failed for %s", workspace, exc_info=True)
 
     async def _spawn(self, workspace: str) -> _SandboxLease:
-        """Create a self-managing ArcBoxBackend via nano's from_config()."""
-        from soothe_nano.sandbox import ArcBoxBackend
+        """Create a sandbox backend via nano's factory (backend-agnostic).
 
-        backend = ArcBoxBackend.from_config(
-            image=self._settings.image or "",
-            vcpus=self._settings.vcpus,
-            mem_mib=self._settings.mem_mib,
-            network=self._settings.network,
-            workspace_root=self._settings.workspace_root,
-            default_timeout=self._settings.default_timeout,
-            connect_timeout=self._settings.connect_timeout,
-            idle_timeout_seconds=self._settings.idle_timeout_seconds,
-            min_free_bytes=self._settings.min_free_bytes,
-            api_url=self._settings.api_url,
-            api_key=self._settings.api_key,
-        )
+        Delegates to :func:`soothe_nano.sandbox.create_sandbox_backend` with
+        the raw ``backend`` config from nano.yml. The factory dispatches to
+        the registered backend (e.g. ArcBox) by ``type`` — flowjet never
+        imports or calls a backend SDK directly.
+        """
+        from soothe_nano.config.models import SandboxBackendConfig
+        from soothe_nano.sandbox import create_sandbox_backend
+
+        backend_cfg = SandboxBackendConfig(**self._settings.backend)
+        backend = create_sandbox_backend(backend_cfg)
         lease = _SandboxLease(backend=backend)
         self._leases[workspace] = lease
         logger.info("Tool sandbox ready (workspace=%s)", workspace)
