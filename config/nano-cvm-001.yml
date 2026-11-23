@@ -1,0 +1,146 @@
+# Production config for cvm-001 (8 vCPU / 16 GB, os_sandbox backend).
+#
+# Tuned based on benchmark results from benchmarks/bench_os_sandbox_pool.py:
+#   - os_sandbox is process-level isolation (Seatbelt/bwrap+seccomp), ~0.1 MB
+#     per sandbox — memory is NOT the constraint, CPU is.
+#   - Execute latency: ~38ms p50, ~50ms p95 (Seatbelt sandbox overhead).
+#   - Throughput plateaus above cap=16 (diminishing returns past 2× vCPU).
+#   - LRU eviction is cheap but adds respawn latency under saturation.
+#
+# Pool sizing for 8 vCPU / 16 GB:
+#   - max_sandboxes=16 (2× vCPU): balances throughput (~303 ops/sec) with
+#     headroom. The compute formula (70%×8÷2=2, floor 8) is too conservative
+#     for os_sandbox because it assumes VM-style vCPU pinning — os_sandbox
+#     shares the host scheduler, so the real limit is context-switch overhead.
+#   - Override at runtime: FLOWJET_SANDBOX_MAX=16
+#   - For burst traffic: FLOWJET_SANDBOX_MAX=0 (unlimited, no LRU eviction).
+#
+# Memory budget (16 GB total):
+#   - OS + Docker daemon: ~2 GB
+#   - PostgreSQL + pgvector: ~2 GB (shared_buffers=256MB, work_mem=64MB)
+#   - flowjet-server (Python): ~1 GB
+#   - Reserve: ~1 GB
+#   - Available for sandboxes: ~10 GB → 100+ os_sandbox processes at 0.1 MB each
+#   - Conclusion: memory is NOT the bottleneck for os_sandbox.
+#
+# Usage:
+#   fj serve --nano-config ./config/nano-cvm-001.yml
+#   # or via env:
+#   FLOWJET_NANO_CONFIG=./config/nano-cvm-001.yml flowjet-server
+#
+# Required env vars:
+#   DASHSCOPE_API_KEY    - DashScope provider credential
+#   DASHSCOPE_BASE_URL   - DashScope API base URL
+
+# =============================================================================
+# LLM Providers
+# =============================================================================
+providers:
+  - name: dashscope
+    provider_type: openai
+    api_base_url: "${DASHSCOPE_BASE_URL}"
+    api_key: "${DASHSCOPE_API_KEY}"
+    models:
+      - glm-5.2
+      - qwen3.7-plus
+      - qwen3.6-flash
+      - kimi-k2.5
+      - kimi-k2.7-code
+      - MiniMax-M3
+      - text-embedding-v4
+
+# =============================================================================
+# Model Router
+# =============================================================================
+router_profiles:
+  - name: production
+    router:
+      default: "dashscope:glm-5.2"
+      fast: "dashscope:qwen3.6-flash"
+      think: "dashscope:glm-5.2"
+      image: "dashscope:qwen3.7-plus"
+      ocr: "dashscope:qwen3.7-plus"
+
+active_router_profile: production
+
+embedding_profile:
+  - model_role: dashscope:text-embedding-v4
+    embedding_dims: 1536
+
+# =============================================================================
+# Persistence (PostgreSQL + pgvector for production)
+# =============================================================================
+persistence:
+  default_backend: postgresql
+  postgres_base_dsn: "postgresql://postgres:postgres@127.0.0.1:5432"
+  postgres_databases:
+    checkpoints: soothe_checkpoints
+    metadata: soothe_metadata
+    vectors: flowjet_vectors
+    memory: soothe_memory
+  postgres:
+    pool_max_idle_seconds: 90
+    pool_max_lifetime_seconds: 900
+
+# =============================================================================
+# Vector Stores
+# =============================================================================
+vector_stores:
+  - name: pgvector
+    provider_type: pgvector
+    dsn: "postgresql://postgres:postgres@127.0.0.1:5432/flowjet_vectors"
+    pool_size: 8
+
+vector_store_router:
+  default: "pgvector:soothe_default"
+
+# =============================================================================
+# Security & Observability
+# =============================================================================
+security:
+  allow_paths_outside_workspace: false
+
+observability:
+  log_file_level: INFO
+
+# =============================================================================
+# Tool Sandbox (os_sandbox — OS-primitive isolation)
+# =============================================================================
+# Tuned for cvm-001: 8 vCPU / 16 GB.
+#
+# max_sandboxes: 16
+#   2× vCPU count. Benchmark shows throughput plateaus past cap=16, and
+#   os_sandbox memory overhead is negligible (~0.1 MB/sandbox). The extra
+#   headroom over the compute-formula default (8) absorbs burst traffic
+#   without excessive LRU eviction respawns.
+#
+# idle_timeout_seconds: 300
+#   5-minute idle reaper. Sandboxes that haven't served a turn in 5 minutes
+#   are destroyed and their lease freed. Tune lower (60-120) for bursty
+#   workloads, higher (600) for steady-state traffic.
+#
+# min_free_bytes: 1073741824
+#   1 GB disk watermark. Refuses to open a sandbox whose guest root has
+#   less than 1 GB free. Guards against disk exhaustion from agent-generated
+#   files. Set to 0 to disable (not recommended for production).
+#
+# default_timeout: 60
+#   Per-tool-call timeout inside the sandbox. 60s is aggressive — most tool
+#   calls (file reads, grep, small scripts) finish in <5s. Raise to 120 for
+#   long-running builds or test suites.
+sandbox:
+  enabled: true
+  max_sandboxes: 16
+  idle_timeout_seconds: 300
+  min_free_bytes: 1073741824  # 1 GB
+  on_deny: drop
+  backend:
+    type: os_sandbox
+    os_sandbox:
+      workspace_root: null       # null = builder binds the effective tool workspace
+      linux_tier: auto           # auto | bwrap | landlock
+      allow_degraded: false      # gate for the Landlock tier
+      default_timeout: 60
+      env_allowlist: [PATH, LANG, LC_ALL, LC_CTYPE, TERM, TMPDIR, HOME]
+      egress:
+        enabled: false           # must stay false (relay is a follow-up)
