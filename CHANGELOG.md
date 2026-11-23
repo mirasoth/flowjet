@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-11-24
+
+### Added
+
+- **OS-primitive sandbox backend (`os_sandbox`).** Tool calls can now run inside an OS-level sandbox — Seatbelt on macOS, bubblewrap+seccomp on Linux — giving real isolation without hardware virtualization or a guest image. `os_sandbox` uses identity path mapping (guest paths are host paths), so no host↔guest workspace staging is needed; the agent operates on the real workspace directory, confined by the OS boundary. A new `sandbox_mode` setting (`auto` / `os_sandbox` / `off`, default `auto`) controls the default: when no explicit `sandbox:` section is present in the nano.yml, `auto` enables `os_sandbox` with production defaults; `off` disables the sandbox entirely. An explicit `sandbox:` section always wins. Override via `--sandbox-mode` on `fj serve` or the `FLOWJET_SANDBOX_MODE` env var. New `config/nano-os-sandbox.yml` ships a ready reference config.
+
+### Changed
+
+- **Multi-backend sandbox config format (breaking).** The flat `sandbox.image` / `vcpus` / `mem_mib` / `network` / `workspace_root` / `default_timeout` / `connect_timeout` / `idle_timeout_seconds` fields are no longer supported. Use the discriminated `sandbox.backend.type` + `sandbox.backend.<type>.*` format instead (e.g. `type: arcbox` + `arcbox: { image, vcpus, mem_mib, … }`, or `type: os_sandbox` + `os_sandbox: { … }`). Pool-management keys (`max_sandboxes`, `min_free_bytes`, `idle_timeout_seconds`) stay at the `sandbox:` top level; backend-specific lifecycle fields move under `sandbox.backend.<type>` and are passed verbatim to nano's `create_sandbox_backend` factory. `config/nano-sandbox-soothe.yml` was renamed to `config/nano-arcbox-sandbox.yml` and migrated to the new format.
+
+- **Sandbox lifecycle is now fully backend-agnostic.** flowjet no longer imports or calls the arcbox SDK directly — the create/connect/kill lifecycle is owned by soothe-nano's `create_sandbox_backend()` factory, which flowjet calls per workspace. Removed ~1060 lines of arcbox-specific coupling (`_import_arcbox`, `_new_client`, `_create`, `_kill_lease`, pad reclamation, orphan scanning/adoption, heartbeat/set_lifecycle, and the `reserved_pad_path` / `recover_orphans` / `orphan_timeout_seconds` / `owner` settings). `ArcBoxToolSandboxManager` renamed to `ToolSandboxManager`. Crash cleanup is now handled by nano's `_SandboxManager` (`idle_timeout` + `on_idle="kill"` at the daemon level). flowjet keeps its pool-management responsibilities: per-workspace backend pool with LRU eviction, idle reaper, host↔guest workspace staging, and the disk watermark guard.
+
+- **`soothe` floor bumped to `>=1.3.4`** (`uv.lock` refreshed; `soothe-nano` → 2.0.11). Picks up the latest soothe 1.3.4 runtime and the nano multi-backend sandbox factory; no other flowjet-facing API changes.
+
 ## [2.2.5] — 2026-11-19
 
 ### Fixed
