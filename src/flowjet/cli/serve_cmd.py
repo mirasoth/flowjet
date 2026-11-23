@@ -18,6 +18,7 @@ _ENV_BY_FLAG = {
     "port": "FLOWJET_PORT",
     "api_key": "FLOWJET_API_KEY",
     "nano_config": "FLOWJET_NANO_CONFIG",
+    "sandbox_mode": "FLOWJET_SANDBOX_MODE",
 }
 
 
@@ -30,6 +31,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-p", "--port", type=int, help="Bind port (FLOWJET_PORT, default 8618).")
     parser.add_argument("--api-key", help="Require 'Authorization: Bearer <key>' on /v1.")
     parser.add_argument("--nano-config", help="Path to nano.yml for the agent backend.")
+    parser.add_argument(
+        "--sandbox-mode",
+        choices=["auto", "os_sandbox", "off"],
+        help=(
+            "Tool sandbox mode (FLOWJET_SANDBOX_MODE). 'auto' (default) enables "
+            "os_sandbox when no sandbox section is in the nano.yml; 'off' disables."
+        ),
+    )
     return parser
 
 

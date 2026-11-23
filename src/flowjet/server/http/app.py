@@ -48,6 +48,7 @@ def build_backend(settings: Settings) -> RuntimeBackend:
         pool_settings=settings.pool_settings(),
         checkpointer_policy=settings.server_checkpointer,
         watched_subdirs=settings.workspace_watched_subdirs_list(),
+        sandbox_mode=settings.sandbox_mode,
     )
 
 
@@ -56,11 +57,14 @@ def build_sandbox_manager(
 ) -> ToolSandboxManager | None:
     """Build the tool-sandbox manager from the nano.yml ``sandbox:`` section.
 
-    Returns ``None`` when the sandbox is disabled (the default) — behavior is
-    then identical to a host-side tools deployment. Fails loud at startup when
-    the section is enabled but misconfigured (missing image).
+    Returns ``None`` when the sandbox is disabled — behavior is then identical
+    to a host-side tools deployment. In production mode (``sandbox_mode=auto``,
+    the default) the os_sandbox backend is enabled when no explicit
+    ``sandbox:`` section is present in the nano.yml.
     """
-    return ServerRuntimeBuilder.sandbox_manager(settings.nano_config)
+    return ServerRuntimeBuilder.sandbox_manager(
+        settings.nano_config, sandbox_mode=settings.sandbox_mode
+    )
 
 
 def build_workspace_resolver(

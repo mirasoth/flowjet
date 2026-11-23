@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     # paused graph.
     clarification_format: Literal["markdown", "json", "both"] = "markdown"
 
+    # Tool sandbox mode. ``"auto"`` (production default) enables the os_sandbox
+    # backend — real OS-level isolation (Seatbelt on macOS, bwrap+seccomp on
+    # Linux) — when no explicit ``sandbox:`` section is present in the nano.yml.
+    # ``"off"`` disables the sandbox entirely (host-side tool execution).
+    # ``"os_sandbox"`` forces os_sandbox even when the nano.yml has a different
+    # backend (useful for testing). An explicit ``sandbox:`` section in the
+    # nano.yml always wins over this setting.
+    sandbox_mode: Literal["auto", "os_sandbox", "off"] = "auto"
+
     def model_ids(self) -> list[str]:
         return [m.strip() for m in self.models.split(",") if m.strip()]
 

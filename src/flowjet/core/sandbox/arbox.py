@@ -418,6 +418,11 @@ class ToolSandboxManager:
         ``workspace_root`` on a fresh lease; a reused lease with a peer turn
         mid-run keeps its guest state (fresher than the host copy) and skips
         the push.
+
+        For ``os_sandbox`` (identity path mapping) staging is a no-op: the
+        workspace is bound as-is (guest path == host path), so there is no
+        host↔guest transfer. The backend's ``bind_workspace`` is called at
+        spawn time instead.
         """
         await self._ensure_started()
         lock = self._workspace_lock(workspace)
@@ -431,6 +436,10 @@ class ToolSandboxManager:
                 seeded = False
             lease.active_runs += 1
             lease.last_used = time.monotonic()
+            if self._settings.is_os_sandbox:
+                # Identity mapping: no push/pull. The workspace was bound at
+                # spawn; nothing to stage.
+                return
             if lease.active_runs > 1 and not seeded:
                 # A peer session is mid-run on this sandbox: its guest state
                 # is the freshest, a host push could clobber live edits.
@@ -497,7 +506,12 @@ class ToolSandboxManager:
             return None
 
     async def close_workspace(self, workspace: str) -> None:
-        """Pull guest files back to the host workspace when the last run ends."""
+        """Pull guest files back to the host workspace when the last run ends.
+
+        For ``os_sandbox`` (identity path mapping) the pull is a no-op: guest
+        writes landed directly on the host filesystem, so there is nothing to
+        transfer back.
+        """
         lock = self._workspace_lock(workspace)
         async with lock:
             lease = self._leases.get(workspace)
@@ -509,6 +523,9 @@ class ToolSandboxManager:
             lease.active_runs -= 1
             lease.last_used = time.monotonic()
             if lease.active_runs > 0:
+                return
+            if self._settings.is_os_sandbox:
+                # Identity mapping: guest writes are already on the host.
                 return
             try:
                 lease.manifest = await self._stager.pull(workspace, lease.backend, lease.manifest)
@@ -522,14 +539,22 @@ class ToolSandboxManager:
 
         Delegates to :func:`soothe_nano.sandbox.create_sandbox_backend` with
         the raw ``backend`` config from nano.yml. The factory dispatches to
-        the registered backend (e.g. ArcBox) by ``type`` — flowjet never
-        imports or calls a backend SDK directly.
+        the registered backend (e.g. ArcBox, OsLocalSandbox) by ``type`` —
+        flowjet never imports or calls a backend SDK directly.
+
+        For ``os_sandbox`` the workspace is bound at spawn time via the
+        backend's ``bind_workspace`` duck-typed extra (identity path mapping:
+        guest path == host path).
         """
         from soothe_nano.config.models import SandboxBackendConfig
         from soothe_nano.sandbox import create_sandbox_backend
 
         backend_cfg = SandboxBackendConfig(**self._settings.backend)
         backend = create_sandbox_backend(backend_cfg)
+        if self._settings.is_os_sandbox:
+            binder = getattr(backend, "bind_workspace", None)
+            if binder is not None:
+                binder(workspace)
         lease = _SandboxLease(backend=backend)
         self._leases[workspace] = lease
         logger.info("Tool sandbox ready (workspace=%s)", workspace)
@@ -575,7 +600,25 @@ class ToolSandboxManager:
 
     @property
     def guest_workspace(self) -> str:
-        """Guest-side workspace path — what the agent sees as its workspace."""
+        """Guest-side workspace path — what the agent sees as its workspace.
+
+        For ``arcbox`` this is the in-guest mount point (e.g. ``/workspace``).
+        For ``os_sandbox`` this returns the configured ``workspace_root``, but
+        the real guest workspace is the host workspace path (identity mapping)
+        — use :meth:`guest_workspace_for` to get the correct path per workspace.
+        """
+        return self._settings.workspace_root
+
+    def guest_workspace_for(self, workspace: str) -> str:
+        """The workspace path the agent should see for ``workspace``.
+
+        For ``arcbox`` (and other VM-backed backends) this is the in-guest mount
+        point — the same for every workspace. For ``os_sandbox`` (identity path
+        mapping) the guest workspace *is* the host workspace path, so the agent
+        sees the real directory it is operating on.
+        """
+        if self._settings.is_os_sandbox:
+            return workspace
         return self._settings.workspace_root
 
 

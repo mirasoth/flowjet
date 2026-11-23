@@ -1,0 +1,92 @@
+# Production config with os_sandbox enabled.
+# Tool calls run inside an OS-primitive sandbox (Seatbelt on macOS,
+# bubblewrap+seccomp on Linux) — real isolation without hardware virtualization.
+#
+# Usage:
+#   fj serve --nano-config ./config/nano-os-sandbox.yml
+# or set FLOWJET_NANO_CONFIG to this path.
+#
+# The os_sandbox backend uses identity path mapping (guest paths are host
+# paths), so no workspace staging is needed — the agent operates on the real
+# workspace directory, confined by the OS-level boundary.
+
+providers:
+  - name: dashscope
+    provider_type: openai
+    api_base_url: "${DASHSCOPE_BASE_URL}"
+    api_key: "${DASHSCOPE_API_KEY}"
+    models:
+      - glm-5.2
+      - qwen3.7-plus
+      - qwen3.6-flash
+      - kimi-k2.5
+      - MiniMax-M3
+      - text-embedding-v4
+
+router_profiles:
+  - name: production
+    router:
+      default: "dashscope:glm-5.2"
+      fast: "dashscope:qwen3.6-flash"
+      think: "dashscope:glm-5.2"
+      image: "dashscope:qwen3.7-plus"
+      ocr: "dashscope:qwen3.7-plus"
+
+active_router_profile: production
+
+embedding_profile:
+  model_role: dashscope:text-embedding-v4
+  embedding_dims: 1536
+
+persistence:
+  default_backend: sqlite
+  postgres_base_dsn: "postgresql://postgres:postgres@127.0.0.1:5432"
+  postgres_databases:
+    checkpoints: soothe_checkpoints
+    metadata: soothe_metadata
+    vectors: flowjet_vectors
+    memory: soothe_memory
+  postgres:
+    pool_max_idle_seconds: 90
+    pool_max_lifetime_seconds: 900
+
+observability:
+  log_file_level: DEBUG
+
+vector_stores:
+  - name: sqlite_vec_dev
+    provider_type: sqlite_vec
+
+vector_store_router:
+  default: sqlite_vec_dev:soothe_default
+
+tools:
+  wizsearch:
+    default_engines:
+      - duckduckgo
+      - tavily
+
+security:
+  allow_paths_outside_workspace: true
+
+# Tool sandbox: os_sandbox backend (OS-primitive isolation).
+# The `sandbox:` section is server-owned (SandboxSettingsLoader); the
+# `on_deny`/`placement_overrides`/`max_shuttle_bytes` keys are soothe-nano
+# placement policy (SandboxConfig) and flow through to the agent build.
+# `max_sandboxes` is the pool cap (0=unlimited, None=compute from host CPU).
+sandbox:
+  enabled: true
+  max_sandboxes: 32
+  idle_timeout_seconds: 300
+  min_free_bytes: 0
+  on_deny: drop
+  backend:
+    type: os_sandbox
+    os_sandbox:
+      workspace_root: null       # null = builder binds the effective tool workspace
+      linux_tier: auto           # auto | bwrap | landlock
+      allow_degraded: false      # gate for the Landlock tier
+      default_timeout: 120
+      env_allowlist: [PATH, LANG, LC_ALL, LC_CTYPE, TERM, TMPDIR, HOME]
+      egress:
+        enabled: false           # must stay false (relay is a follow-up)

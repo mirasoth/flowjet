@@ -67,9 +67,10 @@ class ServerRuntimeBuilder:
         pool_settings: Any,
         checkpointer_policy: str | None = "auto",
         watched_subdirs: Sequence[str] | None = None,
+        sandbox_mode: str = "auto",
     ) -> RuntimeBackend:
         backend = resolve_backend(Surface.SERVER)
-        sandbox_manager = cls.sandbox_manager(config_path)
+        sandbox_manager = cls.sandbox_manager(config_path, sandbox_mode=sandbox_mode)
         workspace_resolver = cls.workspace_resolver(
             home=home,
             cas_root=cas_root,
@@ -95,20 +96,33 @@ class ServerRuntimeBuilder:
         return cast("RuntimeBackend", build_isolating_nano_backend(**common))
 
     @classmethod
-    def sandbox_manager(cls, config_path: str | None) -> ToolSandboxManager | None:
+    def sandbox_manager(
+        cls, config_path: str | None, *, sandbox_mode: str = "auto"
+    ) -> ToolSandboxManager | None:
         """Build the tool-sandbox manager from the nano.yml ``sandbox:`` section.
 
-        Returns ``None`` when the sandbox is disabled (the default) — behavior
-        is then identical to a host-side tools deployment. Fails loud at
-        startup when the section is enabled but misconfigured (missing image).
-        The arcbox SDK availability is checked lazily by nano's
-        ``ArcBoxBackend.from_config()`` on first use.
+        Resolution order:
+        1. An explicit ``sandbox:`` section in the nano.yml always wins
+           (operator's choice — arcbox, os_sandbox, or disabled).
+        2. ``sandbox_mode`` setting: ``"auto"`` (production default) or
+           ``"os_sandbox"`` enables the os_sandbox backend with production
+           defaults when no explicit section is present. ``"off"`` disables.
+
+        Returns ``None`` when the sandbox is disabled — behavior is then
+        identical to a host-side tools deployment. Fails loud at startup when
+        the section is enabled but the backend's OS prerequisites are missing
+        (the factory probe raises; never a silent host fallback).
         """
         from flowjet.core.sandbox.arbox import ToolSandboxManager
 
         sandbox_settings: ToolSandboxSettings = SandboxSettingsLoader.load(config_path)
         if not sandbox_settings.enabled:
-            return None
+            # No explicit sandbox section — apply the sandbox_mode default.
+            mode = str(sandbox_mode or "auto").strip().lower()
+            if mode in ("auto", "os_sandbox"):
+                sandbox_settings = ToolSandboxSettings.default_os_sandbox()
+            else:
+                return None
         manager = ToolSandboxManager(sandbox_settings)
         manager.validate_runtime()
         return manager

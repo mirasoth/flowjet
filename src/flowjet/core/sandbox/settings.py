@@ -154,8 +154,19 @@ class ToolSandboxSettings:
 
     @property
     def backend_type(self) -> str:
-        """The backend type discriminator (e.g. ``"arcbox"``)."""
+        """The backend type discriminator (e.g. ``"arcbox"``, ``"os_sandbox"``)."""
         return str(self.backend.get("type", "arcbox"))
+
+    @property
+    def is_os_sandbox(self) -> bool:
+        """True when the backend is ``os_sandbox`` (identity path mapping).
+
+        os_sandbox binds the real host workspace directory as-is — guest paths
+        are host paths — so the host↔guest push/pull staging is a no-op and the
+        guest workspace *is* the host workspace path. This flag lets the manager
+        skip staging and report the correct workspace to the adapter.
+        """
+        return self.backend_type == "os_sandbox"
 
     @property
     def _backend_config(self) -> dict[str, Any]:
@@ -185,7 +196,13 @@ class ToolSandboxSettings:
 
     @property
     def workspace_root(self) -> str:
-        """Guest workspace root path from the backend config (for staging)."""
+        """Guest workspace root path from the backend config (for staging).
+
+        For ``arcbox`` this is the in-guest mount point (default ``/workspace``).
+        For ``os_sandbox`` the workspace is bound with identity mapping — guest
+        path == host path — so this value is only a placeholder; the real guest
+        workspace is the host workspace path reported per-lease.
+        """
         return str(self._backend_config.get("workspace_root", "/workspace"))
 
     @property
@@ -236,6 +253,39 @@ class ToolSandboxSettings:
             except ValueError:
                 pass  # fall through to field value
         return self.max_sandboxes
+
+    @staticmethod
+    def default_os_sandbox(
+        *,
+        max_sandboxes: int | None = 8,
+        idle_timeout_seconds: float = 300.0,
+        linux_tier: str = "auto",
+        allow_degraded: bool = False,
+        default_timeout: int = 120,
+    ) -> ToolSandboxSettings:
+        """Build production-default os_sandbox settings.
+
+        os_sandbox uses identity path mapping (guest paths are host paths), so
+        no ``workspace_root`` is set — the builder binds the effective tool
+        workspace at construction time. This is the production default: real
+        OS-level isolation (Seatbelt on macOS, bwrap+seccomp on Linux) without
+        requiring hardware virtualization or a guest image.
+        """
+        return ToolSandboxSettings(
+            enabled=True,
+            backend={
+                "type": "os_sandbox",
+                "os_sandbox": {
+                    "workspace_root": None,
+                    "linux_tier": linux_tier,
+                    "allow_degraded": allow_degraded,
+                    "default_timeout": default_timeout,
+                },
+            },
+            max_sandboxes=max_sandboxes,
+            idle_timeout_seconds=idle_timeout_seconds,
+            min_free_bytes=0,
+        )
 
 
 class SandboxSettingsLoader:

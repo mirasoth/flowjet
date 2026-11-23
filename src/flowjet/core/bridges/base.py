@@ -219,8 +219,9 @@ class AgentAdapterBase:
         if self._sandbox_manager is not None:
             agent = await self._ensure_agent(workspace=str(req.workspace))
             # Sandbox mode: the agent's workspace is the guest root, not the
-            # host path (soothe-nano sandbox semantics).
-            workspace_arg = self._sandbox_manager.guest_workspace
+            # host path (soothe-nano sandbox semantics). For os_sandbox the
+            # guest root *is* the host path (identity mapping).
+            workspace_arg = self._sandbox_manager.guest_workspace_for(str(req.workspace))
         else:
             agent = await self._ensure_agent()
             workspace_arg = str(req.workspace)
