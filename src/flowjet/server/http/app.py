@@ -58,9 +58,9 @@ def build_sandbox_manager(
     """Build the tool-sandbox manager from the nano.yml ``sandbox:`` section.
 
     Returns ``None`` when the sandbox is disabled — behavior is then identical
-    to a host-side tools deployment. In production mode (``sandbox_mode=auto``,
-    the default) the os_sandbox backend is enabled when no explicit
-    ``sandbox:`` section is present in the nano.yml.
+    to a host-side tools deployment. ``sandbox_mode=off`` (the default)
+    disables the sandbox; ``sandbox_mode=auto`` enables the os_sandbox backend
+    when no explicit ``sandbox:`` section is present in the nano.yml.
     """
     return ServerRuntimeBuilder.sandbox_manager(
         settings.nano_config, sandbox_mode=settings.sandbox_mode

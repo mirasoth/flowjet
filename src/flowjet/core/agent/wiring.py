@@ -67,7 +67,7 @@ class ServerRuntimeBuilder:
         pool_settings: Any,
         checkpointer_policy: str | None = "auto",
         watched_subdirs: Sequence[str] | None = None,
-        sandbox_mode: str = "auto",
+        sandbox_mode: str = "off",
     ) -> RuntimeBackend:
         backend = resolve_backend(Surface.SERVER)
         sandbox_manager = cls.sandbox_manager(config_path, sandbox_mode=sandbox_mode)
@@ -97,16 +97,16 @@ class ServerRuntimeBuilder:
 
     @classmethod
     def sandbox_manager(
-        cls, config_path: str | None, *, sandbox_mode: str = "auto"
+        cls, config_path: str | None, *, sandbox_mode: str = "off"
     ) -> ToolSandboxManager | None:
         """Build the tool-sandbox manager from the nano.yml ``sandbox:`` section.
 
         Resolution order:
         1. An explicit ``sandbox:`` section in the nano.yml always wins
            (operator's choice — arcbox, os_sandbox, or disabled).
-        2. ``sandbox_mode`` setting: ``"auto"`` (production default) or
-           ``"os_sandbox"`` enables the os_sandbox backend with production
-           defaults when no explicit section is present. ``"off"`` disables.
+        2. ``sandbox_mode`` setting: ``"auto"`` or ``"os_sandbox"`` enables the
+           os_sandbox backend with production defaults when no explicit section
+           is present. ``"off"`` (default) disables.
 
         Returns ``None`` when the sandbox is disabled — behavior is then
         identical to a host-side tools deployment. Fails loud at startup when
@@ -118,7 +118,7 @@ class ServerRuntimeBuilder:
         sandbox_settings: ToolSandboxSettings = SandboxSettingsLoader.load(config_path)
         if not sandbox_settings.enabled:
             # No explicit sandbox section — apply the sandbox_mode default.
-            mode = str(sandbox_mode or "auto").strip().lower()
+            mode = str(sandbox_mode or "off").strip().lower()
             if mode in ("auto", "os_sandbox"):
                 sandbox_settings = ToolSandboxSettings.default_os_sandbox()
             else:

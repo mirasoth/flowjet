@@ -933,15 +933,25 @@ def test_build_sandbox_manager_disabled_when_mode_off(tmp_path: Path) -> None:
 
 @pytest.mark.usefixtures("fake_backend")
 def test_build_sandbox_manager_auto_enables_os_sandbox(tmp_path: Path) -> None:
-    """``sandbox_mode=auto`` (production default) enables os_sandbox with no config section."""
+    """``sandbox_mode=auto`` enables os_sandbox with no config section."""
     from flowjet.server.http.app import build_sandbox_manager
 
     settings = _settings_for(tmp_path, "models:\n  default: gpt-x\n")
-    # sandbox_mode defaults to "auto"
+    settings = settings.model_copy(update={"sandbox_mode": "auto"})
     manager = build_sandbox_manager(settings)
     assert manager is not None
     assert manager.settings.is_os_sandbox is True
     assert manager.settings.enabled is True
+
+
+@pytest.mark.usefixtures("fake_backend")
+def test_build_sandbox_manager_disabled_by_default(tmp_path: Path) -> None:
+    """Default ``sandbox_mode`` is ``off`` — no manager with no config section."""
+    from flowjet.server.http.app import build_sandbox_manager
+
+    settings = _settings_for(tmp_path, "models:\n  default: gpt-x\n")
+    # sandbox_mode defaults to "off"
+    assert build_sandbox_manager(settings) is None
 
 
 @pytest.mark.usefixtures("fake_backend")

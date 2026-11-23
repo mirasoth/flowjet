@@ -35,8 +35,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sandbox-mode",
         choices=["auto", "os_sandbox", "off"],
         help=(
-            "Tool sandbox mode (FLOWJET_SANDBOX_MODE). 'auto' (default) enables "
-            "os_sandbox when no sandbox section is in the nano.yml; 'off' disables."
+            "Tool sandbox mode (FLOWJET_SANDBOX_MODE). 'off' (default) disables "
+            "the sandbox; 'auto' enables os_sandbox when no sandbox section is "
+            "in the nano.yml."
         ),
     )
     return parser
