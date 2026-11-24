@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.1] — 2026-11-24
+
+### Fixed
+
+- **Bake `bubblewrap` into the server image** so the `os_sandbox` Linux tier selects bwrap+seccomp instead of falling back to degraded Landlock. The Debian runtime installs `bubblewrap` alongside chromium, and the prebuilt base image was refreshed so release builds inherit `/usr/bin/bwrap` without an initContainer or PATH override.
+
 ## [2.3.0] — 2026-11-24
 
 ### Added
