@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.2] — 2026-11-24
+
+### Fixed
+
+- **Shell tools broke on the Landlock tier**: require `soothe>=1.3.5` (which pulls `soothe-nano>=2.0.12`) so `run_command`/`run_python` capture-offload redirects — and the interpreter venv prefix read — no longer fail before execution on the degraded Linux sandbox tier.
+
 ## [2.3.1] — 2026-11-24
 
 ### Fixed
