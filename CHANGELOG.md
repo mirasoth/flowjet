@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.3] — 2026-11-24
+
+### Changed
+
+- Bump the Soothe floor to `soothe>=1.3.6` (which pulls `soothe-nano>=2.0.13`): brings automatic same-thread step retry with re-plan continuation, the `soothe[observability]` extra, and the daemon hardening release (checkpoint/heartbeat/pool fixes, workspace-marker ownership sidecar so `drain_goal_runtime` never signals a forged or recycled PID).
+
 ## [2.3.2] — 2026-11-24
 
 ### Fixed
