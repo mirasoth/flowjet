@@ -120,9 +120,16 @@ COPY config/nano.yml /flowjet/config/nano.yml
 # Debian keeps chromium & chromium-driver (chromedriver) version-matched.
 # tarzi launches chrome with --headless --no-sandbox --disable-gpu
 # --disable-dev-shm-usage, which is safe for containers/non-root.
+#
+# bubblewrap: os_sandbox Linux tier (soothe_nano/sandbox/os_local.py) uses
+# bwrap+seccomp for tool isolation. The python:3.12-bookworm base doesn't
+# ship bwrap; installing it here bakes the binary into the image so the k8s
+# Deployment needs no initContainer or PATH override — bwrap lands at
+# /usr/bin/bwrap, already on the default PATH that shutil.which() scans.
 RUN sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends chromium chromium-driver \
+    && apt-get install -y --no-install-recommends \
+        chromium chromium-driver bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --system flowjet \

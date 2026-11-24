@@ -69,9 +69,17 @@ ENV PATH="/app/.venv/bin:${PATH}"
 # Debian keeps chromium & chromium-driver (chromedriver) version-matched.
 # tarzi launches chrome with --headless --no-sandbox --disable-gpu
 # --disable-dev-shm-usage, which is safe for containers/non-root.
+#
+# bubblewrap: os_sandbox Linux tier (soothe_nano/sandbox/os_local.py) uses
+# bwrap+seccomp for tool isolation. The python:3.12-bookworm base doesn't
+# ship bwrap; installing it here bakes the binary into the base image so
+# both the standalone Dockerfile and Dockerfile.prebuilt inherit it. bwrap
+# lands at /usr/bin/bwrap, already on the default PATH that shutil.which()
+# scans — no initContainer or PATH override needed in the k8s Deployment.
 RUN sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends chromium chromium-driver \
+    && apt-get install -y --no-install-recommends \
+        chromium chromium-driver bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 
 # Stay root here — the app Dockerfile runs uv sync to add flowjet itself
