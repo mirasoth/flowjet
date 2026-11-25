@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.4] — 2026-11-25
+
+### Changed
+
+- Bump the Soothe floor to `soothe>=1.3.7`: brings the approval dock (`Ctrl+R`), manual clarification mode with approve-and-remember grants, per-tool multi-tool approval gates, `ask_user` closure hardening (every ask terminates in an answer, an honest unanswered sentinel, or a park), execution token-stat accuracy (`token_usage_source` on wire events, completion synthesis in goal snapshots, estimated totals marked in the TUI), and TUI thinking/todo/files pane fixes (non-italic reasoning, no overflow cap on todo panes, leading `+N more` overflow line).
+
 ## [2.3.3] — 2026-11-24
 
 ### Changed
