@@ -1,20 +1,22 @@
 """Phase 2 — workspace sync (fsspec) integration tests.
 
 Tests the ``SyncAwareWorkspaceResolver`` lifecycle hooks and the
-``IsolatingRuntimeBackend`` integration with an injectable resolver.
-Uses an in-memory fsspec filesystem (``MemoryFileSystem``) so no cloud
-credentials or network are needed.
+``IsolatingRuntimeBackend`` integration with an injectable resolver. The
+per-turn engine semantics (shared open, reconcile gating, artifact restore,
+last-turn-out close) live in soothe's ``TurnScopedWorkspaces`` and are
+pinned by that repo's ``test_turns.py``; here we pin the resolver's
+session→run_id mapping, its delegation to the engine, and — with real
+``file://`` backends — the end-to-end dual-source round trip.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from flowjet.core.events import RunCompleted, RunRequest, RunStarted
+from flowjet.core.events import RunCompleted, RunFailed, RunRequest, RunStarted
 from flowjet.core.runtime.isolation import (
     FakeAgentAdapter,
     IsolatedRunRequest,
@@ -23,6 +25,26 @@ from flowjet.core.runtime.isolation import (
     SyncAwareWorkspaceResolver,
     WorkspaceResolver,
 )
+
+
+class FakeEngine:
+    """Duck-typed ``TurnScopedWorkspaces`` recording the delegated run ids."""
+
+    def __init__(self) -> None:
+        self.opened: list[str] = []
+        self.closed: list[str] = []
+        self.close_all_calls = 0
+
+    async def open_turn(self, run_id: str) -> Path:
+        self.opened.append(run_id)
+        return Path("/unused")
+
+    async def close_turn(self, run_id: str) -> None:
+        self.closed.append(run_id)
+
+    async def close_all(self) -> None:
+        self.close_all_calls += 1
+
 
 # ---------------------------------------------------------------------------
 # WorkspaceResolver lifecycle hooks (base class — Phase 1 no-ops)
@@ -80,105 +102,77 @@ def test_resolve_falls_back_for_invalid_workspace_ids(tmp_path: Path, bad: str):
     assert path.name.startswith("ws_")
 
 
+# ---------------------------------------------------------------------------
+# Lifecycle delegation to the turn-scoped engine
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_open_close_keyed_by_workspace_id(tmp_path: Path):
+async def test_open_close_delegate_run_id_to_engine(tmp_path: Path):
     """open/close derive the run_id from the resolved path name (wsId)."""
-    resolver = SyncAwareWorkspaceResolver(
-        tmp_path, sync_source="s3://b/p", cas_root=str(tmp_path / "cas")
-    )
-    mock_ws = MagicMock()
-    mock_ws.recover = AsyncMock(return_value=None)
-    mock_ws.manifest = None
-    mock_ws.start_tracking = AsyncMock()
-    mock_ws.checkpoint = AsyncMock()
-    mock_ws.materialize_content = AsyncMock(return_value=0)
-    mock_manager = MagicMock()
-    mock_manager.open = AsyncMock(return_value=mock_ws)
-    mock_manager.close = AsyncMock()
-    resolver._manager = mock_manager
+    resolver = SyncAwareWorkspaceResolver(tmp_path, sync_source="s3://b/p")
+    engine = FakeEngine()
+    resolver._engine = engine
 
     ws_id = "0f1e2d3c-4b5a-6978-87a6-b5c4d3e2f1a0"
     path = resolver.resolve("session-1", {"workspace": ws_id})
     await resolver.open_session("session-1", path)
-    assert mock_manager.open.call_args[0][0] == ws_id
     await resolver.close_session("session-1", path)
-    mock_ws.checkpoint.assert_awaited_once()
-    assert mock_manager.close.call_args[0][0] == ws_id
+    assert engine.opened == [ws_id]
+    assert engine.closed == [ws_id]
 
 
 @pytest.mark.asyncio
-async def test_two_sessions_same_workspace_share_open_run(tmp_path: Path):
-    """Concurrent sessions on one workspace reuse the same open Workspace."""
-    resolver = SyncAwareWorkspaceResolver(
-        tmp_path, sync_source="s3://b/p", cas_root=str(tmp_path / "cas")
-    )
-    mock_ws = MagicMock()
-    mock_ws.recover = AsyncMock(return_value=None)
-    mock_ws.manifest = None
-    mock_ws.start_tracking = AsyncMock()
-    mock_ws.checkpoint = AsyncMock()
-    mock_ws.materialize_content = AsyncMock(return_value=0)
-    mock_manager = MagicMock()
-    mock_manager.open = AsyncMock(return_value=mock_ws)
-    mock_manager.close = AsyncMock()
-    resolver._manager = mock_manager
+async def test_two_sessions_same_workspace_delegate_same_run_id(tmp_path: Path):
+    """Both sessions hand the same run_id to the engine.
+
+    Concurrent-turn sharing (one open workspace, last-turn-out close) is the
+    engine's contract — pinned in soothe's test_turns.py.
+    """
+    resolver = SyncAwareWorkspaceResolver(tmp_path, sync_source="s3://b/p")
+    engine = FakeEngine()
+    resolver._engine = engine
 
     ws_id = "shared-ws"
     p1 = resolver.resolve("session-a", {"workspace": ws_id})
     p2 = resolver.resolve("session-b", {"workspace": ws_id})
     await resolver.open_session("session-a", p1)
     await resolver.open_session("session-b", p2)
-    # One open per run_id (workspace), not per session.
-    assert mock_manager.open.await_count == 1
-
-
-@pytest.mark.asyncio
-async def test_reuse_turn_materializes_again_but_skips_reconcile(tmp_path: Path):
-    """RFC-RD-607 §4.3: every turn materializes; reconcile only when sole active run."""
-
-    class FakeSyncWorkspace:
-        """Real materialize_content signature (soothe 2.0 shape) for kwarg probing."""
-
-        def __init__(self) -> None:
-            self.calls: list[dict[str, object]] = []
-            self.recover = AsyncMock(return_value=None)
-            self.manifest = None
-            self.start_tracking = AsyncMock()
-            self.checkpoint = AsyncMock()
-
-        async def materialize_content(
-            self, *, protected: object = (), reconcile: bool = True
-        ) -> int:
-            self.calls.append({"protected": list(protected), "reconcile": reconcile})
-            return 0
-
-    resolver = SyncAwareWorkspaceResolver(
-        tmp_path, sync_source="s3://b/p", cas_root=str(tmp_path / "cas")
-    )
-    fake_ws = FakeSyncWorkspace()
-    mock_manager = MagicMock()
-    mock_manager.open = AsyncMock(return_value=fake_ws)
-    mock_manager.close = AsyncMock()
-    resolver._manager = mock_manager
-
-    ws_id = "shared-ws"
-    p1 = resolver.resolve("session-a", {"workspace": ws_id})
-    p2 = resolver.resolve("session-b", {"workspace": ws_id})
-
-    await resolver.open_session("session-a", p1)
-    assert fake_ws.calls[0]["reconcile"] is True  # sole active run
-
-    await resolver.open_session("session-b", p2)
-    assert fake_ws.calls[1]["reconcile"] is False  # peer run active — deletes deferred
-
     await resolver.close_session("session-a", p1)
-    # Peer still active: checkpoint runs but the workspace stays open.
-    fake_ws.checkpoint.assert_awaited_once()
-    mock_manager.close.assert_not_awaited()
-
     await resolver.close_session("session-b", p2)
-    assert fake_ws.checkpoint.await_count == 2
-    mock_manager.close.assert_awaited_once()  # last run out closes the lifecycle
+    assert engine.opened == [ws_id, ws_id]
+    assert engine.closed == [ws_id, ws_id]
+
+
+@pytest.mark.asyncio
+async def test_close_session_without_engine_is_safe(tmp_path: Path):
+    """close_session before any open (engine never built) should not raise."""
+    resolver = SyncAwareWorkspaceResolver(tmp_path, sync_source="s3://b/p")
+    path = resolver.resolve("session-noopen")
+    await resolver.close_session("session-noopen", path)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_delegates_to_engine(tmp_path: Path):
+    """shutdown calls engine.close_all."""
+    resolver = SyncAwareWorkspaceResolver(tmp_path, sync_source="s3://b/p")
+    engine = FakeEngine()
+    resolver._engine = engine
+    await resolver.shutdown()
+    assert engine.close_all_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_shutdown_without_engine_is_noop(tmp_path: Path):
+    """shutdown before the engine is built should not raise."""
+    resolver = SyncAwareWorkspaceResolver(tmp_path, sync_source="s3://b/p")
+    await resolver.shutdown()
+
+
+def test_is_sync_enabled_false_until_engine_is_built(tmp_path: Path):
+    """A configured sync source only counts as enabled once the engine exists."""
+    resolver = SyncAwareWorkspaceResolver(tmp_path, sync_source="s3://b/p")
+    assert resolver.is_sync_enabled is False
 
 
 # ---------------------------------------------------------------------------
@@ -207,213 +201,6 @@ async def test_sync_resolver_without_source_hooks_are_noops(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# SyncAwareWorkspaceResolver — enabled mode (with mock WorkspaceManager)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_sync_resolver_open_session_materializes_and_tracks(tmp_path: Path):
-    """open_session calls manager.open + workspace.start_tracking."""
-    resolver = SyncAwareWorkspaceResolver(
-        tmp_path, sync_source="s3://bucket/pfx", cas_root=str(tmp_path / "cas")
-    )
-
-    mock_ws = MagicMock()
-    mock_ws.recover = AsyncMock(return_value=None)
-    mock_ws.manifest = None
-    mock_ws.start_tracking = AsyncMock()
-    mock_manager = MagicMock()
-    mock_manager.open = AsyncMock(return_value=mock_ws)
-    # Inject the mock manager directly.
-    resolver._manager = mock_manager
-
-    path = resolver.resolve("session-sync-1")
-    await resolver.open_session("session-sync-1", path)
-
-    # manager.open should have been called with the hashed run_id.
-    assert mock_manager.open.await_count == 1
-    called_run_id = mock_manager.open.call_args[0][0]
-    assert called_run_id.startswith("ws_")
-    # The prior remote state must be recovered before tracking starts.
-    mock_ws.recover.assert_awaited_once()
-    # start_tracking should have been called.
-    mock_ws.start_tracking.assert_awaited_once()
-    # The workspace should be tracked in _open_workspaces.
-    assert called_run_id in resolver._open_workspaces
-
-
-@pytest.mark.asyncio
-async def test_sync_resolver_open_session_restores_artifacts(tmp_path: Path):
-    """open_session restores prior artifacts; missing blobs are skipped safely."""
-    resolver = SyncAwareWorkspaceResolver(
-        tmp_path, sync_source="s3://bucket/pfx", cas_root=str(tmp_path / "cas")
-    )
-
-    ws_root = tmp_path / "data" / "workspaces" / "ws_x"
-    ws_root.mkdir(parents=True)
-    # An artifact whose local file already matches its hash → skipped.
-    good = ws_root / "keep.txt"
-    good.write_text("same")
-    import hashlib as _hl
-
-    sha_good = _hl.sha256(b"same").hexdigest()
-
-    mock_manifest = SimpleNamespace(
-        artifacts=[
-            SimpleNamespace(path="keep.txt", sha256=sha_good, size=4),
-            SimpleNamespace(path="missing-blob.txt", sha256="f" * 64, size=9),
-        ],
-        resources=[],
-    )
-    mock_ws = MagicMock()
-    mock_ws.recover = AsyncMock(return_value=SimpleNamespace(manifest_snapshot=mock_manifest))
-    mock_ws.root = ws_root
-    mock_ws.manifest = mock_manifest
-    mock_ws.start_tracking = AsyncMock()
-    mock_manager = MagicMock()
-    mock_manager.open = AsyncMock(return_value=mock_ws)
-    resolver._manager = mock_manager
-    # Restore CAS returns no blob for the missing artifact.
-    restore_cas = MagicMock()
-    restore_cas.fetch_and_cache = AsyncMock(return_value=None)
-    resolver._restore_cas = restore_cas
-
-    path = resolver.resolve("session-restore")
-    await resolver.open_session("session-restore", path)
-
-    mock_ws.recover.assert_awaited_once()
-    mock_ws.start_tracking.assert_awaited_once()
-    # The matching file was left untouched; no file for the missing blob.
-    assert good.read_text() == "same"
-    assert not (ws_root / "missing-blob.txt").exists()
-
-
-@pytest.mark.asyncio
-async def test_sync_resolver_close_session_checkpoints_and_closes(tmp_path: Path):
-    """close_session calls workspace.checkpoint + manager.close."""
-    resolver = SyncAwareWorkspaceResolver(
-        tmp_path, sync_source="s3://bucket/pfx", cas_root=str(tmp_path / "cas")
-    )
-
-    mock_ws = MagicMock()
-    mock_ws.checkpoint = AsyncMock(return_value="ckpt-1")
-    mock_ws.recover = AsyncMock(return_value=None)
-    mock_ws.manifest = None
-    mock_ws.start_tracking = AsyncMock()
-    mock_manager = MagicMock()
-    mock_manager.open = AsyncMock(return_value=mock_ws)
-    mock_manager.close = AsyncMock()
-    resolver._manager = mock_manager
-
-    path = resolver.resolve("session-sync-2")
-    await resolver.open_session("session-sync-2", path)
-    await resolver.close_session("session-sync-2", path)
-
-    mock_ws.checkpoint.assert_awaited_once()
-    mock_manager.close.assert_awaited_once()
-    # After close, the workspace should be removed from _open_workspaces.
-    assert len(resolver._open_workspaces) == 0
-
-
-@pytest.mark.asyncio
-async def test_sync_resolver_close_session_swallows_checkpoint_errors(tmp_path: Path):
-    """close_session should not raise if checkpoint fails."""
-    resolver = SyncAwareWorkspaceResolver(
-        tmp_path, sync_source="s3://bucket/pfx", cas_root=str(tmp_path / "cas")
-    )
-
-    mock_ws = MagicMock()
-    mock_ws.checkpoint = AsyncMock(side_effect=RuntimeError("boom"))
-    mock_ws.recover = AsyncMock(return_value=None)
-    mock_ws.manifest = None
-    mock_ws.start_tracking = AsyncMock()
-    mock_manager = MagicMock()
-    mock_manager.open = AsyncMock(return_value=mock_ws)
-    mock_manager.close = AsyncMock()
-    resolver._manager = mock_manager
-
-    path = resolver.resolve("session-err")
-    await resolver.open_session("session-err", path)
-    # Should not raise.
-    await resolver.close_session("session-err", path)
-    mock_manager.close.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_sync_resolver_close_without_open_is_safe(tmp_path: Path):
-    """close_session on a session that was never opened should not raise."""
-    resolver = SyncAwareWorkspaceResolver(
-        tmp_path, sync_source="s3://bucket/pfx", cas_root=str(tmp_path / "cas")
-    )
-    mock_manager = MagicMock()
-    mock_manager.close = AsyncMock()
-    resolver._manager = mock_manager
-
-    path = resolver.resolve("session-noopen")
-    await resolver.close_session("session-noopen", path)
-    mock_manager.close.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_sync_resolver_open_session_idempotent(tmp_path: Path):
-    """open_session on an already-open session should not re-open."""
-    resolver = SyncAwareWorkspaceResolver(
-        tmp_path, sync_source="s3://bucket/pfx", cas_root=str(tmp_path / "cas")
-    )
-
-    mock_ws = MagicMock()
-    mock_ws.recover = AsyncMock(return_value=None)
-    mock_ws.manifest = None
-    mock_ws.start_tracking = AsyncMock()
-    mock_manager = MagicMock()
-    mock_manager.open = AsyncMock(return_value=mock_ws)
-    resolver._manager = mock_manager
-
-    path = resolver.resolve("session-dup")
-    await resolver.open_session("session-dup", path)
-    await resolver.open_session("session-dup", path)
-
-    # Should only open once.
-    assert mock_manager.open.await_count == 1
-
-
-@pytest.mark.asyncio
-async def test_sync_resolver_shutdown_closes_all(tmp_path: Path):
-    """shutdown calls manager.close_all and clears the open set."""
-    resolver = SyncAwareWorkspaceResolver(
-        tmp_path, sync_source="s3://bucket/pfx", cas_root=str(tmp_path / "cas")
-    )
-
-    mock_ws = MagicMock()
-    mock_ws.start_tracking = AsyncMock()
-    mock_ws.checkpoint = AsyncMock()
-    mock_ws.recover = AsyncMock(return_value=None)
-    mock_ws.manifest = None
-    mock_manager = MagicMock()
-    mock_manager.open = AsyncMock(return_value=mock_ws)
-    mock_manager.close = AsyncMock()
-    mock_manager.close_all = AsyncMock()
-    resolver._manager = mock_manager
-
-    path = resolver.resolve("session-shutdown")
-    await resolver.open_session("session-shutdown", path)
-    await resolver.shutdown()
-
-    mock_manager.close_all.assert_awaited_once()
-    assert len(resolver._open_workspaces) == 0
-
-
-@pytest.mark.asyncio
-async def test_sync_resolver_shutdown_without_manager_is_noop(tmp_path: Path):
-    """shutdown without a manager should not raise."""
-    resolver = SyncAwareWorkspaceResolver(
-        tmp_path, sync_source="s3://bucket/pfx", cas_root=str(tmp_path / "cas")
-    )
-    # _manager is None — shutdown should be a no-op.
-    await resolver.shutdown()
-
-
-# ---------------------------------------------------------------------------
 # SyncAwareWorkspaceResolver.from_settings
 # ---------------------------------------------------------------------------
 
@@ -422,7 +209,6 @@ def test_from_settings_constructs_resolver(tmp_path: Path):
     """from_settings builds a resolver with all fields wired."""
     resolver = SyncAwareWorkspaceResolver.from_settings(
         home=tmp_path,
-        cas_root=str(tmp_path / "cas"),
         sync_source="s3://bucket/flowjet",
         sync_config_path=None,
         allow_external_workspace=True,
@@ -544,30 +330,25 @@ async def test_backend_shutdown_calls_resolver_shutdown(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Phase 3 — dual-source sync (content root materialization + mirror write-back)
+# Phase 3 — single-root sync (content materialization + mirror write-back)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_open_session_materializes_content_root(tmp_path: Path):
-    """open_session pulls the content root into the workspace before state replay.
+    """open_session pulls the run's content tree into the workspace.
 
-    Full chain with file:// backends: triarch-style materials land in the
-    workspace directory the agent will run in, keyed by the ACP cwd wsId.
+    Full chain with file:// backends: host materials land in the workspace
+    directory the agent will run in, keyed by the ACP cwd wsId.
     """
-    # "backend" uploads a material into the content root for ws-alpha.
-    content_root = tmp_path / "content-roots" / "ws-alpha"
+    # The host uploads a material into the workspace's content tree.
+    content_root = tmp_path / "remote" / "ws-alpha"
     (content_root / "materials" / "m1").mkdir(parents=True)
     (content_root / "materials" / "m1" / "notes.md").write_bytes(b"material v1")
 
-    sync_root = tmp_path / "sync-roots"
-    sync_root.mkdir()
-
     resolver = SyncAwareWorkspaceResolver(
         tmp_path,
-        sync_source=f"file://{sync_root}",
-        cas_root=str(tmp_path / "cas"),
-        content_source=f"file://{tmp_path}/content-roots/{{workspace}}",
+        sync_source=f"file://{tmp_path}/remote",
     )
 
     ws_id = "ws-alpha"
@@ -581,17 +362,12 @@ async def test_open_session_materializes_content_root(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_checkpoint_mirrors_agent_outputs_to_content_root(tmp_path: Path):
-    """close_session checkpoints dirty files back into the content root."""
-    content_root = tmp_path / "content-roots" / "ws-beta"
-    content_root.mkdir(parents=True)
-    sync_root = tmp_path / "sync-roots"
-    sync_root.mkdir()
+    """close_session checkpoints dirty files back into the content tree."""
+    remote = tmp_path / "remote"
 
     resolver = SyncAwareWorkspaceResolver(
         tmp_path,
-        sync_source=f"file://{sync_root}",
-        cas_root=str(tmp_path / "cas"),
-        content_source=f"file://{tmp_path}/content-roots/{{workspace}}",
+        sync_source=f"file://{remote}",
     )
 
     ws_id = "ws-beta"
@@ -603,43 +379,104 @@ async def test_checkpoint_mirrors_agent_outputs_to_content_root(tmp_path: Path):
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(b"agent analysis")
 
-    # close_session → checkpoint → dirty files mirrored to the content root.
-    await resolver.close_session("session-1", path)
-    assert (content_root / "output" / "analysis.md").read_bytes() == b"agent analysis"
-    # And the sync state (manifest) exists under the sync root for ws-beta.
-    assert (sync_root / "runs" / ws_id / "manifest.json").exists()
+    # close_session → checkpoint → dirty files mirrored to the content
+    # tree; the manifest commits under the engine key space.
+    commit = await resolver.close_session("session-1", path)
+    assert getattr(commit, "persisted") is True
+    assert (remote / ws_id / "output" / "analysis.md").read_bytes() == b"agent analysis"
+    assert (remote / ws_id / ".workspace" / "manifest.json").exists()
     await resolver.shutdown()
 
 
 @pytest.mark.asyncio
-async def test_content_materialization_failure_is_non_fatal(tmp_path: Path):
-    """A failing content root does not break session open (sync continues)."""
-    sync_root = tmp_path / "sync-roots"
-    sync_root.mkdir()
+async def test_close_session_reports_failed_commit(tmp_path: Path, monkeypatch):
+    """A failing commit surfaces via the TurnCommit result, never raises."""
+    from soothe.workspace.sync.backends.fsspec import FsspecSyncBackend
+
+    async def _fail_upload(self, rel_path: str, src: Path) -> None:
+        raise OSError("injected upload failure")
+
+    monkeypatch.setattr(FsspecSyncBackend, "put_content_file_from_file", _fail_upload)
+
+    remote = tmp_path / "remote"
+    remote.mkdir()
 
     resolver = SyncAwareWorkspaceResolver(
         tmp_path,
-        sync_source=f"file://{sync_root}",
-        cas_root=str(tmp_path / "cas"),
-        # Template without {workspace} → factory disabled → no materialize call,
-        # open must still succeed.
-        content_source="s3://nowhere/static-root",
+        sync_source=f"file://{remote}",
     )
 
     path = resolver.resolve("session-1", {"workspace": "ws-gamma"})
-    await resolver.open_session("session-1", path)  # must not raise
-    await resolver.close_session("session-1", path)
+    await resolver.open_session("session-1", path)
+
+    (path / "output" / "a.md").parent.mkdir(parents=True, exist_ok=True)
+    (path / "output" / "a.md").write_bytes(b"a")
+
+    commit = await resolver.close_session("session-1", path)
+    assert getattr(commit, "persisted") is False
+    assert "partially" in (getattr(commit, "error", "") or "")
+    assert "output/a.md" in (getattr(commit, "error", "") or "")
     await resolver.shutdown()
 
 
-def test_content_factory_requires_workspace_placeholder(tmp_path: Path):
-    """A content template without {workspace} disables content mirroring."""
-    resolver = SyncAwareWorkspaceResolver(
-        tmp_path,
-        sync_source="s3://b/p",
-        content_source="s3://b/static",
+@pytest.mark.asyncio
+async def test_backend_fails_the_turn_when_persistence_fails(tmp_path: Path):
+    """IG-CORE-011: a successful run whose workspace commit failed ends as
+    RunFailed(code=workspace_persist_failed) — turn completion = persisted."""
+
+    class PersistFailResolver(WorkspaceResolver):
+        async def close_session(self, session: str, workspace: Path):
+            return SimpleNamespace(persisted=False, error="upload exploded")
+
+    backend = IsolatingRuntimeBackend(
+        adapter_factory=FakeAgentAdapter,
+        pool_settings=PoolSettings(min_size=1, max_size=1),
+        home=tmp_path,
+        workspace_resolver=PersistFailResolver(tmp_path),
     )
-    assert resolver._content_backend_factory() is None
+    try:
+        events = [
+            e
+            async for e in backend.stream_run(
+                RunRequest(input_text="hello", model="default", session="fj-persist")
+            )
+        ]
+        terminals = [e for e in events if isinstance(e, (RunCompleted, RunFailed))]
+        assert len(terminals) == 1
+        terminal = terminals[0]
+        assert isinstance(terminal, RunFailed)
+        assert terminal.code == "workspace_persist_failed"
+        assert "upload exploded" in (terminal.message or "")
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_backend_run_completed_surfaces_on_clean_commit(tmp_path: Path):
+    """A clean commit (or a non-sync resolver) still ends as RunCompleted."""
+
+    class CleanCommitResolver(WorkspaceResolver):
+        async def close_session(self, session: str, workspace: Path):
+            return SimpleNamespace(persisted=True, version=1, error=None)
+
+    backend = IsolatingRuntimeBackend(
+        adapter_factory=FakeAgentAdapter,
+        pool_settings=PoolSettings(min_size=1, max_size=1),
+        home=tmp_path,
+        workspace_resolver=CleanCommitResolver(tmp_path),
+    )
+    try:
+        events = [
+            e
+            async for e in backend.stream_run(
+                RunRequest(input_text="hello", model="default", session="fj-clean")
+            )
+        ]
+        terminals = [e for e in events if isinstance(e, (RunCompleted, RunFailed))]
+        assert len(terminals) == 1
+        assert isinstance(terminals[0], RunCompleted)
+    finally:
+        await backend.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -654,18 +491,16 @@ def test_settings_workspace_sync_defaults():
     s = Settings()
     assert s.workspace_sync_source is None
     assert s.workspace_sync_config is None
-    assert s.workspace_cas_root == "~/.flowjet/data/cas"
+    assert not hasattr(s, "workspace_content_source")
 
 
 def test_settings_workspace_sync_from_env(monkeypatch):
     """Settings can be configured via env vars."""
     from flowjet.server.config import Settings
 
-    monkeypatch.setenv("FLOWJET_WORKSPACE_SYNC_SOURCE", "s3://bucket/flowjet")
-    monkeypatch.setenv("FLOWJET_WORKSPACE_CAS_ROOT", "/tmp/cas")
+    monkeypatch.setenv("FLOWJET_WORKSPACE_SYNC_SOURCE", "s3://bucket/workspaces")
     s = Settings()
-    assert s.workspace_sync_source == "s3://bucket/flowjet"
-    assert s.workspace_cas_root == "/tmp/cas"
+    assert s.workspace_sync_source == "s3://bucket/workspaces"
 
 
 # ---------------------------------------------------------------------------
@@ -689,10 +524,9 @@ def test_build_backend_builds_sync_resolver_when_configured(tmp_path: Path, monk
     from flowjet.server.http.app import build_workspace_resolver
 
     monkeypatch.setenv("FLOWJET_HOME", str(tmp_path))
-    monkeypatch.setenv("FLOWJET_WORKSPACE_SYNC_SOURCE", "s3://bucket/flowjet")
-    monkeypatch.setenv("FLOWJET_WORKSPACE_CAS_ROOT", str(tmp_path / "cas"))
+    monkeypatch.setenv("FLOWJET_WORKSPACE_SYNC_SOURCE", "s3://bucket/workspaces")
     s = Settings()
     resolver = build_workspace_resolver(s)
     assert resolver is not None
     assert isinstance(resolver, SyncAwareWorkspaceResolver)
-    assert resolver._sync_source == "s3://bucket/flowjet"
+    assert resolver._sync_source == "s3://bucket/workspaces"

@@ -6,9 +6,10 @@ import logging
 import traceback
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
-from flowjet.core.events import ModelInfo, RunFailed, RunRequest, RuntimeEvent
+from flowjet.core.events import ModelInfo, RunCompleted, RunFailed, RunRequest, RuntimeEvent
 from flowjet.core.ids import new_run_id, new_session_id
 from flowjet.core.runtime.isolation.adapter import AdapterFactory
 from flowjet.core.runtime.isolation.admission import SessionAdmission
@@ -30,6 +31,18 @@ def _open_failure_event(exc: BaseException) -> RunFailed:
         code="workspace_open_error",
         exc_type=type(exc).__name__,
         traceback=tb_text,
+    )
+
+
+def _persist_failure_event(error: str) -> RunFailed:
+    """Build the terminal event for a failed workspace commit (IG-CORE-011).
+
+    The turn produced its result but the workspace did not persist — turn
+    completion = persisted, so the run outcome must reflect it.
+    """
+    return RunFailed(
+        message=f"turn completed but workspace persistence failed: {error}",
+        code="workspace_persist_failed",
     )
 
 
@@ -104,6 +117,26 @@ class IsolatingRuntimeBackend:
     async def delete_run(self, run_id: str) -> None:
         self._pool.cancel_run(run_id)
 
+    async def _close_workspace(self, session: str, workspace: Path) -> Any:
+        """Close the workspace, converting failures into a persist-failed result.
+
+        The sync resolver's ``close_session`` returns the engine's
+        ``TurnCommit`` (duck-typed: ``persisted`` / ``error``); the
+        local-only and sandbox resolvers return ``None`` (nothing to
+        report).  Never raises — close failures surface through the
+        result so the caller can decide the turn outcome.
+        """
+        try:
+            return await self._workspaces.close_session(session, workspace)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "close_session failed for session %s (workspace=%s)",
+                session,
+                workspace,
+                exc_info=True,
+            )
+            return SimpleNamespace(persisted=False, error=str(exc))
+
     async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEvent]:
         await self._ensure_started()
         session = request.session or new_session_id()
@@ -139,7 +172,7 @@ class IsolatingRuntimeBackend:
                     exc_info=True,
                 )
                 try:
-                    await self._workspaces.close_session(session, workspace)
+                    await self._close_workspace(session, workspace)
                 except Exception:  # noqa: BLE001
                     logger.debug(
                         "close_session after failed open failed (session=%s)",
@@ -148,11 +181,32 @@ class IsolatingRuntimeBackend:
                     )
                 yield _open_failure_event(exc)
                 return
+            closed = False
             try:
+                # Hold the terminal event: the workspace commit runs BEFORE
+                # the turn outcome is surfaced (turn completion = persisted,
+                # IG-CORE-011).  The pool's terminal RunCompleted/RunFailed is
+                # the last event of the stream.
+                terminal: RuntimeEvent | None = None
                 async for event in self._pool.submit(isolated):
+                    if isinstance(event, RunCompleted | RunFailed):
+                        terminal = event
+                        break
                     yield event
+                commit = await self._close_workspace(session, workspace)
+                closed = True
+                if isinstance(terminal, RunCompleted) and not getattr(commit, "persisted", True):
+                    yield _persist_failure_event(
+                        str(getattr(commit, "error", None) or "unknown error")
+                    )
+                elif terminal is not None:
+                    yield terminal
             finally:
-                await self._workspaces.close_session(session, workspace)
+                if not closed:
+                    # Abort paths (consumer break mid-stream): best-effort
+                    # close; the sync facade treats an already-closed run as
+                    # a no-op commit.
+                    await self._close_workspace(session, workspace)
 
     async def shutdown(self) -> None:
         await self._pool.shutdown()

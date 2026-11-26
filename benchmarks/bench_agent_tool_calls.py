@@ -197,7 +197,6 @@ async def bench_cap(
         models=[model],
         config_path=config_path,
         home=str(workdir / "home"),
-        cas_root=None,
         sync_source=None,
         sync_config_path=None,
         content_source=None,

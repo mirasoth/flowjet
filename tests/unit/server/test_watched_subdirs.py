@@ -36,11 +36,10 @@ async def test_resolver_watched_subdirs_precreated_and_wired(tmp_path: Path) -> 
     """Configured subtrees are pre-created at open and reach the tracker."""
     resolver = SyncAwareWorkspaceResolver(
         tmp_path,
-        sync_source=f"file://{tmp_path}/sync",
-        cas_root=str(tmp_path / "cas"),
+        sync_source=f"file://{tmp_path}/remote",
         watched_subdirs=("input", "working", "output", "deliverables"),
     )
-    manager = resolver._ensure_manager()
+    manager = resolver._ensure_engine()._manager
     ws = await manager.open("run-1")
 
     assert (ws.root / "deliverables").is_dir()
@@ -59,10 +58,9 @@ async def test_resolver_default_watched_subdirs_unchanged(tmp_path: Path) -> Non
     """Without the setting, only the engine defaults are created/wired."""
     resolver = SyncAwareWorkspaceResolver(
         tmp_path,
-        sync_source=f"file://{tmp_path}/sync",
-        cas_root=str(tmp_path / "cas"),
+        sync_source=f"file://{tmp_path}/remote",
     )
-    manager = resolver._ensure_manager()
+    manager = resolver._ensure_engine()._manager
     ws = await manager.open("run-2")
 
     assert not (ws.root / "deliverables").exists()

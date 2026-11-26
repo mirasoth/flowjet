@@ -40,10 +40,8 @@ def build_backend(settings: Settings) -> RuntimeBackend:
         models=settings.model_ids(),
         config_path=settings.nano_config,
         home=settings.home_path(),
-        cas_root=settings.workspace_cas_root,
         sync_source=settings.workspace_sync_source,
         sync_config_path=settings.workspace_sync_config,
-        content_source=settings.workspace_content_source,
         allow_external_workspace=settings.allow_external_workspace,
         pool_settings=settings.pool_settings(),
         checkpointer_policy=settings.server_checkpointer,
@@ -83,10 +81,8 @@ def build_workspace_resolver(
     """
     return ServerRuntimeBuilder.workspace_resolver(
         home=settings.home_path(),
-        cas_root=settings.workspace_cas_root,
         sync_source=settings.workspace_sync_source,
         sync_config_path=settings.workspace_sync_config,
-        content_source=settings.workspace_content_source,
         allow_external_workspace=settings.allow_external_workspace,
         sandbox_manager=sandbox_manager,
         watched_subdirs=settings.workspace_watched_subdirs_list(),

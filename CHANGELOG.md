@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Workspace sync is single-root and single-writer (IG-CORE-011; requires the unreleased soothe with the single-root `TurnScopedWorkspaces`).** `workspace_sync_source` now points at the workspaces root itself (e.g. `s3://bucket/workspaces`): each run's backend is rooted at `<source>/<run_id>` and serves both the plain content tree (authoritative file store) and the engine-private manifest (`<run_id>/.workspace/manifest.json`). The `{workspace}` template setting `workspace_content_source` is **removed** — `FLOWJET_WORKSPACE_CONTENT_SOURCE` and `FLOWJET_WORKSPACE_SYNC_SOURCE` collapse into one URI (drop the former when upgrading; the source now points at `workspaces/`, not `system/engine`). Hosts must serialize turns per workspace (agentspace enforces this at its prompt gate).
+- **Turn completion = persisted, visibly.** `close_session` returns the engine's `TurnCommit` (persisted/version/error); the runtime backend commits **before** surfacing the terminal event and ends a successful run whose commit failed as `RunFailed(code="workspace_persist_failed")` instead of a silent log line. A failed commit keeps the workspace open so the dirty set survives to the next turn.
+- **Workspace sync is content-authoritative (IG-CORE-010 Stage B; requires the unreleased soothe with `TurnScopedWorkspaces` over the content-authoritative engine).** The plain content tree (`workspace_content_source`, a URI template with a `{workspace}` placeholder) is the authoritative file store: materials materialize from it at session open and dirty writes/deletions mirror back at checkpoint, with the sync manifest as the atomic commit point (version+1, optimistic concurrency). The CAS blob double-write, the per-run SQLite state store, and the background uploader are gone. The resolver still only maps the ACP cwd to a run id and builds the sync backends; the per-turn lifecycle (manifest load, content materialization, reconcile gating, last-turn-out close) is owned by the soothe facade.
+- **`FLOWJET_WORKSPACE_CAS_ROOT` setting removed.** The CAS root had a single consumer (the deleted state-store staging path); `workspace_cas_root` is gone from `Settings`, `ServerRuntimeBuilder.build`/`workspace_resolver`, and the resolver constructor. Remove the env var from deployments when upgrading.
+
 ## [2.3.4] — 2026-11-25
 
 ### Changed

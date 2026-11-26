@@ -59,10 +59,8 @@ class ServerRuntimeBuilder:
         models: list[str],
         config_path: str | None,
         home: Any,
-        cas_root: str | None,
         sync_source: str | None,
         sync_config_path: str | None,
-        content_source: str | None,
         allow_external_workspace: bool,
         pool_settings: Any,
         checkpointer_policy: str | None = "auto",
@@ -73,10 +71,8 @@ class ServerRuntimeBuilder:
         sandbox_manager = cls.sandbox_manager(config_path, sandbox_mode=sandbox_mode)
         workspace_resolver = cls.workspace_resolver(
             home=home,
-            cas_root=cas_root,
             sync_source=sync_source,
             sync_config_path=sync_config_path,
-            content_source=content_source,
             allow_external_workspace=allow_external_workspace,
             sandbox_manager=sandbox_manager,
             watched_subdirs=watched_subdirs,
@@ -132,10 +128,8 @@ class ServerRuntimeBuilder:
         cls,
         *,
         home: Any,
-        cas_root: str | None,
         sync_source: str | None,
         sync_config_path: str | None,
-        content_source: str | None,
         allow_external_workspace: bool,
         sandbox_manager: ToolSandboxManager | None = None,
         watched_subdirs: Sequence[str] | None = None,
@@ -157,11 +151,9 @@ class ServerRuntimeBuilder:
             inner: WorkspaceResolver | SyncAwareWorkspaceResolver = (
                 SyncAwareWorkspaceResolver.from_settings(
                     home=home,
-                    cas_root=cas_root,
                     sync_source=sync_source,
                     sync_config_path=sync_config_path,
                     allow_external_workspace=allow_external_workspace,
-                    content_source=content_source,
                     watched_subdirs=watched_subdirs,
                 )
             )

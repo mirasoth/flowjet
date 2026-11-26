@@ -145,14 +145,29 @@ AgentAdapter:
 
 ### 5.6 Workspace Resolution
 
-Precedence:
+Precedence (local-only mode, `FLOWJET_WORKSPACE_SYNC_SOURCE` unset):
 
 1. If `metadata["workspace"]` is a non-empty string → expand/resolve as absolute path (must exist or be creatable; reject empty / relative-only without resolve).
 2. Else `$FLOWJET_HOME/data/workspaces/ws_<sha256(session)[:16]>` (create parents).
 
+Sync mode (`FLOWJET_WORKSPACE_SYNC_SOURCE` set): a bare single-segment id in
+`metadata["workspace"]` (the ACP cwd — e.g. an agentspace/triarch workspace id)
+keys a per-workspace synced run; path-shaped or invalid values fall back to the
+session-hash workspace above.
+
 FlowJet MUST set `security.allow_paths_outside_workspace = false` in code after
 loading nano configuration. A local, mounted, or client-selected nano.yml cannot
 weaken this invariant.
+
+**Turn-scoped sync lifecycle (2026-11-26)**: when sync is enabled, the resolver
+delegates the per-turn sequence to soothe's `TurnScopedWorkspaces` facade
+(`open_turn` on session open, `close_turn` on session close, `close_all` on
+shutdown). The resolver owns only the session→run_id mapping and backend
+construction (sync root, content-root template, CAS root, watched subdirs).
+Manifest recovery, content-tree materialization, prior-artifact restore,
+concurrent-turn bookkeeping, and last-turn-out close are engine-owned
+(soothe IG-CORE-009). The sync boundary stays the agent turn: one pair of
+open/close hooks per prompt (RFC-RD-607 §4.3).
 
 ### 5.7 Session Identity
 

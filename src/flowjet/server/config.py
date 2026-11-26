@@ -58,14 +58,8 @@ class Settings(BaseSettings):
     # Example: "s3://bucket/flowjet", "gs://bucket/flowjet", "az://container/pfx"
     workspace_sync_source: str | None = None
     workspace_sync_config: str | None = None
-    workspace_cas_root: str = "~/.flowjet/data/cas"
-    # Dual-source sync (Phase 3): content-root URI template with a
-    # ``{workspace}`` placeholder (e.g. "s3://triarch/workspaces/{workspace}").
-    # When set, workspace files (materials + mirrored agent outputs) are
-    # materialized from the content root at session open and dirty writes /
-    # deletions are mirrored back at checkpoint — giving non-engine readers
-    # (backend / frontend) a plain-file view of every workspace. Empty = disabled.
-    workspace_content_source: str | None = None
+    # Single-writer contract (IG-CORE-011): hosts must serialize turns per
+    # workspace (agentspace enforces this at its prompt gate).
 
     # Workspace-relative subtrees tracked by the dirty tracker (and
     # pre-created at workspace open), as a comma-separated list, e.g.

@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import re
-import shutil
 from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -46,21 +43,6 @@ def _workspace_id_from_metadata(metadata: dict[str, Any] | None) -> str | None:
     if not _WORKSPACE_ID_RE.match(candidate):
         return None
     return candidate
-
-
-def _sqlite_state_store_factory(*, loop_id: str, workspace_dir: Path) -> Any:
-    """Build a SQLite workspace state store for a run.
-
-    ``WorkspaceManager`` needs a state store to construct the background
-    uploader; without it ``Workspace.start_tracking()`` crashes because the
-    uploader is ``None``.
-    """
-    from soothe.workspace.state.sqlite import SqliteWorkspaceStateStore
-
-    return SqliteWorkspaceStateStore(
-        db_path=Path(workspace_dir) / ".workspace" / "state.db",
-        loop_id=loop_id,
-    )
 
 
 class WorkspaceResolver:
@@ -112,45 +94,36 @@ class WorkspaceResolver:
             return path == self._home
 
 
-@dataclass
-class _OpenWorkspaceEntry:
-    """One open workspace — shared by all concurrent turns of the same run_id.
-
-    ``active_runs`` counts turns currently mid-run on this workspace; the
-    lifecycle (``manager.close``) belongs to the last run out. ``manifest``
-    caches the recovered engine manifest so the per-turn refresh can protect
-    agent artifacts from deletion reconcile.
-    """
-
-    ws: Any
-    active_runs: int = 0
-    manifest: Any | None = None
-    restored: bool = False
-
-
-def _manifest_artifact_paths(manifest: Any | None) -> list[str]:
-    """Relative paths of the manifest's artifacts (reconcile protection set)."""
-    if manifest is None:
-        return []
-    return [entry.path for entry in (getattr(manifest, "artifacts", None) or [])]
-
-
 class SyncAwareWorkspaceResolver(WorkspaceResolver):
-    """Workspace resolver backed by soothe's fsspec workspace sync.
+    """Workspace resolver backed by soothe's turn-scoped workspace sync.
 
-    When ``workspace_sync_source`` is set, sessions are materialized from /
-    persisted to an fsspec-backed object store (S3/GCS/Azure) via
-    ``soothe.workspace.sync.WorkspaceManager``. The resolver still returns a
-    local :class:`~pathlib.Path` (the materialized workspace directory), so
+    When ``workspace_sync_source`` is set, sessions materialize from /
+    persist to an fsspec-backed object store (S3/GCS/Azure) via
+    ``soothe.workspace.sync.TurnScopedWorkspaces``: the resolver maps the
+    ACP cwd to a run id and delegates the per-turn lifecycle (manifest
+    load, content-tree materialization, reconcile, dirty tracking,
+    checkpoint commit — and ``TurnCommit`` persistence reporting) to the
+    soothe facade. The resolver still returns a local
+    :class:`~pathlib.Path` (the materialized workspace directory), so
     :class:`IsolatingRuntimeBackend` needs no change — only the lifecycle
     hooks differ.
+
+    Single-root layout (IG-CORE-011): ``sync_source`` is the workspaces
+    root URI (e.g. ``s3://bucket/workspaces``); each run's backend is
+    rooted at ``<sync_source>/<run_id>`` and serves both the plain
+    content tree (the authoritative file store) and the engine-private
+    manifest.
 
     Lifecycle per session run::
 
         path = resolver.resolve(session, metadata)
         await resolver.open_session(session, path)  # materialize + start tracking
         # ... agent runs, writes to local filesystem ...
-        await resolver.close_session(session, path)  # checkpoint + upload + close
+        commit = await resolver.close_session(session, path)  # checkpoint + close
+
+    **Single-writer contract**: hosts must serialize turns per workspace —
+    ``open_session``/``close_session`` must not interleave across sessions
+    of the same workspace (agentspace enforces this at its prompt gate).
 
     When ``workspace_sync_source`` is **not** set at construction time, the
     resolver delegates to the base ``WorkspaceResolver`` (local-only, Phase 1
@@ -164,76 +137,58 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
         allow_external_workspace: bool = False,
         sync_source: str | None = None,
         sync_config: str | None = None,
-        cas_root: str | Path | None = None,
-        content_source: str | None = None,
         watched_subdirs: Sequence[str] | None = None,
     ) -> None:
         super().__init__(home, allow_external_workspace=allow_external_workspace)
         self._sync_source = sync_source
         self._sync_config = sync_config
-        self._cas_root = Path(cas_root).expanduser() if cas_root else self._home / "data" / "cas"
-        self._content_source = content_source
         self._watched_subdirs = list(watched_subdirs) if watched_subdirs is not None else None
-        self._manager: Any | None = None
-        self._sync_backend: Any | None = None
-        self._restore_cas: Any | None = None
-        self._open_workspaces: dict[str, _OpenWorkspaceEntry] = {}
+        self._engine: Any | None = None
 
     @property
     def is_sync_enabled(self) -> bool:
         """Return True when fsspec workspace sync is active."""
-        return self._sync_source is not None and self._manager is not None
+        return self._sync_source is not None and self._engine is not None
 
-    def _ensure_manager(self) -> Any | None:
-        """Lazily construct the WorkspaceManager (import + build backend)."""
+    def _ensure_engine(self) -> Any | None:
+        """Lazily construct the turn-scoped sync engine (import + backend factory)."""
         if self._sync_source is None:
             return None
-        if self._manager is not None:
-            return self._manager
+        if self._engine is not None:
+            return self._engine
 
-        from soothe.workspace.sync import WorkspaceManager
+        from soothe.workspace.sync import TurnScopedWorkspaces
 
-        config = self._load_sync_config()
-        backend = self._construct_sync_backend(config)
-        self._sync_backend = backend
+        backend_factory = self._backend_factory()
         workspaces_root = self._home / "data" / "workspaces"
         workspaces_root.mkdir(parents=True, exist_ok=True)
-        self._cas_root.mkdir(parents=True, exist_ok=True)
-        self._manager = WorkspaceManager(
+        self._engine = TurnScopedWorkspaces(
             workspaces_root=workspaces_root,
-            cas_root=self._cas_root,
-            backend=backend,
-            state_store_factory=_sqlite_state_store_factory,
-            content_backend_factory=self._content_backend_factory(),
+            backend_factory=backend_factory,
             watched_subdirs=self._watched_subdirs,
         )
         logger.info(
-            "SyncAwareWorkspaceResolver initialized: source=%s, cas=%s, content=%s, watched_subdirs=%s",
+            "SyncAwareWorkspaceResolver initialized: source=%s, watched_subdirs=%s",
             self._sync_source,
-            self._cas_root,
-            self._content_source,
             self._watched_subdirs,
         )
-        return self._manager
+        return self._engine
 
-    def _content_backend_factory(self) -> Any | None:
-        """Build a per-run content backend factory (dual-source sync).
+    def _backend_factory(self) -> Any:
+        """Build the per-run backend factory from the single sync source.
 
-        ``content_source`` is a URI template with a ``{workspace}``
-        placeholder (e.g. ``s3://triarch/workspaces/{workspace}``). At
-        ``manager.open(run_id)`` the placeholder is substituted with the
-        run_id (triarch workspace id, or the session-hash fallback),
-        producing an independent backend per workspace. Returns ``None``
-        (content mirroring disabled) when no template is configured or the
-        template has no placeholder (a static root is still per-run
-        useless, so treat it as disabled).
+        Each run gets a backend rooted at ``<sync_source>/<run_id>``
+        serving both the content tree and the manifest.  Cloud schemes
+        (s3/gs/az) go through soothe's guarded ``construct_sync_backend``
+        factory. ``file://`` URIs are built directly via fsspec
+        (LocalFileSystem) — the factory's SSRF allowlist intentionally
+        excludes local paths, but a local object store is a supported
+        target for single-node deployments and tests.
         """
-        template = self._content_source
-        if not template or "{workspace}" not in template:
-            return None
+        base = (self._sync_source or "").rstrip("/")
 
         def factory(run_id: str) -> Any | None:
-            uri = template.format(workspace=run_id)
+            uri = f"{base}/{run_id}"
             scheme = uri.split("://", 1)[0].lower()
             if scheme == "file":
                 import fsspec
@@ -246,28 +201,6 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
             return construct_sync_backend(uri, config=self._load_sync_config())
 
         return factory
-
-    def _construct_sync_backend(self, config: dict[str, Any] | None) -> Any:
-        """Build the fsspec sync backend for ``_sync_source``.
-
-        Cloud schemes (s3/gs/az) go through soothe's guarded
-        ``construct_sync_backend`` factory. ``file://`` URIs are built
-        directly via fsspec (LocalFileSystem) — the factory's SSRF
-        allowlist intentionally excludes local paths, but a local object
-        store is a supported target for single-node deployments and tests.
-        """
-        source = self._sync_source or ""
-        scheme = source.split("://", 1)[0].lower()
-        if scheme == "file":
-            import fsspec
-            from soothe.workspace.sync.backends.fsspec import FsspecSyncBackend
-
-            fs, root = fsspec.url_to_fs(source)
-            return FsspecSyncBackend(fs=fs, root=str(root))
-
-        from soothe.workspace.sync import construct_sync_backend
-
-        return construct_sync_backend(source, config=config)
 
     def _load_sync_config(self) -> dict[str, Any] | None:
         """Load optional sync config JSON (credentials, endpoint, etc.)."""
@@ -297,204 +230,47 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
         """Refresh the workspace from the object store + start dirty tracking.
 
         RFC-RD-607 §4.3: the sync boundary is the agent turn (one pair of
-        open/close hooks per prompt). Every turn unconditionally materializes
-        the content tree — including the reuse path where a peer session's
-        turn already holds the workspace open (sha-skip keeps repeat turns
-        cheap). Deletion reconcile runs only while this turn is the sole
-        active run on the workspace: deleting files under a peer's feet is
-        worse than a delayed delete, so peer-occupied turns skip it (logged).
-        Prior agent artifacts are restored once, on the opening turn.
+        open/close hooks per prompt). The full inbound sequence — manifest
+        load, content-tree materialization, reconcile, dirty tracking — is
+        owned by the soothe turn-scoped facade
+        (``TurnScopedWorkspaces.open_turn``).
         """
-        manager = self._ensure_manager()
-        if manager is None:
+        engine = self._ensure_engine()
+        if engine is None:
             return
-
         # The run_id is the workspace directory name — resolve() decided it
         # (triarch workspace id or session-hash fallback), so derive it here
         # for perfect consistency across resolve/open/close.
-        run_id = workspace.name
-
-        entry = self._open_workspaces.get(run_id)
-        if entry is None:
-            ws = await manager.open(run_id)
-            entry = _OpenWorkspaceEntry(ws=ws)
-            self._open_workspaces[run_id] = entry
-        else:
-            ws = entry.ws
-        entry.active_runs += 1
-
-        if entry.manifest is None:
-            try:
-                entry.manifest = await self._recover_manifest(ws)
-            except Exception:
-                logger.warning("Manifest recovery failed for run %s", run_id, exc_info=True)
-
-        # Dual-source sync, read path: materialize the content root (e.g.
-        # triarch workspace materials) into the workspace BEFORE replaying
-        # checkpoint state, so the agent sees both its prior outputs and the
-        # latest backend-uploaded files. The dirty tracker only watches
-        # input/working/output + root files, so content-tree writes never
-        # pollute the dirty set.
-        if hasattr(ws, "materialize_content"):
-            try:
-                if self._supports_content_reconcile(ws):
-                    await ws.materialize_content(
-                        protected=_manifest_artifact_paths(entry.manifest),
-                        reconcile=entry.active_runs == 1,
-                    )
-                else:
-                    # soothe < 2.0: no protected/reconcile kwargs — degrade to
-                    # a plain materialize (no reconcile; deletes stay until
-                    # the soothe 2.0.0 release train lands).
-                    await ws.materialize_content()
-            except Exception:
-                logger.warning(
-                    "Content materialization failed for run %s; continuing with "
-                    "checkpoint state only",
-                    run_id,
-                    exc_info=True,
-                )
-
-        if entry.manifest is not None and not entry.restored:
-            await self._restore_prior_state(ws, entry.manifest)
-            entry.restored = True
-
-        # Start dirty tracking + background uploader for incremental persistence.
-        await ws.start_tracking()
+        await engine.open_turn(workspace.name)
         logger.info("Opened sync workspace for session %s at %s", session, workspace)
 
-    @staticmethod
-    def _supports_content_reconcile(ws: Any) -> bool:
-        """True when the workspace's ``materialize_content`` takes RFC-RD-607 kwargs.
+    async def close_session(self, session: str, workspace: Path) -> Any:
+        """Checkpoint dirty files + upload to object store; close the turn.
 
-        soothe < 2.0 lacks ``protected``/``reconcile``; probing the signature
-        keeps flowjet runnable against both release trains.
+        Returns the engine's :class:`~soothe.workspace.sync.TurnCommit`
+        result (``persisted``/``version``/``error``) when sync is enabled,
+        or ``None`` for local-only workspaces.  A failed commit keeps the
+        workspace open (its dirty set survives to the next turn) and is
+        reported via ``persisted=False`` — never raised.
         """
-        import inspect
-
-        try:
-            params = inspect.signature(ws.materialize_content).parameters
-        except (TypeError, ValueError):
-            return False
-        return "protected" in params and "reconcile" in params
-
-    async def _recover_manifest(self, ws: Any) -> Any | None:
-        """Recover the prior engine manifest snapshot (single call per open).
-
-        Round-trip half of workspace sync: ``close_session`` checkpoints and
-        uploads dirty files; this reads back the manifest so the per-turn
-        materialize can protect agent artifacts and the opening turn can
-        restore them.
-        """
-        payload = await ws.recover()  # reads the latest checkpoint payload
-        return payload.manifest_snapshot if payload is not None else None
-
-    async def _restore_prior_state(self, ws: Any, manifest: Any | None) -> None:
-        """Materialize the recovered manifest's files locally.
-
-        - Agent-written files live in ``manifest.artifacts`` (path → sha256,
-          blobs under ``<root>/blobs/``) and are restored in place at their
-          recorded relative paths under the workspace root.
-        - Declared input resources (``manifest.resources``) are materialized
-          under ``<root>/input/`` via the soothe Materializer.
-        """
-        if manifest is None:
-            return
-
-        restored = 0
-        for entry in manifest.artifacts:
-            rel = entry.path
-            if (
-                rel.startswith(".workspace/")
-                or rel.startswith("__pycache__/")
-                or rel.startswith(".git/")
-            ):
-                continue
-            dest = ws.root / rel
-            if dest.is_file() and not dest.is_symlink():
-                import hashlib as _hashlib
-
-                existing = await asyncio.to_thread(dest.read_bytes)
-                if _hashlib.sha256(existing).hexdigest() == entry.sha256:
-                    continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            cas = await self._restore_cas_handle()
-            blob_path = await cas.fetch_and_cache(entry.sha256, self._sync_backend)
-            if blob_path is None:
-                logger.warning("Sync restore: blob missing for %s (%s)", rel, entry.sha256[:12])
-                continue
-            await asyncio.to_thread(shutil.copyfile, blob_path, dest)
-            restored += 1
-
-        if manifest.resources:
-            # Materializer writes declared resources under <root>/input/.
-            await ws.materialize(manifest)
-
-        if restored or manifest.resources:
-            logger.info(
-                "Sync restore for run %s: %d artifacts materialized, %d input resources",
-                ws.run_id,
-                restored,
-                len(manifest.resources),
-            )
-
-    async def _restore_cas_handle(self) -> Any:
-        """Lazily build a CAS cache for artifact restore (host-side, outside ws)."""
-        if self._restore_cas is None:
-            from soothe.workspace.sync.cas import CASCache
-
-            self._restore_cas = CASCache(cache_root=self._cas_root)
-        return self._restore_cas
-
-    async def close_session(self, session: str, workspace: Path) -> None:
-        """Checkpoint dirty files + upload to object store; close when last run ends.
-
-        Concurrent turns of the same workspace share one open workspace:
-        a mid-run peer's close checkpoints the shared state but keeps the
-        workspace open — the lifecycle (``manager.close``) belongs to the
-        last run out (RFC-RD-607 §4.3).
-        """
-        if self._manager is None:
-            return
-
-        run_id = workspace.name
-
-        entry = self._open_workspaces.get(run_id)
-        if entry is None:
-            return
-
-        if entry.active_runs > 0:
-            entry.active_runs -= 1
-        try:
-            await entry.ws.checkpoint()
-        except Exception:
-            logger.warning("Checkpoint failed for session %s", session, exc_info=True)
-        if entry.active_runs > 0:
-            return
-
-        self._open_workspaces.pop(run_id, None)
-        try:
-            await self._manager.close(run_id)
-        except Exception:
-            logger.warning("Workspace close failed for session %s", session, exc_info=True)
+        if self._engine is None:
+            return None
+        return await self._engine.close_turn(workspace.name)
 
     async def shutdown(self) -> None:
         """Close all open workspaces on server shutdown."""
-        if self._manager is None:
+        if self._engine is None:
             return
-        await self._manager.close_all()
-        self._open_workspaces.clear()
+        await self._engine.close_all()
 
     @classmethod
     def from_settings(
         cls,
         *,
         home: Path,
-        cas_root: str | Path | None = None,
         sync_source: str,
         sync_config_path: str | None = None,
         allow_external_workspace: bool = False,
-        content_source: str | None = None,
         watched_subdirs: Sequence[str] | None = None,
     ) -> SyncAwareWorkspaceResolver:
         """Build a resolver from server settings (called by ``build_backend``)."""
@@ -503,7 +279,5 @@ class SyncAwareWorkspaceResolver(WorkspaceResolver):
             allow_external_workspace=allow_external_workspace,
             sync_source=sync_source,
             sync_config=sync_config_path,
-            cas_root=cas_root,
-            content_source=content_source,
             watched_subdirs=watched_subdirs,
         )

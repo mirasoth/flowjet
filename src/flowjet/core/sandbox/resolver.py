@@ -32,9 +32,16 @@ class SandboxAwareWorkspaceResolver:
         await self._inner.open_session(session, workspace)
         await self._manager.open_workspace(str(workspace))
 
-    async def close_session(self, session: str, workspace: Path) -> None:
+    async def close_session(self, session: str, workspace: Path) -> Any:
+        """Close the sandbox lease, then the inner session (sync commit).
+
+        The guest stages its outputs out before the inner (sync)
+        resolver's checkpoint so they join the commit.  The inner
+        resolver's ``TurnCommit`` result (or ``None``) is returned
+        unchanged.
+        """
         await self._manager.close_workspace(str(workspace))
-        await self._inner.close_session(session, workspace)
+        return await self._inner.close_session(session, workspace)
 
     async def shutdown(self) -> None:
         await self._manager.shutdown()
