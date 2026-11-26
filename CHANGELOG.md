@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.5] — 2026-11-26
+
+### Fixed
+
+- **Worker release regression in the persisted-turn path.** Holding the terminal event until the workspace commit (IG-CORE-011) broke out of the pool's event generator before it consumed the worker's `done` control frame, so `_release_worker` never ran: the worker stayed busy, `requests_completed` stayed at 0, and subsequent requests on a single-worker pool could stall. The backend now drains the pool generator to completion while holding the terminal event, then commits and surfaces the outcome. Regression test in `tests/integration/http/test_production_isolation_http.py`.
+
 ### Changed
 
 - **Workspace sync is single-root and single-writer (IG-CORE-011; requires the unreleased soothe with the single-root `TurnScopedWorkspaces`).** `workspace_sync_source` now points at the workspaces root itself (e.g. `s3://bucket/workspaces`): each run's backend is rooted at `<source>/<run_id>` and serves both the plain content tree (authoritative file store) and the engine-private manifest (`<run_id>/.workspace/manifest.json`). The `{workspace}` template setting `workspace_content_source` is **removed** — `FLOWJET_WORKSPACE_CONTENT_SOURCE` and `FLOWJET_WORKSPACE_SYNC_SOURCE` collapse into one URI (drop the former when upgrading; the source now points at `workspaces/`, not `system/engine`). Hosts must serialize turns per workspace (agentspace enforces this at its prompt gate).

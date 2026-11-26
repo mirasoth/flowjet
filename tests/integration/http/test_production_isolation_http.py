@@ -153,6 +153,41 @@ async def test_health_includes_pool_metrics(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_terminal_event_hold_releases_worker(tmp_path: Path):
+    """The backend holds the terminal event until the workspace commit, but must
+    still drain the pool generator so the worker is released. Regression guard:
+    breaking out of ``pool.submit`` on the terminal event used to abandon the
+    generator before its "done" control frame, leaving the worker busy and
+    ``requests_completed`` at 0 (which stalled subsequent requests)."""
+    backend = IsolatingRuntimeBackend(
+        models=["default"],
+        adapter_factory=FakeAgentAdapter,
+        pool_settings=PoolSettings(min_size=1, max_size=1, max_requests_per_worker=0),
+        home=tmp_path,
+    )
+    app = create_app(backend=backend)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Two sequential turns on a single-worker pool: the second must not hang
+        # or time out because the first turn's worker was never released.
+        for session in ("fj-release-a", "fj-release-b"):
+            resp = await client.post(
+                "/v1/responses",
+                json={
+                    "model": "default",
+                    "input": "hi",
+                    "flowjet": {"session": session},
+                },
+            )
+            assert resp.status_code == 200
+        pool = (await client.get("/health")).json()["pool"]
+        assert pool["requests_completed"] >= 2
+        assert pool["busy_workers"] == 0
+        assert pool["idle_workers"] >= 1
+    await backend.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_pool_metrics_snapshot_shape(tmp_path: Path):
     backend = IsolatingRuntimeBackend(
         models=["default"],

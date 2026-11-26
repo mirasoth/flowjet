@@ -185,14 +185,18 @@ class IsolatingRuntimeBackend:
             try:
                 # Hold the terminal event: the workspace commit runs BEFORE
                 # the turn outcome is surfaced (turn completion = persisted,
-                # IG-CORE-011).  The pool's terminal RunCompleted/RunFailed is
-                # the last event of the stream.
+                # IG-CORE-011).  Keep draining the pool generator to completion
+                # so it consumes the worker's "done" control frame and releases
+                # the worker (idle state / requests_completed) before we commit.
+                # Breaking on the terminal event would abandon the generator
+                # mid-stream, leaving the worker busy until async-generator
+                # finalization and stalling subsequent requests.
                 terminal: RuntimeEvent | None = None
                 async for event in self._pool.submit(isolated):
                     if isinstance(event, RunCompleted | RunFailed):
                         terminal = event
-                        break
-                    yield event
+                    else:
+                        yield event
                 commit = await self._close_workspace(session, workspace)
                 closed = True
                 if isinstance(terminal, RunCompleted) and not getattr(commit, "persisted", True):
