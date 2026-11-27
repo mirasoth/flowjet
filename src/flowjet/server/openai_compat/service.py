@@ -18,6 +18,7 @@ from flowjet.server.openai_compat.projection import ProjectionEngine
 from flowjet.server.openai_compat.schemas import (
     ChatCompletionRequest,
     CreateResponseRequest,
+    extract_image_attachments,
     merge_flowjet_metadata,
     messages_to_input,
     normalize_input,
@@ -123,6 +124,7 @@ class ResponseService:
             session=session,
             metadata=metadata,
             run_id=response_id,
+            attachments=tuple(extract_image_attachments(body.input)) or None,
         )
 
         self.store.put(
@@ -223,6 +225,7 @@ class ResponseService:
             session=session,
             metadata=metadata,
             run_id=response_id,
+            attachments=tuple(extract_image_attachments(body.messages)) or None,
         )
 
         async def gen() -> AsyncIterator[dict[str, Any]]:

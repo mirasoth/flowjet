@@ -73,6 +73,17 @@ def _extract_prompt_text(prompt: list[Any]) -> str:
     return "\n".join(parts)
 
 
+def _extract_prompt_attachments(prompt: list[Any]) -> list[dict[str, str]]:
+    """Collect image attachments from ACP prompt blocks (data-URL/base64)."""
+    attachments: list[dict[str, str]] = []
+    for block in prompt:
+        mime_type = getattr(block, "mime_type", None)
+        data = getattr(block, "data", None)
+        if isinstance(mime_type, str) and isinstance(data, str) and mime_type.startswith("image/"):
+            attachments.append({"mime_type": mime_type, "data": data})
+    return attachments
+
+
 # ---------------------------------------------------------------------------
 # Tool-kind inference (Enhancement 4)
 # ---------------------------------------------------------------------------
@@ -412,6 +423,7 @@ class FlowJetAcpAgent:
             session=session_id,
             run_id=new_acp_id(),
             metadata=metadata,
+            attachments=tuple(_extract_prompt_attachments(prompt)) or None,
         )
 
         output_text = ""

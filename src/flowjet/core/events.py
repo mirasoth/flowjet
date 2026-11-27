@@ -119,6 +119,11 @@ class RunRequest:
     # given value instead of starting a new turn from ``input_text``. The value
     # is passed to LangGraph's ``Command(resume=...)``.
     resume_value: Any = None
+    # Normalized image attachments (``{"mime_type": ..., "data": <base64>}``)
+    # extracted from the wire input. The backend lands them in the turn
+    # workspace's engine-local cache (`.soothe/cache/attachments/`, IG-CORE-012)
+    # before the agent runs so vision tools can address them.
+    attachments: tuple[dict[str, str], ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

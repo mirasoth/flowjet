@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import traceback
 from collections.abc import AsyncIterator
@@ -19,6 +20,49 @@ from flowjet.core.runtime.isolation.request import IsolatedRunRequest
 from flowjet.core.runtime.isolation.workspace import WorkspaceResolver
 
 logger = logging.getLogger(__name__)
+
+
+def _landed_input_text(
+    session: str,
+    workspace: Path,
+    input_text: str,
+    attachments: tuple[dict[str, str], ...],
+) -> str:
+    """Land wire image attachments and append their paths to the input text.
+
+    The write goes into the materialized turn workspace (content-addressed,
+    idempotent, shared helper from soothe). Attachments are engine-local
+    cache under `.soothe/cache/attachments/` (soothe 1.3.9): never synced
+    and invisible to the guest — the sandbox push/pull skip `.soothe/` —
+    but the vision tools execute host-side and read the real paths, so the
+    landed-paths note works in every sandbox mode. Stale attachments are
+    pruned first (age-based TTL, local GC only). Landing failures degrade
+    to the original text — the turn still runs text-only.
+    """
+    try:
+        from soothe.workspace.attachments import (
+            DEFAULT_ATTACHMENT_TTL_S,
+            land_attachments,
+            landed_paths_note,
+            prune_attachments,
+        )
+
+        prune_attachments(workspace, max_age_s=DEFAULT_ATTACHMENT_TTL_S)
+        paths = land_attachments(workspace, [dict(a) for a in attachments])
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Attachment landing failed (session=%s workspace=%s)",
+            session,
+            workspace,
+            exc_info=True,
+        )
+        return input_text
+    if not paths:
+        return input_text
+    note: str = landed_paths_note(paths)
+    if input_text.strip():
+        return f"{input_text}\n\n{note}"
+    return note
 
 
 def _open_failure_event(exc: BaseException) -> RunFailed:
@@ -181,6 +225,17 @@ class IsolatingRuntimeBackend:
                     )
                 yield _open_failure_event(exc)
                 return
+            # Land wire image attachments in the turn workspace (IG-CORE-012):
+            # open_session has materialized the tree, so the engine-local
+            # cache files exist before the agent runs. Failures degrade to a
+            # text-only turn (never brick the run).
+            if request.attachments:
+                isolated = dataclasses.replace(
+                    isolated,
+                    input_text=_landed_input_text(
+                        session, workspace, request.input_text, request.attachments
+                    ),
+                )
             closed = False
             try:
                 # Hold the terminal event: the workspace commit runs BEFORE

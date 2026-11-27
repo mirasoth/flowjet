@@ -384,7 +384,9 @@ async def test_checkpoint_mirrors_agent_outputs_to_content_root(tmp_path: Path):
     commit = await resolver.close_session("session-1", path)
     assert getattr(commit, "persisted") is True
     assert (remote / ws_id / "output" / "analysis.md").read_bytes() == b"agent analysis"
-    assert (remote / ws_id / ".workspace" / "manifest.json").exists()
+    # Manifest key: `.soothe/manifest.json` since IG-CORE-013 (the legacy
+    # `.workspace/` key is retired — do not pin it back).
+    assert (remote / ws_id / ".soothe" / "manifest.json").exists()
     await resolver.shutdown()
 
 

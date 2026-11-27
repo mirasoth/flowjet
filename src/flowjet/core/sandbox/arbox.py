@@ -22,10 +22,12 @@ from flowjet.core.sandbox.settings import ToolSandboxSettings
 
 logger = logging.getLogger(__name__)
 
-# Host-side state dirs that never belong in the guest workspace.
-_PUSH_SKIP_DIRS = frozenset({".workspace", "__pycache__", ".git"})
-# Guest-side dirs that are never pulled back to the host workspace.
-_PULL_SKIP_DIRS = frozenset({"__pycache__", ".git"})
+# Host-side state dirs that never belong in the guest workspace: `.soothe`
+# is the private framework namespace (engine state, never part of the guest).
+_PUSH_SKIP_DIRS = frozenset({".soothe", "__pycache__", ".git"})
+# Guest-side dirs that are never pulled back to the host workspace
+# (symmetric with push — a guest-written `.soothe/**` must not leak back).
+_PULL_SKIP_DIRS = frozenset({".soothe", "__pycache__", ".git"})
 _REAPER_INTERVAL_SECONDS = 5.0
 
 
