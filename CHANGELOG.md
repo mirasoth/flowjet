@@ -10,11 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.6] — 2026-11-27
+
 ### Added
 - **Wire image attachments land in the turn workspace (IG-CORE-012; requires soothe >= 1.3.9 with `soothe.workspace.attachments`).** The OpenAI-compatible entry points (Responses `input` blocks, Chat Completions `messages`) and the ACP prompt path no longer silently drop image blocks: inline data-URL / ACP image blocks are validated (MIME allowlist + aliases, base64, 20 MiB / 8-image limits) and carried on `RunRequest.attachments`. After the workspace materializes at turn open, the isolating backend prunes stale attachments (age-based TTL, shared 7-day default) and lands the rest under `.soothe/cache/attachments/<sha256[:16]>.<ext>` (content-addressed, idempotent — engine-local cache, excluded from workspace sync) and appends the landed paths plus a vision-tool hint to the input text; the vision tools execute host-side and read the real paths, so the flow works in every sandbox mode. Landing failures degrade to a text-only turn. Remote (non-data-URL) image references are skipped.
 
 ### Fixed
 - Sandbox push/pull reserved-directory parity: the private `.soothe` namespace is skipped in both directions — previously the pull side did not skip it, so a guest-written `.soothe/**` leaked back into the host workspace. Push and pull skip sets are now symmetric.
+
+### Changed
+- Raise the `soothe` floor to `>= 1.3.10` (soothe-nano 2.1.2): `analyze_image` / `extract_text_from_image` get a 180 s per-tool timeout (both wrap a full multimodal model call that routinely exceeds the 60 s default on large images) and the loop's step-close assessment is bounded by a 120 s deadline.
 
 ## [2.3.5] — 2026-11-26
 
