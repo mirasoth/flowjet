@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.7] — 2026-11-29
+
+### Fixed
+
+- **Loop crash on worker resume** (`'dict' object has no attribute 'parent_step_id'` in RECONCILE): decompose proposals now round-trip through the checkpointer as model objects instead of plain dicts, so a park/resume no longer crashes RECONCILE.
+
+### Changed
+
+- Raise the `soothe` floor to `>= 1.3.12`: picks up the loop-crash fix above, plus TUI improvements — live timers use compact clock format (`11:10` instead of `11m 10s`; `01:11:01` for hours) and token stats are split (thinking row shows per-goal consumption, status bar always shows accumulated loop total with semantic suffixes like `3.8M` instead of `3814.9K`).
+
+
 ## [2.3.6] — 2026-11-27
 
 ### Added
